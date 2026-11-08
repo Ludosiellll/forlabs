@@ -8,7 +8,17 @@ from typing import Callable, Literal
 from pydantic import BaseModel, Field
 
 from forlabs.core.models import (
-    QA, DashList, Enrollment, Figure, LabSpec, Listing, NumberedList, Paragraph, Profile, ReportDoc, Table,
+    QA,
+    DashList,
+    Enrollment,
+    Figure,
+    LabSpec,
+    Listing,
+    NumberedList,
+    Paragraph,
+    Profile,
+    ReportDoc,
+    Table,
     TaskSection,
 )
 from forlabs.core.rules import RuleBook

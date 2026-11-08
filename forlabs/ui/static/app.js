@@ -178,3 +178,11 @@
     });
   });
 })();
+
+// формы с data-once: кнопка отключается после отправки (двойной клик не создаёт вторую лабу)
+document.querySelectorAll("form[data-once]").forEach(function (form) {
+  form.addEventListener("submit", function () {
+    var b = form.querySelector("button[type=submit]");
+    if (b) { setTimeout(function () { b.disabled = true; b.textContent = "Отправляю…"; }, 0); }
+  });
+});

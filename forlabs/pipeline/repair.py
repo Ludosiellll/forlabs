@@ -12,7 +12,14 @@ from forlabs.antiai.code import scan_code
 from forlabs.antiai.similarity import scan_similarity
 from forlabs.antiai.text_ru import scan_paragraph_openings, scan_text
 from forlabs.core.models import (
-    DashList, Finding, LabSpec, Listing, NumberedList, Paragraph, Profile, ReportDoc,
+    DashList,
+    Finding,
+    LabSpec,
+    Listing,
+    NumberedList,
+    Paragraph,
+    Profile,
+    ReportDoc,
 )
 from forlabs.core.rules import RuleBook
 from forlabs.pipeline.prompts import REPAIR_SYSTEM

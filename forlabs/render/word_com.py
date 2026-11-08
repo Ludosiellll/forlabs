@@ -35,8 +35,9 @@ def available() -> bool:
     if sys.platform != "win32":
         return False
     try:
-        import win32com.client  # noqa: F401
         import winreg
+
+        import win32com.client  # noqa: F401
 
         winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, r"Word.Application\CLSID")
         return True

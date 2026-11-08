@@ -14,11 +14,25 @@ from lxml import etree
 from PIL import Image
 
 from forlabs.core.models import (
-    DashList, Enrollment, Figure, Listing, NumberedList, Paragraph, Profile, ReportDoc, Table,
+    DashList,
+    Enrollment,
+    Figure,
+    Listing,
+    NumberedList,
+    Paragraph,
+    Profile,
+    ReportDoc,
+    Table,
 )
 from forlabs.render import canon
 from forlabs.render.conformance import q
-from forlabs.report.derive import caption, figure_intro, listing_intro, numbered_blocks, table_intro
+from forlabs.report.derive import (
+    caption,
+    figure_intro,
+    listing_intro,
+    numbered_blocks,
+    table_intro,
+)
 from forlabs.report.morph import performed_word
 
 XML_SPACE = "{http://www.w3.org/XML/1998/namespace}space"

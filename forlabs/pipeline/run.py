@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import threading
 import uuid
@@ -11,19 +12,32 @@ from pathlib import Path
 from typing import Callable
 
 from forlabs.core.models import (
-    ChatMessage, Figure, LabSpec, LabState, Profile, ReportDoc, is_accepted, push_version,
+    ChatMessage,
+    Figure,
+    LabSpec,
+    LabState,
+    Profile,
+    ReportDoc,
+    is_accepted,
+    push_version,
 )
 from forlabs.core.rules import RuleBook
-from forlabs.core.store import safe_name
+from forlabs.core.store import safe_file_name, safe_name
 from forlabs.core.subjects import get_subject
 from forlabs.ingest.extract import SourceText, extract_many
 from forlabs.pipeline.chat import plan_edit, revise_answers, revise_section
 from forlabs.pipeline.events import EventBus
-from forlabs.pipeline.images import MAX_IMAGES, describe_images, image_ok, normalize_screenshot, prepare_image
+from forlabs.pipeline.images import (
+    MAX_IMAGES,
+    describe_images,
+    image_ok,
+    normalize_screenshot,
+    prepare_image,
+)
 from forlabs.pipeline.repair import check_all, check_and_repair, report_text
 from forlabs.pipeline.write import refresh_derived, write_report
-from forlabs.render.docx_builder import build_lab, build_semester
 from forlabs.render.conformance import compare
+from forlabs.render.docx_builder import build_lab, build_semester
 from forlabs.render.finalize import finalize, has_slots
 from forlabs.spec.extract import extract_spec, verify_verbatim
 
@@ -222,7 +236,7 @@ class Pipeline:
         shutil.rmtree(src, ignore_errors=True)  # остатки удалённой лабы с тем же номером не смешиваются
         src.mkdir(parents=True, exist_ok=True)
         for name, data in files:
-            (src / safe_name(name)).write_bytes(data)
+            (src / safe_file_name(name)).write_bytes(data)
         if pasted_text.strip():
             (src / "текст.txt").write_text(pasted_text, encoding="utf-8")
         st.source_path = str(src)
@@ -615,22 +629,39 @@ class Pipeline:
         profile = self._profile(st)
         subject = get_subject(st.subject_id)
         root = Path(profile.output_root) if profile.output_root else Path.home() / "Лабораторные"
-        out_dir = root / subject.short_name / f"ЛР{safe_name(st.number)}"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        target = out_dir / f"ЛР{safe_name(st.number)}_{subject.short_name}.docx"
+        short = safe_name(subject.short_name)
+        out_dir = root / short / f"ЛР{safe_name(st.number)}"
+        target = out_dir / f"ЛР{safe_name(st.number)}_{short}.docx"
+        tmp = target.with_name(target.name + ".tmp")
         try:
-            shutil.copyfile(docx, target)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(docx, tmp)  # сначала копия, потом замена — выключение не оставит обрезанный файл
+            os.replace(tmp, target)
         except PermissionError as e:
+            tmp.unlink(missing_ok=True)
             raise PipelineError(f"Не получилось записать {target.name}: файл открыт в Word. Закрой его и нажми ещё раз.") from e
+        except OSError as e:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise PipelineError(f"Папка сдачи недоступна: {root}. Проверь флешку или диск либо выбери другую папку "
+                                f"в профиле. ({getattr(e, 'strerror', '') or e})") from e
         st.accepted_rules = sorted(accepted)
         st.status = "final"
         self._emit(st, f"Готово: {target}", "done")
+        st = self._save(st)  # сдано — сразу; память предмета обновляется в фоне (запрос к модели может быть долгим)
         if self.memory is not None:
-            try:
-                self.memory.update(st, self._llm(st))
-            except Exception:
-                pass
-        return self._save(st)
+            snapshot, llm = st.model_copy(deep=True), self._llm(st)
+
+            def update_memory() -> None:
+                try:
+                    self.memory.update(snapshot, llm)
+                except Exception as e:
+                    logging.getLogger("forlabs").warning("Память предмета не обновлена: %s", e)
+
+            threading.Thread(target=update_memory, name="memory-update", daemon=True).start()
+        return st
 
     def build_semester(self, profile_id: str, subject_id: str, numbers: list[str], out: Path) -> tuple[Path, object]:
         profile = self.store.get_profile(profile_id)

@@ -153,6 +153,10 @@ class LLM:
             for needle, msg in _ACCESS.items():
                 if needle in low:
                     raise LLMError("access", detail, msg)
+            if r.status_code in (400, 413) and any(w in low for w in ("context length", "maximum context",
+                                                                     "too many tokens", "too long", "token limit")):
+                raise LLMError("bad_response", detail, "Методичка слишком большая для модели — оставь в файле только "
+                                                       "страницы своей лабы.")
             if r.status_code == 401:
                 raise LLMError("auth", detail)
             if r.status_code == 403:
@@ -188,9 +192,14 @@ class LLM:
             payload["response_format"] = {"type": "json_object"}
         data = self._post(payload)
         try:
-            return data["choices"][0]["message"]["content"] or ""
+            choice = data["choices"][0]
+            content = choice["message"]["content"] or ""
         except (KeyError, IndexError, TypeError) as e:
             raise LLMError("bad_response", str(data)[:200]) from e
+        if choice.get("finish_reason") == "length":  # обрезан по длине: «чинить» формат бессмысленно и платно
+            raise LLMError("bad_response", "finish_reason=length",
+                           "Ответ модели не поместился в лимит длины — попробуй ещё раз или раздели задание на части.")
+        return content
 
     def json(self, messages: list[dict], schema: type[T], repairs: int = 3, temperature: float | None = None) -> T:
         msgs = list(messages)

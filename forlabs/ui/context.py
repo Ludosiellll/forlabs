@@ -43,6 +43,7 @@ class AppContext:
         self._store = None
         self._pipeline = None
         self.running: set[str] = set()
+        self.form_tokens: dict[str, str] = {}  # одноразовые токены формы «Новая лаба» → адрес созданной лабы
         self._lock = threading.Lock()
         if self.cloud:
             self.auth.load_session()

@@ -19,6 +19,15 @@ def safe_name(s: str) -> str:
     return _SAFE.sub("_", s).strip("_") or "x"
 
 
+def safe_file_name(name: str, limit: int = 80) -> str:
+    """Имя файла для папки лабы: безопасные символы и не длиннее limit (Windows: путь до 260 символов)."""
+    stem, dot, ext = name.rpartition(".")
+    if not dot or len(ext) > 8:
+        stem, ext = name, ""
+    stem = safe_name(stem)[: max(8, limit - len(ext) - 1)].rstrip("_") or "file"
+    return f"{stem}.{safe_name(ext)}" if ext else stem
+
+
 def _number_key(n: str):
     return [int(p) if p.isdigit() else p for p in re.split(r"(\d+)", n)]
 

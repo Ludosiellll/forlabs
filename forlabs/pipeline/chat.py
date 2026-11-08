@@ -10,12 +10,32 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from forlabs.core.models import (
-    QA, DashList, Figure, LabSpec, LabState, Listing, NumberedList, Paragraph, Profile, Table, TaskSection,
+    QA,
+    DashList,
+    Figure,
+    LabSpec,
+    LabState,
+    Listing,
+    NumberedList,
+    Paragraph,
+    Profile,
+    Table,
+    TaskSection,
 )
 from forlabs.core.rules import RuleBook
 from forlabs.core.subjects import Subject
-from forlabs.pipeline.prompts import CHAT_ANSWERS_SYSTEM, CHAT_PLAN_SYSTEM, CHAT_REVISE_SYSTEM
-from forlabs.pipeline.write import BlockDraft, SectionDraft, _gender_ru, draft_to_blocks, wishes_text
+from forlabs.pipeline.prompts import (
+    CHAT_ANSWERS_SYSTEM,
+    CHAT_PLAN_SYSTEM,
+    CHAT_REVISE_SYSTEM,
+)
+from forlabs.pipeline.write import (
+    BlockDraft,
+    SectionDraft,
+    _gender_ru,
+    draft_to_blocks,
+    wishes_text,
+)
 
 SOURCE_LIMIT = 30_000
 _NEEDS_SOURCE = re.compile(r"вариант|приложени|методичк|по заданию|из задания|дословно", re.IGNORECASE)

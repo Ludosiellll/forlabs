@@ -10,10 +10,9 @@ import time
 import httpx
 from pydantic import BaseModel
 
-from forlabs.core.fs import atomic_write_text, quarantine
-
 from forlabs.cloud.config import DEFAULT, CloudConfig
 from forlabs.core import paths
+from forlabs.core.fs import atomic_write_text, quarantine
 
 KEYRING_SERVICE = "ForLabs"
 KEYRING_SESSION = "cloud_session"

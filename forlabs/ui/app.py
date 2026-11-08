@@ -4,29 +4,56 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import os
+import re
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
-from starlette.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from forlabs.cloud.auth import CloudError
 from forlabs.core.llm import LLMError
-from forlabs.core.models import Enrollment, LabSpec, Profile, Task, finding_key, is_accepted
-from forlabs.core.settings import API_PRESETS, MODEL_CHOICES, Settings, get_api_key, save_settings, set_api_key
+from forlabs.core.models import (
+    Enrollment,
+    LabSpec,
+    Profile,
+    Task,
+    finding_key,
+    is_accepted,
+)
+from forlabs.core.settings import (
+    API_PRESETS,
+    MODEL_CHOICES,
+    Settings,
+    get_api_key,
+    save_settings,
+    set_api_key,
+)
 from forlabs.core.subjects import Subject, all_subjects, get_subject
 from forlabs.pipeline.images import MAX_IMAGES, normalize_screenshot, prepare_image
 from forlabs.pipeline.run import PipelineError, lab_complete, today
 from forlabs.render import libreoffice, word_com
 from forlabs.report.derive import numbered_blocks
 from forlabs.report.morph import goal_to_conclusion
-from forlabs.ui.admin_routes import access_text, ago, date_ru, labs_estimate, register_admin
+from forlabs.ui.admin_routes import (
+    access_text,
+    ago,
+    date_ru,
+    labs_estimate,
+    register_admin,
+)
 from forlabs.ui.charts import fmt_tokens
 from forlabs.ui.context import AppContext, slug
 
@@ -114,6 +141,19 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         if ctx.cloud and not ctx.auth.session and not path.startswith(open_paths):
             return RedirectResponse("/login", status_code=303)
         return await call_next(request)
+
+    @app.exception_handler(Exception)
+    async def unexpected_error(request: Request, exc: Exception):
+        import logging
+
+        logging.getLogger("forlabs").error("Ошибка на %s %s", request.method, request.url.path, exc_info=exc)
+        text = str(exc) or type(exc).__name__
+        if isinstance(exc, OSError) and getattr(exc, "errno", None) == 28:
+            text = "Диск заполнен — освободи место и попробуй ещё раз."
+        response = render(request, "error.html", message="Что-то пошло не так. Подробности записаны в журнал "
+                                                         "forlabs.log в папке данных.", detail=text[:300])
+        response.status_code = 500
+        return response
 
     @app.exception_handler(CloudError)
     async def cloud_error(request: Request, exc: CloudError):
@@ -256,12 +296,21 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         if not profiles:
             return redirect("/profiles/new", err="Сначала создай профиль")
         return render(request, "lab_new.html", profiles=profiles, profile_id=profile or profiles[0].id,
-                      subject_id=subject, nav="home")
+                      subject_id=subject, nav="home", form_token=uuid.uuid4().hex)
 
     @app.post("/labs/new")
     async def lab_new(profile_id: str = Form(...), subject_id: str = Form(...), number: str = Form(""),
                       text: str = Form(""), wishes: str = Form(""), files: list[UploadFile] | None = File(None),
-                      wish_images: list[UploadFile] | None = File(None)):
+                      wish_images: list[UploadFile] | None = File(None), form_token: str = Form("")):
+        if form_token:  # двойной клик или повторная отправка формы — одна лаба
+            with ctx._lock:
+                done = ctx.form_tokens.get(form_token)
+                if done is None:
+                    ctx.form_tokens[form_token] = "pending"
+            if done == "pending":
+                return redirect("/", msg="Лаба уже создаётся — она появится в списке")
+            if done:
+                return RedirectResponse(done, status_code=303)
         data = []
         for uf in files or []:
             if uf.filename:
@@ -284,7 +333,10 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
 
         ctx.run(key, job)
         final = result.get("st", st)
-        return redirect(lab_url(profile_id, subject_id, final.number))
+        url = lab_url(profile_id, subject_id, final.number)
+        if form_token:
+            ctx.form_tokens[form_token] = url
+        return redirect(url)
 
     # лаба
     def load(p: str, s: str, n: str):

@@ -12,7 +12,7 @@ from forlabs.core.text import normalize_for_compare
 from forlabs.ingest.extract import SourceText, join_hyphenation
 from forlabs.spec.prompts import SPEC_SYSTEM, SPEC_USER
 
-MAX_SOURCE_CHARS = 400_000
+MAX_SOURCE_CHARS = 200_000  # ~100 тыс. токенов: дальше дорого и упирается в лимит модели
 
 
 class VariantPick(BaseModel):

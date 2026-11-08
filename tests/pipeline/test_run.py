@@ -108,7 +108,13 @@ def test_memory_updated_on_final(tmp_home, tmp_path):
     st = pipe.execute(pipe.confirm(pipe.parse(st, date="24.09.2026"), None))
     st = pipe.attach_screenshot(st, section=1, block=4, image=png_bytes())
     pipe.mark_final(st)
-    mem = pipe.memory.read("ivanov", "psip")
+    import time
+
+    for _ in range(100):  # память обновляется в фоне после сдачи
+        mem = pipe.memory.read("ivanov", "psip")
+        if mem:
+            break
+        time.sleep(0.05)
     assert mem.startswith("ЛР №7: Сайт о Бобруйске")
 
 
