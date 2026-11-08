@@ -15,7 +15,7 @@ from forlabs.core.models import (
 from forlabs.core.rules import RuleBook
 from forlabs.core.subjects import Subject
 from forlabs.pipeline.prompts import CHAT_ANSWERS_SYSTEM, CHAT_PLAN_SYSTEM, CHAT_REVISE_SYSTEM
-from forlabs.pipeline.write import SectionDraft, _gender_ru, draft_to_blocks, wishes_text
+from forlabs.pipeline.write import BlockDraft, SectionDraft, _gender_ru, draft_to_blocks, wishes_text
 
 SOURCE_LIMIT = 30_000
 _NEEDS_SOURCE = re.compile(r"вариант|приложени|методичк|по заданию|из задания|дословно", re.IGNORECASE)
@@ -45,6 +45,34 @@ class EditPlan(BaseModel):
     @property
     def changes_anything(self) -> bool:
         return bool(self.tasks or self.questions or self.variant is not None or self.variant_text or self.conclusion)
+
+
+class ReviseBlock(BaseModel):
+    """Блок ответа правки: ссылка на исходный ({"keep": "b3"}) или новый блок в формате написания."""
+    type: Literal["paragraph", "dash_list", "numbered_list", "listing", "figure", "table"] | None = None
+    keep: str | None = None
+    retake: bool = False
+    text: str | None = None
+    items: list[str] | None = None
+    topic: str | None = None
+    language: str | None = None
+    code: str | None = None
+    kind: Literal["screenshot", "diagram"] | None = None
+    instruction: str | None = None
+    dot: str | None = None
+    rows: list[list[str]] | None = None
+
+
+class ReviseDraft(BaseModel):
+    blocks: list[ReviseBlock] = Field(default_factory=list)
+
+
+_KEEP = re.compile(r"^\s*b?\s*(\d+)\s*\.?\s*$", re.IGNORECASE)
+
+
+def _keep_label(raw: str) -> str | None:
+    m = _KEEP.match(raw or "")
+    return f"b{int(m.group(1))}" if m else None
 
 
 class AnswerEdit(BaseModel):
@@ -94,7 +122,8 @@ def plan_edit(st: LabState, message: str, profile: Profile, subject: Subject, ll
               teacher: str) -> EditPlan:
     spec, report = st.spec, st.report
     qa = "\n".join(f"{q.n}. {q.question}\n   Ответ: {q.answer}" for q in report.questions) or "нет"
-    history = "\n".join(f"{'Студент' if m.role == 'user' else 'Помощник'}: {m.text}" for m in st.chat[-HISTORY:])
+    prior = st.chat[:-1] if st.chat and st.chat[-1].role == "user" else st.chat  # текущее сообщение — ниже
+    history = "\n".join(f"{'Студент' if m.role == 'user' else 'Помощник'}: {m.text}" for m in prior[-HISTORY:])
     # методичка нужна, только когда речь о варианте или заданиях из неё — иначе это лишние тысячи токенов
     source = (spec.source_text or "")[:SOURCE_LIMIT] if _NEEDS_SOURCE.search(message) else "не нужен для этого сообщения"
     user = (f"Предмет: {subject.name}. Пол студента: {_gender_ru(profile.gender)}.\n"
@@ -112,6 +141,7 @@ def plan_edit(st: LabState, message: str, profile: Profile, subject: Subject, ll
     plan = llm.json([{"role": "system", "content": CHAT_PLAN_SYSTEM.format(rules=rules.load("repair", subject.id))},
                      {"role": "user", "content": user}], EditPlan)
     task_numbers = {t.n for t in spec.tasks}
+    dropped = sorted({t.n for t in plan.tasks if t.n not in task_numbers})
     plan.tasks = [t for t in plan.tasks if t.n in task_numbers and t.instruction.strip()]
     plan.questions = [q for q in plan.questions if 1 <= q.n <= len(report.questions) and q.instruction.strip()]
     plan.reply = plan.reply.strip()
@@ -121,7 +151,12 @@ def plan_edit(st: LabState, message: str, profile: Profile, subject: Subject, ll
         plan.variant = plan.variant_text = plan.conclusion = None
     elif not plan.changes_anything:
         plan.kind = "question"
-        plan.reply = plan.reply or "Уточни, пожалуйста, что именно поменять."
+        if dropped:  # модель обещала правку задания, которого нет — не повторяем обещание
+            listed = ", ".join(str(n) for n in dropped)
+            plan.reply = (f"В отчёте нет задания {listed} — уточни номер "
+                          f"(есть задания {', '.join(str(n) for n in sorted(task_numbers))}).")
+        else:
+            plan.reply = plan.reply or "Уточни, пожалуйста, что именно поменять."
     return plan
 
 
@@ -139,28 +174,34 @@ def revise_section(spec: LabSpec, section: TaskSection, instruction: str, profil
             f"Задание {section.n}: «{section.title}»\n\nБлоки сейчас:\n{blocks_text}\n\n"
             f"Что поменять по замечанию преподавателя:\n{instruction}")
     draft = llm.json([{"role": "system", "content": CHAT_REVISE_SYSTEM.format(rules=rules.load("write", subject.id))},
-                      {"role": "user", "content": user}], SectionDraft)
+                      {"role": "user", "content": user}], ReviseDraft)
     out, retake, used = [], [], set()
     suffix = f"_r{uuid.uuid4().hex[:6]}"
     for rb in draft.blocks:
         if rb.keep:
-            key = rb.keep.strip()
-            orig = labels.get(key)
+            key = _keep_label(rb.keep)
+            orig = labels.get(key) if key else None
             if orig is None or key in used:
                 continue
             used.add(key)
             b = orig.model_copy(deep=True)
             if rb.retake and isinstance(b, Figure) and not is_diagram(b):
                 b.image_path = None
-                b.slot = "Пересними после правки — поменялись код или результат."
+                hint = "Пересними после правки — поменялись код или результат."
+                b.slot = hint + (f" {orig.slot}" if orig.slot and not orig.slot.startswith("Пересними") else "")
                 retake.append(b.topic)
             out.append(b)
             continue
-        for nb in draft_to_blocks(SectionDraft(blocks=[rb]), Path(assets_dir), section.n, render_diagrams,
+        if rb.type is None:
+            continue
+        block = BlockDraft.model_validate(rb.model_dump(exclude={"keep", "retake"}))
+        for nb in draft_to_blocks(SectionDraft(blocks=[block]), Path(assets_dir), section.n, render_diagrams,
                                   name_suffix=suffix):
             if isinstance(nb, Figure) and not nb.image_path:
                 retake.append(nb.topic)
             out.append(nb)
+    if not out:
+        raise ValueError("Модель вернула пустое задание — попробуй сформулировать правку ещё раз")
     return TaskSection(n=section.n, title=section.title, blocks=out), retake
 
 

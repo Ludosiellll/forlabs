@@ -35,3 +35,9 @@ def test_describe_images_sends_image_parts(tmp_path):
     content = fake.calls[0][-1]["content"]
     assert isinstance(content, list) and content[1] == image_part(f)
     assert content[1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+
+
+def test_decompression_bomb_is_a_clean_error(monkeypatch):
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 1000)
+    with pytest.raises(ValueError):
+        prepare_image(png(400, 400))

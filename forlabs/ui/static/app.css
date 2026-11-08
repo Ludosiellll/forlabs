@@ -286,3 +286,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .msg details.read { margin-top: 4px; font-size: 12.5px; }
 .msg details.read summary { cursor: pointer; color: var(--muted); }
 .attach-row { margin: 4px 0 0 -6px; }
+.rules-mem { margin: 0 0 10px; font-size: 13px; }
+.rules-mem summary { cursor: pointer; color: var(--muted); }
+.rules-mem ul { margin: 6px 0 4px; padding-left: 18px; }
+.rules-mem li { margin-bottom: 3px; }

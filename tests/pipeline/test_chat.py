@@ -1,5 +1,7 @@
 """Движок чата правок: план, точечная переделка задания, ответы на вопросы."""
 
+import pytest
+
 from test_write import PROFILE, SPEC
 
 from forlabs.core.llm import FakeLLM
@@ -109,3 +111,50 @@ def test_prompts_ask_for_honest_reply_and_careful_retake():
 
     assert "только то, что перечислено" in CHAT_PLAN_SYSTEM
     assert "только вывод программы" in CHAT_REVISE_SYSTEM
+
+
+def test_unknown_task_number_is_asked_back():
+    fake = FakeLLM([{"kind": "edit", "reply": "Добавлю в четвёртом задании проверку.",
+                     "tasks": [{"n": 4, "instruction": "проверка"}]}])
+    plan = plan_edit(state(), "в 4 задании добавь проверку", PROFILE, SSP, fake, RuleBook(), teacher="")
+    assert plan.kind == "question" and "нет задания 4" in plan.reply
+
+
+@pytest.mark.parametrize("label", ["B1", "1", "b1.", " b1 "])
+def test_keep_labels_are_normalized(tmp_path, label):
+    fake = FakeLLM([{"blocks": [{"keep": label}, {"keep": "b2"}, {"keep": "b3"}]}])
+    new, _ = revise_section(SPEC, section(), "…", PROFILE, SSP, fake, RuleBook(), tmp_path, render_diagrams=False)
+    assert len(new.blocks) == 3
+
+
+def test_empty_revision_is_an_error(tmp_path):
+    fake = FakeLLM([{"blocks": []}])
+    with pytest.raises(ValueError):
+        revise_section(SPEC, section(), "…", PROFILE, SSP, fake, RuleBook(), tmp_path, render_diagrams=False)
+
+
+def test_retake_keeps_original_instruction(tmp_path):
+    sec = section()
+    sec.blocks[2].slot = "Запусти программу и сними консоль"
+    fake = FakeLLM([{"blocks": [{"keep": "b1"}, {"keep": "b2"}, {"keep": "b3", "retake": True}]}])
+    new, _ = revise_section(SPEC, sec, "…", PROFILE, SSP, fake, RuleBook(), tmp_path, render_diagrams=False)
+    assert "Пересними" in new.blocks[2].slot and "Запусти программу" in new.blocks[2].slot
+
+
+def test_current_message_appears_once_in_plan_prompt():
+    from forlabs.core.models import ChatMessage
+
+    st = state()
+    st.chat.append(ChatMessage(id="u1", role="user", text="уникальное сообщение 42", at="2026-11-08T10:00:00"))
+    fake = FakeLLM([{"kind": "answer", "reply": "Ок."}])
+    plan_edit(st, "уникальное сообщение 42", PROFILE, SSP, fake, RuleBook(), teacher="")
+    assert fake.calls[0][-1]["content"].count("уникальное сообщение 42") == 1
+
+
+def test_write_still_requires_block_type():
+    from pydantic import ValidationError
+
+    from forlabs.pipeline.write import SectionDraft
+
+    with pytest.raises(ValidationError):
+        SectionDraft.model_validate({"blocks": [{"text": "без типа"}]})

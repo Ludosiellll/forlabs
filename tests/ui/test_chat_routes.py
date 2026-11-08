@@ -159,3 +159,26 @@ def test_new_lab_with_wish_photo(tmp_home, tmp_path):
     url = r.headers["location"]
     page = client.get(url + "?tab=spec").text
     assert f"{url}/notes/wish_1.jpg" in page and "Вариант 7." in page
+
+
+def test_incomplete_lab_shows_hint_instead_of_chat(lab):
+    client, ctx, url = lab
+    client.post(url + "/execute", follow_redirects=False)
+    st = ctx.store.load_lab("ivanov_ivan_petrovich", "psip", "7")
+    st.spec.tasks.append(st.spec.tasks[0].model_copy(update={"n": 2, "text": "Ещё задание."}))
+    st.status = "failed"
+    ctx.store.save_lab(st)
+    page = client.get(url + "?tab=report").text
+    assert 'name="message"' not in page and "не до конца" in page
+    r = client.post(url + "/chat", data={"message": "вывод другой"}, follow_redirects=False)
+    assert "err=" in r.headers["location"]
+
+
+def test_teacher_requirements_listed_and_removable(lab):
+    client, ctx, url = lab
+    client.post(url + "/execute", follow_redirects=False)
+    ctx.memory().add_teacher("ivanov_ivan_petrovich", "psip", "Комментарии к каждому методу")
+    page = client.get(url + "?tab=report").text
+    assert "Комментарии к каждому методу" in page and url + "/teacher/remove/0" in page
+    client.post(url + "/teacher/remove/0", follow_redirects=False)
+    assert ctx.memory().teacher_list("ivanov_ivan_petrovich", "psip") == []

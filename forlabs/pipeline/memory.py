@@ -69,3 +69,14 @@ class SubjectMemory:
         self._write(profile_id, f"{subject_id}.teacher", text)
         return text
 
+    def teacher_list(self, profile_id: str, subject_id: str) -> list[str]:
+        return [ln.lstrip("- ").strip() for ln in self.teacher(profile_id, subject_id).splitlines() if ln.strip()]
+
+    def remove_teacher(self, profile_id: str, subject_id: str, index: int) -> str:
+        items = self.teacher_list(profile_id, subject_id)
+        if 0 <= index < len(items):
+            del items[index]
+        text = "\n".join(f"- {x}" for x in items)
+        self._write(profile_id, f"{subject_id}.teacher", text)
+        return text
+

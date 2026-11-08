@@ -30,6 +30,8 @@ def prepare_image(data: bytes) -> bytes:
             out = io.BytesIO()
             im.save(out, format="JPEG", quality=85, optimize=True)
             return out.getvalue()
+    except Image.DecompressionBombError as e:
+        raise ValueError("Фото слишком большое по размеру в пикселях — уменьши его") from e
     except (UnidentifiedImageError, OSError) as e:
         raise ValueError("Это не картинка: нужен снимок PNG или JPG") from e
 

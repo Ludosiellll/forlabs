@@ -204,7 +204,9 @@ class LabState(BaseModel):
 def push_version(st: "LabState", label: str) -> int:
     """Снимок разбора и отчёта перед правкой; хранится не больше MAX_VERSIONS последних."""
     vid = (st.versions[-1].id if st.versions else 0) + 1
+    spec = st.spec.model_copy(deep=True)
+    spec.source_text = ""  # методичка не меняется правками — не дублируем её в каждой версии
     st.versions.append(LabVersion(id=vid, at=datetime.now().isoformat(timespec="seconds"), label=label[:120],
-                                  spec=st.spec.model_copy(deep=True), report=st.report.model_copy(deep=True)))
+                                  spec=spec, report=st.report.model_copy(deep=True)))
     del st.versions[:-MAX_VERSIONS]
     return vid

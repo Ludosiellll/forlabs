@@ -1,6 +1,7 @@
 """Чат правок в конвейере: правка, вопрос, память требований, сбой, откат."""
 
 import zipfile
+from pathlib import Path
 
 import pytest
 from test_run import ANS, FIXTURE, RAW, SEC, SEC2, png_bytes, setup
@@ -46,9 +47,11 @@ def test_keep_preserves_relative_image_path(tmp_home, tmp_path):
     revise = {"blocks": [{"type": "paragraph", "text": "В файле style.css описаны две анимации:"},
                          {"keep": "b2"}, {"keep": "b3"}, {"keep": "b4"}]}
     pipe, fake, st = ready(tmp_home, tmp_path, [plan, revise])
+    path = st.report.sections[0].blocks[3].image_path
+    assert path.startswith("assets/fig_1_4_") and not Path(path).is_absolute()
     st = pipe.chat(st, "первый абзац короче")
     fig = st.report.sections[0].blocks[3]
-    assert fig.image_path == "assets/fig_1_4.png" and not pipe.slots(st)
+    assert fig.image_path == path and not pipe.slots(st)
     assert zipfile.ZipFile(st.docx_path).read("word/document.xml").decode().count("<pic:pic") == 1
 
 

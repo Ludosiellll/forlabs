@@ -16,7 +16,7 @@ KEYRING_USER = "api_key"
 DEFAULT_MODEL = "deepseek-v4.1-flash-1017"
 # если ключ не пускает модель — следующая по списку (ключ участника может отличаться от ключа администратора)
 MODEL_FALLBACKS = {"deepseek-v4.1-flash-1017": ["deepseek-v4.1-flash"]}
-MODEL_CHOICES = ["deepseek-v4.1-flash-1017", "deepseek-v4.1-flash", "deepseek-v4-flash"]
+MODEL_CHOICES = ["deepseek-v4.1-flash-1017", "deepseek-v4-flash"]
 _OLD_DEFAULTS = {"deepseek-v4.1-flash"}
 
 

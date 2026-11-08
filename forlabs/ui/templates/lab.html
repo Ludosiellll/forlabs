@@ -30,7 +30,9 @@
     {% endfor %}
     {% endif %}
 
-    {% if st.report %}
+    {% if st.report and not complete %}
+    <p class="small muted" style="margin-top:18px">Лаба дописана не до конца — нажми «Продолжить» сверху. Чат правок появится, когда все задания и ответы будут написаны.</p>
+    {% elif st.report %}
     {% set version_ids = st.versions|map(attribute='id')|list %}
     <section class="chat" aria-labelledby="chat-h">
       <h2 id="chat-h">Правки</h2>
@@ -42,7 +44,7 @@
             {% if m.images %}<div class="thumbs">{% for img in m.images %}<a href="{{ base_url }}/{{ img }}" target="_blank" rel="noopener"><img src="{{ base_url }}/{{ img }}" alt="Фото к сообщению" loading="lazy"></a>{% endfor %}</div>{% endif %}
             {% if m.image_text %}<details class="read"><summary>Что прочитано с фото</summary><div class="txt">{{ m.image_text }}</div></details>{% endif %}
             {% if m.role == 'assistant' and m.version in version_ids %}
-            <form method="post" action="{{ base_url }}/chat/revert/{{ m.version }}">
+            <form method="post" action="{{ base_url }}/chat/revert/{{ m.version }}" onsubmit="return confirm('Вернуть отчёт к состоянию до этого сообщения? Правки после него тоже откатятся.')">
               <button class="btn link small" type="submit" {{ 'disabled' if busy }}>{{ 'Отменить откат' if m.kind == 'revert' else 'Вернуть как было' }}</button></form>
             {% endif %}
           </div>
@@ -50,6 +52,14 @@
           <p class="small muted">Напиши, что сказал преподаватель: «во втором задании добавить проверку ввода», «вывод подробнее», «вариант 7». Поменяю только нужное, проверю и пересоберу документ.</p>
         {% endfor %}
       </div>
+      {% if teacher_rules %}
+      <details class="rules-mem">
+        <summary class="small">Требования преподавателя: {{ teacher_rules|length }}</summary>
+        <ul>{% for r in teacher_rules %}<li>{{ r }}
+          <form method="post" action="{{ base_url }}/teacher/remove/{{ loop.index0 }}" style="display:inline"><button class="btn link small" type="submit" title="Больше не учитывать в следующих лабах">убрать</button></form></li>{% endfor %}</ul>
+        <div class="hint">Учитываются во всех лабах этого предмета.</div>
+      </details>
+      {% endif %}
       <form method="post" action="{{ base_url }}/chat" class="chat-form" data-chat-form enctype="multipart/form-data">
         <label class="visually-hidden" for="chat-msg">Что сказал преподаватель</label>
         <textarea id="chat-msg" name="message" rows="3" maxlength="4000" placeholder="Что сказал преподаватель… Фото можно вставить через Ctrl+V" data-paste-images="chat-images" {{ 'disabled' if busy }}></textarea>

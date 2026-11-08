@@ -38,3 +38,10 @@ def test_default_model_is_v41_flash_1017():
     # старое значение по умолчанию из прошлых версий поднимается до 1017
     assert Settings.model_validate({"model": "deepseek-v4.1-flash"}).model == "deepseek-v4.1-flash-1017"
     assert Settings.model_validate({"model": "deepseek-v4-flash"}).model == "deepseek-v4-flash"  # явный выбор
+
+
+def test_model_choices_can_all_be_chosen():
+    from forlabs.core.settings import MODEL_CHOICES, Settings
+
+    for m in MODEL_CHOICES:
+        assert Settings.model_validate({"model": m}).model == m

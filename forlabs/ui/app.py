@@ -22,7 +22,7 @@ from forlabs.core.models import Enrollment, LabSpec, Profile, Task, finding_key,
 from forlabs.core.settings import API_PRESETS, MODEL_CHOICES, Settings, get_api_key, save_settings, set_api_key
 from forlabs.core.subjects import Subject, all_subjects, get_subject
 from forlabs.pipeline.images import MAX_IMAGES, prepare_image
-from forlabs.pipeline.run import PipelineError, today
+from forlabs.pipeline.run import PipelineError, lab_complete, today
 from forlabs.render import libreoffice, word_com
 from forlabs.report.derive import numbered_blocks
 from forlabs.report.morph import goal_to_conclusion
@@ -333,10 +333,15 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
                       (conclusion_res.text if conclusion_res else ""))
         conclusion_note = conclusion_res.note if conclusion_res and conclusion_res.needs_confirm and not (
             st.spec and st.spec.conclusion) else None
+        try:
+            teacher_rules = ctx.memory().teacher_list(p, s)
+        except Exception:
+            teacher_rules = []
         preview_here = bool(st.pages) and all(Path(x).exists() for x in st.pages)
         docx_here = bool(st.docx_path) and Path(st.docx_path).exists()
         return render(request, "lab.html", st=st, profile=profile, subject=get_subject(s), busy=busy,
-                      preview_here=preview_here, docx_here=docx_here,
+                      preview_here=preview_here, docx_here=docx_here, teacher_rules=teacher_rules,
+                      complete=lab_complete(st),
                       events=events, journal=journal, slot_items=slot_items, errors=errors, tab=tab, steps=STEPS,
                       step_state=step_state, conclusion=conclusion, conclusion_note=conclusion_note,
                       base_url=lab_url(p, s, n), last_seq=max([e.seq for e in events] + [0]), nav="home")
@@ -400,6 +405,8 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
             return redirect(lab_url(p, s, n), err="Напиши, что поменять в отчёте, или приложи фото")
         if not st.report:
             return redirect(lab_url(p, s, n), err="Чат правок работает после выполнения лабы")
+        if not lab_complete(st):
+            return redirect(lab_url(p, s, n), err="Лаба дописана не до конца — сначала нажми «Продолжить»")
         if len(photos) > MAX_IMAGES:
             return redirect(lab_url(p, s, n), err=f"Не больше {MAX_IMAGES} фото за раз")
         try:
@@ -416,12 +423,22 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
             return JSONResponse({"error": "нет такого фото"}, status_code=404)
         st = load(p, s, n)
         rel = f"notes/{name}"
+        if rel not in st.wish_images and not any(rel in m.images for m in st.chat):
+            return JSONResponse({"error": "нет такого фото"}, status_code=404)
         f = ctx.store.lab_dir(p, s, n) / rel
         if not f.exists() and hasattr(ctx.store, "fetch"):
-            ctx.store.fetch(p, s, n, rel, f)
-        if not f.exists() or (rel not in st.wish_images and not any(rel in m.images for m in st.chat)):
+            try:
+                ctx.store.fetch(p, s, n, rel, f)
+            except CloudError:
+                pass
+        if not f.exists():
             return JSONResponse({"error": "нет такого фото"}, status_code=404)
         return FileResponse(f, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})
+
+    @app.post("/labs/{p}/{s}/{n}/teacher/remove/{index}")
+    def lab_teacher_remove(p: str, s: str, n: str, index: int):
+        ctx.memory().remove_teacher(p, s, index)
+        return redirect(lab_url(p, s, n) + "?tab=report", msg="Требование убрано")
 
     @app.post("/labs/{p}/{s}/{n}/chat/revert/{vid}")
     def lab_chat_revert(p: str, s: str, n: str, vid: int):

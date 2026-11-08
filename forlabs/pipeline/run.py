@@ -230,8 +230,13 @@ class Pipeline:
             self._emit(st, "Разбираю задания и вопросы", step="parse")
             if st.wish_images and not st.wish_images_text:
                 self._emit(st, "Читаю фото к пожеланиям", step="parse")
-                st.wish_images_text = describe_images([self.lab_dir(st) / r for r in st.wish_images], self._llm(st))
-                self._save(st)
+                try:
+                    st.wish_images_text = describe_images([self.lab_dir(st) / r for r in st.wish_images],
+                                                          self._llm(st))
+                    self._save(st)
+                except Exception as e:  # фото — подсказка, а не условие разбора
+                    self._emit(st, f"Не получилось прочитать фото к пожеланиям ({getattr(e, 'message_ru', e)}) — "
+                                   "разбираю без них, текст с фото можно вписать в пожелания", "warn", step="parse")
             wishes = st.wishes or (st.spec.wishes if st.spec else "") or ""
             if st.wish_images_text and st.wish_images_text not in wishes:
                 wishes = f"{wishes}\nС фото:\n{st.wish_images_text}".strip()
@@ -241,6 +246,8 @@ class Pipeline:
             if st.number != spec.number:
                 old_key = self.key(st)
                 st = self._renumber(st, spec.number, old_dir)
+                if st.wish_images:
+                    self._sync(st, st.wish_images)  # в облаке фото лежали под номером черновика
                 spec.number = st.number
                 for ev in self.bus.history(old_key):
                     self.bus.publish(self.key(st), ev.text, ev.kind, ev.step)
@@ -314,6 +321,8 @@ class Pipeline:
                 text = self.memory.read(st.profile_id, st.subject_id)
             except Exception:
                 text = ""
+        if text.strip():
+            text = f"Прошлые лабы этого предмета (продолжай ту же тему):\n{text.strip()}"
         teacher = self._teacher_text(st)
         if teacher:
             text = f"Требования преподавателя (соблюдай всегда):\n{teacher}\n\n{text}".strip()
@@ -329,6 +338,8 @@ class Pipeline:
             raise PipelineError("Напиши, что поменять в отчёте, или приложи фото")
         if not st.report or not st.spec:
             raise PipelineError("Чат правок работает после выполнения лабы")
+        if not lab_complete(st):
+            raise PipelineError("Лаба дописана не до конца — сначала нажми «Продолжить», потом пиши правки.")
         with self.lock(st):
             msg_id = uuid.uuid4().hex[:8]
             rels = self._save_images(st, images, f"chat_{msg_id}") if images else []
@@ -349,12 +360,21 @@ class Pipeline:
                     message = f"{message}\n\nНа приложенных фото:\n{user_msg.image_text}".strip()
                 self._emit(st, "Разбираю правку", step="write")
                 plan = plan_edit(st, message, profile, subject, llm, self.rules, self._teacher_text(st))
-                remembered = None
-                if remember and self.memory is not None:
-                    remembered = plan.remember or message[:300]
-                    self.memory.add_teacher(st.profile_id, st.subject_id, remembered)
-                note = f"\nЗапомнил для следующих лаб: {remembered.rstrip('.')}." if remembered else ""
+                rule = (plan.remember or "").strip() if remember and self.memory is not None else ""
+                note = ""
+                if remember and self.memory is not None and not rule:
+                    note = ("\nНе понял, что запомнить на будущее — напиши требование коротко, например "
+                            "«комментарии к каждому методу», и отметь «Запомнить».")
+
+                def remember_rule() -> str:
+                    if not rule:
+                        return note
+                    self.memory.add_teacher(st.profile_id, st.subject_id, rule)
+                    return f"\nЗапомнил для следующих лаб: {rule.rstrip('.')}."
+
+                was_final = st.status == "final"
                 if plan.kind != "edit":
+                    note = remember_rule()
                     st.chat.append(ChatMessage(id=uuid.uuid4().hex[:8], role="assistant", text=plan.reply + note,
                                                at=_now(), kind=plan.kind))
                     self._emit(st, "Ответ в чате правок", "done", step="write")
@@ -401,8 +421,12 @@ class Pipeline:
                     text += "\nИзменено: " + ", ".join(changed) + "."
                 if retake:
                     text += "\nПересними: " + "; ".join(retake) + " — места появились в «Нужно от тебя»."
-                st.chat.append(ChatMessage(id=uuid.uuid4().hex[:8], role="assistant", text=text + note, at=_now(),
-                                           kind="edit", changed=changed, retake=retake, version=vid))
+                if was_final:
+                    text += "\nЛаба уже была сдана. Сдай заново, чтобы в папке сдачи был новый файл."
+                note = remember_rule()
+                reply = ChatMessage(id=uuid.uuid4().hex[:8], role="assistant", text=text + note, at=_now(),
+                                    kind="edit", changed=changed, retake=retake, version=vid)
+                st.chat.append(reply)
             except Exception as e:  # сбой посреди правки: разбор и отчёт — как до неё
                 st.spec, st.report = backup_spec, backup_report
                 if vid is not None:
@@ -412,7 +436,13 @@ class Pipeline:
                                            text=f"Не получилось: {reason} Отчёт не изменён — попробуй ещё раз."))
                 self._emit(st, f"Правка не удалась: {reason}", "error", step="write")
                 return self._save(st)
-        return self.render(st)
+            self._save(st)  # правка сохранена до вёрстки: выключение во время вёрстки её не потеряет
+        st = self.render(st)
+        if st.status == "failed":
+            reply.text += (f"\nПравку сохранил, но документ не собрался: {st.error} "
+                           "Когда исправишь, нажми «Пересобрать документ».")
+            st = self._save(st)
+        return st
 
     def revert(self, st: LabState, version_id: int) -> LabState:
         """Вернуть разбор и отчёт к версии; текущее состояние тоже сохраняется версией — откат можно отменить."""
@@ -421,7 +451,9 @@ class Pipeline:
             raise PipelineError("Этой версии уже нет: хранятся только 10 последних правок")
         with self.lock(st):
             current = push_version(st, f"до отката к «{target.label}»")
+            source = st.spec.source_text
             st.spec, st.report = target.spec.model_copy(deep=True), target.report.model_copy(deep=True)
+            st.spec.source_text = source  # в версиях методичка не хранится (облако: меньше данных)
             st.chat.append(ChatMessage(id=uuid.uuid4().hex[:8], role="assistant", at=_now(), kind="revert",
                                        version=current,
                                        text=f"Вернул отчёт к состоянию до правки «{target.label[:80]}»."))
@@ -486,7 +518,7 @@ class Pipeline:
         b = sec.blocks[block - 1]
         if not isinstance(b, Figure):
             raise PipelineError("Это не рисунок")
-        rel = f"assets/fig_{section}_{block}{suffix}"
+        rel = f"assets/fig_{section}_{block}_{uuid.uuid4().hex[:6]}{suffix}"  # новый файл: старые снимки целы
         f = self.lab_dir(st) / rel
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_bytes(image)
@@ -506,7 +538,11 @@ class Pipeline:
             d = self.lab_dir(st)
             self._fetch_missing(st)
             docx = d / "report.docx"
-            build_lab(_absolute_images(st.report, d), docx, author=profile.doc_author or profile.full_name)
+            try:
+                build_lab(_absolute_images(st.report, d), docx, author=profile.doc_author or profile.full_name)
+            except PermissionError as e:
+                raise PipelineError("report.docx открыт в Word или другой программе — закрой его и нажми "
+                                    "«Пересобрать документ».") from e
             self._emit(st, "Доводка документа и предпросмотр", step="finalize")
             rep = finalize(docx, profile.doc_author or profile.full_name, d / "render", self.soffice,
                            prefer_word=self.prefer_word)
@@ -583,6 +619,16 @@ class Pipeline:
         rep = finalize(out, profile.doc_author or profile.full_name, out.parent / "render_semester", self.soffice,
                        prefer_word=self.prefer_word)
         return out, rep
+
+
+def lab_complete(st: LabState) -> bool:
+    """Все задания и ответы на вопросы методички есть в отчёте."""
+    if not st.spec or not st.report:
+        return False
+    written = {s.n for s in st.report.sections}
+    if any(t.n not in written for t in st.spec.tasks):
+        return False
+    return len(st.report.questions) >= len(st.spec.questions)
 
 
 class _SourceProxy:

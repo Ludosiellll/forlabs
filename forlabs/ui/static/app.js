@@ -135,8 +135,13 @@
   var form = document.querySelector("[data-chat-form]");
   if (!form) return;
   var area = form.querySelector("textarea");
+  var files = form.querySelector("[data-images-input]");
   area.addEventListener("keydown", function (e) {
-    if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && area.value.trim()) { e.preventDefault(); form.submit(); }
+    var hasPhotos = files && files.files && files.files.length;
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && (area.value.trim() || hasPhotos)) {
+      e.preventDefault();
+      if (form.requestSubmit) form.requestSubmit(); else form.submit();
+    }
   });
   form.addEventListener("submit", function () {
     var b = form.querySelector("button[type=submit]");

@@ -20,7 +20,7 @@ from forlabs.report.morph import goal_to_conclusion
 
 
 class BlockDraft(BaseModel):
-    type: Literal["paragraph", "dash_list", "numbered_list", "listing", "figure", "table"] | None = None
+    type: Literal["paragraph", "dash_list", "numbered_list", "listing", "figure", "table"]
     text: str | None = None
     items: list[str] | None = None
     topic: str | None = None
@@ -30,8 +30,6 @@ class BlockDraft(BaseModel):
     instruction: str | None = None
     dot: str | None = None
     rows: list[list[str]] | None = None
-    keep: str | None = None  # правка: оставить исходный блок bN как есть
-    retake: bool = False  # правка: скриншот переснять
 
 
 class SectionDraft(BaseModel):
@@ -101,7 +99,7 @@ def _context(spec: LabSpec, profile: Profile, subject: Subject, memory: str, pre
     all_tasks = "\n".join(f"{t.n}. {t.text}" for t in spec.tasks)
     variant_block = (f"Варианты из методички:\n{spec.variant_text}\n" if spec.variant_text else
                      "В этой работе нет вариантов и приложений с вариантами: не упоминай вариант и приложение.\n")
-    memory_block = f"Что было в прошлых лабах этого предмета (продолжай ту же тему):\n{memory}\n" if memory.strip() else ""
+    memory_block = f"Память предмета:\n{memory}\n" if memory.strip() else ""
     wishes_block = wishes_text(spec)
     prev = "\n\n".join(f"Задание {s.n} (уже написано):\n{section_text(s)}" for s in previous)
     previous_block = f"Уже написанные задания этой работы — не повторяйся и будь последователен:\n{prev}\n" if prev else ""
