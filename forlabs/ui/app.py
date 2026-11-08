@@ -254,8 +254,11 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         if not data and not text.strip():
             return redirect(f"/labs/new?profile={_q(profile_id)}&subject={_q(subject_id)}",
                             err="Добавь файл методички или вставь её текст")
-        st = await asyncio.to_thread(ctx.pipeline.create_lab, profile_id, subject_id, data,
-                                     number=number.strip() or None, pasted_text=text)
+        try:
+            st = await asyncio.to_thread(ctx.pipeline.create_lab, profile_id, subject_id, data,
+                                         number=number.strip() or None, pasted_text=text)
+        except PipelineError as e:
+            return redirect(f"/labs/new?profile={_q(profile_id)}&subject={_q(subject_id)}", err=str(e))
         key = ctx.pipeline.key(st)
         result = {}
 

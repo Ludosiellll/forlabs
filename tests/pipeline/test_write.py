@@ -115,3 +115,45 @@ def test_conclusion_override_used():
     doc = write_report(spec, PROFILE, PROFILE.enrollment("ssp"), SUBJECTS["ssp"], fake, RuleBook(),
                        assets_dir=Path("/tmp"), render_diagrams=False)
     assert doc.conclusion == "Сформировала навыки работы со срезами."
+
+
+def test_empty_and_ragged_tables_from_model(tmp_path):
+    from forlabs.core.models import ReportDoc, Table, TaskSection
+    from forlabs.pipeline.write import BlockDraft, SectionDraft, draft_to_blocks
+    from forlabs.render.docx_builder import build_lab
+
+    draft = SectionDraft(blocks=[
+        BlockDraft(type="paragraph", text="Результаты замеров приведены ниже."),
+        BlockDraft(type="table", topic="пустая", rows=[[]]),
+        BlockDraft(type="table", topic="пустая 2", rows=[["", " "]]),
+        BlockDraft(type="table", topic="результаты замеров", rows=[["Опыт", "Время, мс"], ["1"], ["2", "14", "лишнее"]]),
+    ])
+    blocks = draft_to_blocks(draft, tmp_path, 1, render_diagrams=False)
+    tables = [b for b in blocks if isinstance(b, Table)]
+    assert len(tables) == 1
+    assert tables[0].rows == [["Опыт", "Время, мс", ""], ["1", "", ""], ["2", "14", "лишнее"]]
+    doc = ReportDoc(lab_number="1", header={"Тема": "Т"}, conclusion="Изучил.",
+                    sections=[TaskSection(n=1, title="Сделать замеры.", blocks=blocks)])
+    assert build_lab(doc, tmp_path / "t.docx", author="x").exists()
+
+
+def test_colored_diagram_becomes_white_not_black():
+    from forlabs.executors.diagrams import styled
+
+    out = styled('digraph { bgcolor="lightblue"; a [style=filled, color="lightblue"]; '
+                 'b [style=filled, fillcolor="#ffcc00"]; a -> b [color=red]; }')
+    assert 'bgcolor="lightblue"' not in out and 'bgcolor="black"' not in out
+    assert 'fillcolor="white"' in out.split("];", 1)[1]  # заливка узлов по умолчанию — белая
+    assert '"#ffcc00"' not in out and "red" not in out
+
+
+@pytest.mark.skipif(not browser_available(), reason="нет браузера")
+def test_colored_diagram_renders_light(tmp_path):
+    from PIL import Image
+
+    out = render_dot('digraph { bgcolor="lightblue"; node [style=filled, color="navy"]; Ввод -> Обработка -> Вывод }',
+                     tmp_path / "c.png")
+    with Image.open(out) as im:
+        px = im.convert("L").tobytes()
+    dark = sum(1 for v in px if v < 100) / len(px)
+    assert dark < 0.08, f"слишком много тёмного: {dark:.0%}"

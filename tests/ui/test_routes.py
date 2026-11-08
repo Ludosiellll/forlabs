@@ -225,3 +225,11 @@ def test_screenshot_does_not_block_the_server(tmp_home, tmp_path):
     elapsed = time.monotonic() - t0
     release.set()
     assert r.status_code == 200 and elapsed < 2
+
+
+def test_new_lab_with_taken_number_shows_message(client, tmp_path):
+    _new_lab(client, tmp_path)
+    r = client.post("/labs/new", data={"profile_id": "ivanov_ivan_petrovich", "subject_id": "psip", "number": "7",
+                                       "text": "Лабораторная работа №7"}, follow_redirects=False)
+    assert r.status_code == 303 and "err=" in r.headers["location"]
+    assert "/labs/new" in r.headers["location"]

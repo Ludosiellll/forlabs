@@ -12,7 +12,7 @@ from pathlib import Path
 VIZ_JS = Path(__file__).parent / "assets" / "viz-standalone.js"
 STYLE = ('graph [fontname="Times New Roman", fontsize=14, bgcolor="white", pad=0.2, nodesep=0.35, ranksep=0.45];\n'
          'node [fontname="Times New Roman", fontsize=14, shape=box, color="black", fontcolor="black", '
-         'style="solid", penwidth=1.0, margin="0.15,0.08"];\n'
+         'fillcolor="white", style="solid", penwidth=1.0, margin="0.15,0.08"];\n'
          'edge [fontname="Times New Roman", fontsize=12, color="black", arrowsize=0.8, penwidth=1.0];\n')
 
 
@@ -23,13 +23,21 @@ def styled(dot: str) -> str:
     if i < 0:
         dot = "digraph {\n" + dot + "\n}"
         i = dot.find("{")
-    # цветные заливки и радуга — ИИ-штамп; оставляем только оттенки серого
-    dot = re.sub(r'(fill)?color\s*=\s*"?(#[0-9a-fA-F]{6}|[a-z]+[0-9]*)"?',
-                 lambda m: m.group(0) if m.group(2).lower() in ("black", "white", "gray", "grey", "lightgray",
-                                                                  "lightgrey", "gray90", "gray95", "#000000",
-                                                                  "#ffffff") else (m.group(1) or "") + 'color="black"'
-                 if not m.group(1) else 'fillcolor="white"', dot)
+    # цветные заливки и радуга — ИИ-штамп: фон и заливка становятся белыми, линии и текст — чёрными
+    dot = _COLOR_ATTR.sub(_neutral_color, dot)
     return dot[:i + 1] + "\n" + STYLE + dot[i + 1:]
+
+
+_COLOR_ATTR = re.compile(r'\b(bgcolor|fillcolor|fontcolor|pencolor|color)\s*=\s*("[^"]*"|[#\w.:]+)', re.IGNORECASE)
+_GRAYS = {"black", "white", "gray", "grey", "lightgray", "lightgrey", "gray90", "gray95", "#000000", "#ffffff",
+          "transparent", "none"}
+
+
+def _neutral_color(m: re.Match) -> str:
+    attr, value = m.group(1), m.group(2).strip('"').lower()
+    if value in _GRAYS:
+        return m.group(0)
+    return f'{attr}="white"' if attr.lower() in ("bgcolor", "fillcolor") else f'{attr}="black"'
 
 
 FALLBACK_EXECUTABLES = ["/opt/pw-browsers/chromium", "/usr/bin/chromium", "/usr/bin/chromium-browser",

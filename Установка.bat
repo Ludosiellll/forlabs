@@ -2,7 +2,7 @@
 chcp 65001 >nul
 cd /d "%~dp0"
 echo Установка ForLabs...
-where py >/dev/null 2>/dev/null && (set PY=py -3) || (set PY=python)
+where py >nul 2>nul && (set PY=py -3) || (set PY=python)
 %PY% -c "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)" 2>nul
 if errorlevel 1 (
   echo Нужен Python 3.11 или новее: https://www.python.org/downloads/ ^(при установке отметь "Add python.exe to PATH"^)

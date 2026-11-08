@@ -69,7 +69,10 @@ def draft_to_blocks(draft: SectionDraft, assets_dir: Path, sec_n: int, render_di
             blocks.append(Listing(topic=b.topic or "Исходный код программы", code=b.code.rstrip(),
                                   language=b.language or ""))
         elif b.type == "table" and b.rows:
-            blocks.append(Table(topic=b.topic or "данные", rows=[[str(c) for c in r] for r in b.rows]))
+            rows = [[str(c).strip() for c in r] for r in b.rows]
+            width = max(len(r) for r in rows)
+            if width and any(c for r in rows for c in r):  # пустую таблицу модели не верстаем
+                blocks.append(Table(topic=b.topic or "данные", rows=[r + [""] * (width - len(r)) for r in rows]))
         elif b.type == "figure":
             topic = b.topic or "Результат выполнения задания"
             if b.kind == "diagram" and b.dot:
