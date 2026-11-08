@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "forlabs"
+version = "0.1.0"
+description = "Выполнение и оформление лабораторных работ по канону колледжа"
+requires-python = ">=3.11"
+dependencies = [
+  "pydantic>=2.6",
+  "python-docx>=1.1",
+  "lxml>=5.0",
+  "pymorphy3>=2.0",
+  "pymorphy3-dicts-ru>=2.4",
+  "openai>=1.40",
+  "PyMuPDF>=1.24",
+  "fastapi>=0.110",
+  "uvicorn>=0.29",
+  "jinja2>=3.1",
+  "python-multipart>=0.0.9",
+  "keyring>=24",
+  "playwright>=1.44",
+  "Pillow>=10",
+]
+
+[project.optional-dependencies]
+windows = ["pywin32>=306", "pywebview>=5"]
+dev = ["pytest>=8", "httpx>=0.27"]
+
+[tool.setuptools.packages.find]
+include = ["forlabs*"]
+
+[tool.setuptools.package-data]
+forlabs = ["render/assets/*", "executors/assets/*", "ui/templates/*", "ui/static/*", "ui/static/fonts/*", "../rules/**/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "live: требует FORLABS_API_KEY и сеть",
+  "windows: только Windows",
+]
+addopts = "-m 'not live'"

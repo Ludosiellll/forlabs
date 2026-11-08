@@ -1,0 +1,31 @@
+import json
+
+from forlabs.core import paths
+from forlabs.core.settings import Settings, get_api_key, load_settings, save_settings
+
+
+def test_data_home_respects_env(tmp_home):
+    assert paths.data_home() == tmp_home
+
+
+def test_settings_roundtrip(tmp_home):
+    s = Settings(model="deepseek-v4-flash", word_path=r"C:\Word\WINWORD.EXE", temperature=0.3)
+    save_settings(s)
+    loaded = load_settings()
+    assert loaded == s
+    assert (tmp_home / "settings.json").exists()
+
+
+def test_defaults_point_to_aikeys(tmp_home):
+    s = load_settings()
+    assert s.base_url == "https://api.aikeysforyou.com/v1"
+    assert s.model == "deepseek-v4.1-flash"
+
+
+def test_api_key_env_fallback(tmp_home, monkeypatch):
+    monkeypatch.setattr("forlabs.core.settings._keyring_get", lambda: None)
+    monkeypatch.setenv("FORLABS_API_KEY", "sk-test-123")
+    assert get_api_key() == "sk-test-123"
+    save_settings(load_settings())
+    assert "sk-test-123" not in (tmp_home / "settings.json").read_text(encoding="utf-8")
+    assert "api_key" not in json.loads((tmp_home / "settings.json").read_text(encoding="utf-8"))
