@@ -83,3 +83,18 @@ def test_render_dot(tmp_path):
     out = render_dot("digraph { rankdir=LR; Ввод -> Обработка -> Вывод }", tmp_path / "d.png")
     from PIL import Image
     assert out is not None and Image.open(out).size[0] > 100
+
+
+def test_same_opening_points_to_blocks_and_gets_repaired():
+    from forlabs.core.models import ReportDoc, TaskSection
+    doc = ReportDoc(lab_number="8", sections=[
+        TaskSection(n=1, title=SPEC.tasks[0].text, blocks=[Paragraph(text="В программе создан массив."),
+                                                            Paragraph(text="В программе описан цикл.")]),
+        TaskSection(n=2, title=SPEC.tasks[1].text, blocks=[Paragraph(text="В программе выведен результат.")])],
+        conclusion="x")
+    fs = [f for f in check_all(doc, SPEC, PROFILE, {}) if f.rule_id == "ai.same_opening"]
+    assert sorted(f.location for f in fs) == ["Задание 1, блок 2", "Задание 2, блок 1"]
+    fake = FakeLLM([{"blocks": [{"index": 2, "text": "Цикл перебирает элементы."}]},
+                    {"blocks": [{"index": 1, "text": "Результат выведен в консоль."}]}])
+    fixed = repair(doc, fs, fake, RuleBook(), SPEC, PROFILE)
+    assert not [f for f in check_all(fixed, SPEC, PROFILE, {}) if f.rule_id == "ai.same_opening"]

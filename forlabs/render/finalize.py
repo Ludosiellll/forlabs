@@ -13,8 +13,8 @@ from forlabs.render import libreoffice, word_com
 from forlabs.render.conformance import q
 from forlabs.render.preview import heading_pages, pdf_to_pngs
 
-NO_WORD_WARNING = ("Продолжения листингов и таблиц расставит Word: открой приложение на Windows с Word "
-                   "и нажми «Доводка в Word». Разбивка LibreOffice отличается от Word на 1–2 строки.")
+NO_WORD_WARNING = ("Word на этом компьютере не найден, поэтому «Продолжение листинга» не расставлено. "
+                   "Открой лабу в ForLabs на ПК с Word и нажми «Пересобрать документ».")
 
 
 @dataclass

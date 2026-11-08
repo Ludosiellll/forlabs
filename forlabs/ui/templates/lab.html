@@ -131,18 +131,19 @@
   </section>
 
   <aside class="lab-right" aria-label="Документ и замечания">
-    <div class="row" style="margin-bottom:12px">
-      {% if st.docx_path %}<a class="btn primary" href="{{ base_url }}/docx">Скачать .docx</a>
-        <form method="post" action="{{ base_url }}/open"><input type="hidden" name="what" value="docx"><button class="btn" type="submit">Открыть в Word</button></form>{% endif %}
-      <form method="post" action="{{ base_url }}/open"><input type="hidden" name="what" value="dir"><button class="btn" type="submit">Папка лабы</button></form>
+    <div class="actions">
+      {% if st.status in ('rendered', 'final') %}
+      <form method="post" action="{{ base_url }}/final" class="wide">
+        <button class="btn primary" type="submit" {{ 'disabled' if errors }}>{{ 'Положить в папку сдачи ещё раз' if st.status == 'final' else 'Сдать: положить в папку сдачи' }}</button>
+        {% if errors %}<div class="hint">Сначала разберись с замечаниями ниже.</div>{% endif %}
+      </form>
+      {% endif %}
+      {% if st.docx_path %}
+      <a class="btn {{ 'primary' if st.status not in ('rendered', 'final') }} wide" href="{{ base_url }}/docx">Скачать .docx</a>
+      <form method="post" action="{{ base_url }}/open"><input type="hidden" name="what" value="docx"><button class="btn" type="submit">Открыть в Word</button></form>
+      {% endif %}
+      <form method="post" action="{{ base_url }}/open" class="{{ 'wide' if not st.docx_path }}"><input type="hidden" name="what" value="dir"><button class="btn" type="submit">Папка лабы</button></form>
     </div>
-    {% if st.status in ('rendered', 'final') %}
-    <form method="post" action="{{ base_url }}/final" style="margin-bottom:14px">
-      <button class="btn {{ 'primary' if st.status == 'rendered' }}" type="submit" style="width:100%" {{ 'disabled' if errors }}>
-        {{ 'Сдана — положить ещё раз в папку сдачи' if st.status == 'final' else 'Сдать: положить в папку сдачи' }}</button>
-      {% if errors %}<div class="hint">Сначала разберись с замечаниями ниже.</div>{% endif %}
-    </form>
-    {% endif %}
     {% for w in st.warnings %}<div class="notice warn small">{{ w }}</div>{% endfor %}
     <h2>Замечания</h2>
     {% set shown = st.findings|rejectattr('stage', 'equalto', 'spec')|list %}

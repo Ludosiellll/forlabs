@@ -46,7 +46,7 @@ def check_all(doc: ReportDoc, spec: LabSpec, profile: Profile, others: dict[str,
             loc = f"Задание {s.n}, блок {bi}"
             if isinstance(b, Paragraph):
                 out += scan_text(b.text, loc)
-                paragraphs.append(b.text)
+                paragraphs.append((loc, b.text))
             elif isinstance(b, (DashList, NumberedList)):
                 for item in b.items:
                     out += scan_text(item, loc)

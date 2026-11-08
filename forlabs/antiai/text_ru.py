@@ -97,15 +97,24 @@ def scan_text(text: str, location: str) -> list[Finding]:
 _WORD = re.compile(r"[А-Яа-яЁёA-Za-z]+")
 
 
-def scan_paragraph_openings(paragraphs: list[str], location: str = "Отчёт") -> list[Finding]:
-    openings = []
-    for p in paragraphs:
-        words = _WORD.findall(p.lower())
-        if len(words) >= 2:
-            openings.append(" ".join(words[:2]))
+def _opening(text: str) -> str | None:
+    words = _WORD.findall(text.lower())
+    return " ".join(words[:2]) if len(words) >= 2 else None
+
+
+def scan_paragraph_openings(paragraphs: list[str] | list[tuple[str, str]], location: str = "Отчёт") -> list[Finding]:
+    """Три и больше абзаца с одинаковым началом — ИИ-шаблон. Принимает тексты или пары (место, текст);
+    замечание ставится на второй и следующие такие абзацы, чтобы их можно было переписать точечно."""
+    items = [(location, p) if isinstance(p, str) else p for p in paragraphs]
+    groups: dict[str, list[tuple[str, str]]] = {}
+    for loc, text in items:
+        o = _opening(text)
+        if o:
+            groups.setdefault(o, []).append((loc, text))
     out = []
-    for opening, count in Counter(openings).items():
-        if count >= 3:
-            out.append(_finding("ai.same_opening", f"{count} абзаца начинаются одинаково: «{opening}…»",
-                                location, opening, "начинать абзацы по-разному"))
+    for opening, members in groups.items():
+        if len(members) >= 3:
+            for loc, text in members[1:]:
+                out.append(_finding("ai.same_opening", f"{len(members)} абзаца начинаются одинаково: «{opening}…»",
+                                    loc, text, "начни этот абзац по-другому"))
     return out

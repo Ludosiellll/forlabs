@@ -50,6 +50,17 @@ p { margin: 0 0 10px; }
 .nav a.on { color: var(--ink); background: var(--accent-soft); font-weight: 500; }
 .who { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; }
 .who form { margin: 0; }
+@media (max-width: 720px) {
+  .top { padding: 8px 12px 0; gap: 4px 12px; }
+  .brand { order: 1; }
+  .who { order: 2; margin-left: auto; }
+  .nav { order: 3; flex: 1 1 100%; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding-bottom: 6px; }
+  .nav::-webkit-scrollbar { display: none; }
+  .nav a { white-space: nowrap; }
+  .split, .lab { min-height: 0; align-content: flex-start; }
+  .main { padding: 18px 14px 40px; }
+  .page { padding: 18px 14px 40px; }
+}
 
 /* кнопки и поля */
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 36px;
@@ -130,6 +141,10 @@ table.t tr.click:hover td { background: var(--panel); }
 .lab-center { flex: 999 1 520px; min-width: 0; background: var(--desk); padding: 22px 20px 40px;
   display: flex; flex-direction: column; align-items: center; gap: 14px; }
 .lab-right { flex: 1 1 260px; max-width: 320px; padding: 18px; border-left: 1px solid var(--line); }
+.actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 12px; }
+.actions form { margin: 0; }
+.actions .btn { width: 100%; }
+.actions .wide { grid-column: 1 / -1; }
 @media (max-width: 1100px) { .lab-right { max-width: none; border-left: 0; border-top: 1px solid var(--line); flex-basis: 100%; } }
 @media (max-width: 860px) { .lab-left { max-width: none; border-right: 0; border-bottom: 1px solid var(--line); } }
 .lab-title { font-size: 12.5px; color: var(--muted); margin-bottom: 10px; }
