@@ -29,6 +29,7 @@ _ACCESS = {
     "not approved": "Аккаунт ещё не одобрен администратором. Попроси его открыть «Пользователи» и одобрить тебя.",
     "llm_api_key": "Администратор ещё не добавил ключ модели в Supabase (секрет LLM_API_KEY).",
     "not signed in": "Сессия истекла — войди в аккаунт заново.",
+    "no key assigned": "Администратор ещё не выдал тебе ключ модели. Напиши ему — он добавит ключ в разделе «Админ».",
 }
 
 
@@ -82,6 +83,7 @@ class LLM:
                  retry_delays: tuple[float, ...] = (3.0, 10.0)):
         self.settings = settings
         self.retry_delays = retry_delays
+        self.extra_headers: dict[str, str] = {}
         self.model = settings.model
         self.base_url = (base_url or settings.base_url).rstrip("/")
         self.api_key = api_key
@@ -107,12 +109,18 @@ class LLM:
                            "Не удалось получить доступ к модели. Войди в аккаунт заново.") from e
         try:
             r = self.http.post(f"{self.base_url}/chat/completions", json=payload,
-                               headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
+                               headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json",
+                                        **self.extra_headers})
         except (httpx.TransportError, httpx.TimeoutException) as e:
             raise LLMError("network", str(e), retryable=True) from e
         if r.status_code >= 400:
             detail = r.text[:300]
             low = detail.lower()
+            expired = re.search(r"subscription expired:\s*(\d{4})-(\d{2})-(\d{2})", detail)
+            if expired:
+                y, m, d = expired.groups()
+                raise LLMError("access", detail, f"Подписка закончилась {d}.{m}.{y} — напиши администратору, "
+                                                 "чтобы он её продлил.")
             for needle, msg in _ACCESS.items():
                 if needle in low:
                     raise LLMError("access", detail, msg)
@@ -132,6 +140,14 @@ class LLM:
             raise LLMError("bad_response", r.text[:200]) from e
         self.usage.add(data.get("usage"))
         return data
+
+    def with_headers(self, extra: dict[str, str]) -> "LLM":
+        """Копия клиента с дополнительными заголовками (метка лабы); http-клиент и счётчик расхода общие."""
+        import copy
+
+        clone = copy.copy(self)
+        clone.extra_headers = {**self.extra_headers, **extra}
+        return clone
 
     def chat(self, messages: list[dict], temperature: float | None = None, max_tokens: int | None = None,
              json_mode: bool = False) -> str:
@@ -176,6 +192,11 @@ class FakeLLM:
         self.calls: list[list[dict]] = []
         self.usage = UsageCounter()
         self.model = "fake"
+        self.headers: dict[str, str] = {}
+
+    def with_headers(self, extra: dict[str, str]) -> "FakeLLM":
+        self.headers = {**self.headers, **extra}
+        return self
 
     def _next(self, messages):
         self.calls.append(messages)

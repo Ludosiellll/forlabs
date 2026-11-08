@@ -403,3 +403,10 @@ def test_semester_refuses_labs_without_screenshots(tmp_home, tmp_path):
     with pytest.raises(PipelineError) as e:
         pipe.build_semester("ivanov", "psip", ["7"], tmp_path / "sem.docx")
     assert "ЛР 7" in str(e.value)
+
+
+def test_pipeline_tags_llm_calls(tmp_home, tmp_path):
+    pipe, fake = setup(tmp_home, tmp_path, [RAW, SEC, SEC2, ANS])
+    st = pipe.create_lab("ivanov", "psip", [(FIXTURE.name, FIXTURE.read_bytes())], number="7")
+    pipe.execute(pipe.confirm(pipe.parse(st, date="24.09.2026"), None))
+    assert fake.headers == {"X-ForLabs-Lab": "ivanov%2Fpsip%2F7"}

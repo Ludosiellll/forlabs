@@ -167,3 +167,33 @@ def test_permanent_errors_not_retried(status, body):
     with pytest.raises(LLMError):
         make_llm(handler).chat([{"role": "user", "content": "x"}])
     assert len(calls) == 1
+
+
+def test_subscription_expired_message():
+    llm = make_llm(lambda req: httpx.Response(403, json={"error": {"message": "subscription expired: 2026-12-12T00:00:00.000Z"}}))
+    with pytest.raises(LLMError) as e:
+        llm.chat([{"role": "user", "content": "x"}])
+    assert e.value.kind == "access"
+    assert "12.12.2026" in e.value.message_ru and "администратор" in e.value.message_ru
+
+
+def test_no_key_assigned_message():
+    llm = make_llm(lambda req: httpx.Response(503, json={"error": {"message": "no key assigned"}}))
+    with pytest.raises(LLMError) as e:
+        llm.chat([{"role": "user", "content": "x"}])
+    assert e.value.kind == "access" and "ещё не выдал" in e.value.message_ru
+
+
+def test_with_headers_sends_lab():
+    seen = []
+
+    def handler(req):
+        seen.append(req.headers.get("x-forlabs-lab"))
+        return httpx.Response(200, json=_completion("ok"))
+
+    base = make_llm(handler)
+    tagged = base.with_headers({"X-ForLabs-Lab": "ivanov%2Fssp%2F4"})
+    assert tagged.chat([{"role": "user", "content": "x"}]) == "ok"
+    base.chat([{"role": "user", "content": "x"}])
+    assert seen == ["ivanov%2Fssp%2F4", None]
+    assert base.usage.requests == 2  # общий счётчик расхода

@@ -84,6 +84,15 @@ class Pipeline:
                 out.append(Event(seq=-i, text=text, kind=kind))
         return out[-300:]
 
+    def _llm(self, st: LabState):
+        """Клиент модели с меткой лабы: в облаке расход видно по каждой лабе."""
+        from urllib.parse import quote
+
+        llm = self.llm_factory()
+        if hasattr(llm, "with_headers"):
+            llm = llm.with_headers({"X-ForLabs-Lab": quote(self.key(st), safe="")})
+        return llm
+
     def lab_dir(self, st: LabState) -> Path:
         return self.store.lab_dir(st.profile_id, st.subject_id, st.number)
 
@@ -187,7 +196,7 @@ class Pipeline:
             subject = get_subject(st.subject_id)
             enrollment = self._enrollment(profile, st.subject_id)
             self._emit(st, "Разбираю задания и вопросы", step="parse")
-            spec, findings = extract_spec(src, subject, enrollment, self.llm_factory(),
+            spec, findings = extract_spec(src, subject, enrollment, self._llm(st),
                                           None if is_draft(st.number) else st.number, date or today())
             old_dir = self.lab_dir(st)
             if st.number != spec.number:
@@ -269,7 +278,7 @@ class Pipeline:
                                    step="write")
                 st.status, st.error = "executing", None
                 self._save(st)
-                llm = self.llm_factory()
+                llm = self._llm(st)
                 assets = self.lab_dir(st) / "assets"
                 assets.mkdir(parents=True, exist_ok=True)
 
@@ -386,7 +395,7 @@ class Pipeline:
         self._emit(st, f"Готово: {target}", "done")
         if self.memory is not None:
             try:
-                self.memory.update(st, self.llm_factory())
+                self.memory.update(st, self._llm(st))
             except Exception:
                 pass
         return self._save(st)
