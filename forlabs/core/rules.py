@@ -25,10 +25,37 @@ class RuleFile:
     text: str
     overridden: bool = False
 
+    @property
+    def title(self) -> str:
+        return rule_title(self.path)
+
+
+_TITLES = {"common/standard.md": "Стандарт отчёта", "common/voice.md": "Голос студента",
+           "anti-ai/text.md": "Анти-ИИ: текст", "anti-ai/code.md": "Анти-ИИ: код",
+           "anti-ai/design.md": "Анти-ИИ: дизайн", "subjects/_template.md": "Шаблон для нового предмета"}
+
+
+def rule_title(path: str) -> str:
+    if path in _TITLES:
+        return _TITLES[path]
+    if path.startswith("subjects/"):
+        from forlabs.core.subjects import all_subjects
+
+        sid = path.split("/", 1)[1].removesuffix(".md")
+        subj = all_subjects().get(sid)
+        return f"Предмет: {subj.name if subj else sid}"
+    return path
+
+
+def _order(path: str) -> tuple:
+    group = {"common": 0, "anti-ai": 1, "subjects": 2}.get(path.split("/")[0], 3)
+    return (group, path.endswith("_template.md"), rule_title(path))
+
 
 def list_rule_files() -> list[RuleFile]:
-    return [RuleFile(p.relative_to(RULES_DIR).as_posix(), p.read_text(encoding="utf-8"))
-            for p in sorted(RULES_DIR.rglob("*.md"))]
+    files = [RuleFile(p.relative_to(RULES_DIR).as_posix(), p.read_text(encoding="utf-8"))
+             for p in RULES_DIR.rglob("*.md")]
+    return sorted(files, key=lambda f: _order(f.path))
 
 
 def _default_overrides() -> dict[str, str]:

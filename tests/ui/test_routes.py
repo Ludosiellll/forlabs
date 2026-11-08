@@ -87,3 +87,20 @@ def test_rules_edit(client):
     assert "Коротко." in client.get("/rules?file=common/voice.md").text
     client.post("/rules/reset", data={"path": "common/voice.md"})
     assert "Коротко." not in client.get("/rules?file=common/voice.md").text
+
+
+def test_journal_survives_restart(client, tmp_path, tmp_home):
+    make_profile(client, tmp_path)
+    r = client.post("/labs/new", data={"profile_id": "ivanov_ivan_petrovich", "subject_id": "psip", "number": "",
+                                       "text": ""},
+                    files={"files": (FIXTURE.name, FIXTURE.read_bytes(), "text/plain")}, follow_redirects=False)
+    lab_url = r.headers["location"]
+    fresh = TestClient(create_app(AppContext(settings=Settings(mode="local"), synchronous=True)))
+    page = fresh.get(lab_url + "?tab=journal").text
+    assert "Разбор готов" in page
+
+
+def test_rules_have_human_titles(client):
+    page = client.get("/rules").text
+    assert "Стандарт отчёта" in page and "Анти-ИИ: текст" in page
+    assert page.index("Стандарт отчёта") < page.index("Анти-ИИ: текст")

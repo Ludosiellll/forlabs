@@ -24,8 +24,8 @@
            aria-label="Рисунок {{ num }}: выбрать для вставки">
         <div class="t">Рисунок {{ num }} – {{ fig.topic }}</div>
         <div class="i">{{ fig.slot }}</div>
-        <label class="small" style="margin:6px 0 0;font-weight:400">
-          <input type="file" accept="image/png,image/jpeg" data-slot-file style="font-size:12px"></label>
+        <label class="btn filebtn">Выбрать файл
+          <input class="visually-hidden" type="file" accept="image/png,image/jpeg" data-slot-file></label>
       </div>
     {% endfor %}
     {% endif %}
@@ -124,7 +124,7 @@
       <div class="pane">
         <h2>Журнал</h2>
         <ul class="journal" data-journal>
-          {% for e in events if e.kind not in ('idle', 'moved') %}<li class="k-{{ e.kind }}">{{ e.text }}</li>{% else %}<li class="muted">Записей пока нет.</li>{% endfor %}
+          {% for e in journal %}<li class="k-{{ e.kind }}">{{ e.text }}</li>{% else %}<li class="muted">Записей пока нет.</li>{% endfor %}
         </ul>
       </div>
     {% endif %}
@@ -134,7 +134,7 @@
     <div class="actions">
       {% if st.status in ('rendered', 'final') %}
       <form method="post" action="{{ base_url }}/final" class="wide">
-        <button class="btn primary" type="submit" {{ 'disabled' if errors }}>{{ 'Положить в папку сдачи ещё раз' if st.status == 'final' else 'Сдать: положить в папку сдачи' }}</button>
+        <button class="btn primary" type="submit" {{ 'disabled' if errors }}>{{ 'Положить в папку сдачи ещё раз' if st.status == 'final' else 'Сдать в папку сдачи' }}</button>
         {% if errors %}<div class="hint">Сначала разберись с замечаниями ниже.</div>{% endif %}
       </form>
       {% endif %}

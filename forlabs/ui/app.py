@@ -258,6 +258,7 @@ def create_app(ctx: AppContext | None = None) -> FastAPI:
         key = ctx.pipeline.key(st)
         busy = key in ctx.running
         events = ctx.bus.history(key)
+        journal = [e for e in events if e.kind not in ("idle", "moved")] or ctx.pipeline.journal(st)
         errors = [f for f in st.findings if f.severity == "error" and f.rule_id not in st.accepted_rules]
         numbers = {}
         if st.report:
@@ -286,9 +287,9 @@ def create_app(ctx: AppContext | None = None) -> FastAPI:
                 step_state[k] = ""
         conclusion = goal_to_conclusion(st.spec.goal, profile.gender).text if st.spec and profile else ""
         return render(request, "lab.html", st=st, profile=profile, subject=get_subject(s), busy=busy,
-                      events=events, slot_items=slot_items, errors=errors, tab=tab, steps=STEPS,
+                      events=events, journal=journal, slot_items=slot_items, errors=errors, tab=tab, steps=STEPS,
                       step_state=step_state, conclusion=conclusion,
-                      base_url=lab_url(p, s, n), last_seq=events[-1].seq if events else 0, nav="home")
+                      base_url=lab_url(p, s, n), last_seq=max([e.seq for e in events] + [0]), nav="home")
 
     @app.post("/labs/{p}/{s}/{n}/confirm")
     async def lab_confirm(request: Request, p: str, s: str, n: str):

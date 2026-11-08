@@ -62,6 +62,20 @@ class Pipeline:
         except OSError:
             pass
 
+    def journal(self, st: LabState):
+        """События из файла журнала лабы (переживают перезапуск приложения)."""
+        from forlabs.pipeline.events import Event
+
+        f = self.lab_dir(st) / "journal.log"
+        if not f.exists():
+            return []
+        out = []
+        for i, line in enumerate(f.read_text(encoding="utf-8").splitlines(), start=1):
+            kind, _, text = line.partition("\t")
+            if text:
+                out.append(Event(seq=-i, text=text, kind=kind))
+        return out[-300:]
+
     def lab_dir(self, st: LabState) -> Path:
         return self.store.lab_dir(st.profile_id, st.subject_id, st.number)
 
