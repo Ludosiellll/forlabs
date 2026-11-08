@@ -1,0 +1,717 @@
+<?xml version='1.0' encoding='utf-8'?>
+<title xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+    <w:pPr>
+      <w:tabs>
+        <w:tab w:val="left" w:pos="1875"/>
+      </w:tabs>
+      <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
+      <w:jc w:val="center"/>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:b/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="24"/>
+        <w:szCs w:val="26"/>
+      </w:rPr>
+    </w:pPr>
+    <w:r>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:b/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="24"/>
+        <w:szCs w:val="26"/>
+      </w:rPr>
+      <w:t>{{COLLEGE1}}</w:t>
+    </w:r>
+  </w:p>
+  <w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+    <w:pPr>
+      <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
+      <w:jc w:val="center"/>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:b/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="24"/>
+        <w:szCs w:val="26"/>
+      </w:rPr>
+    </w:pPr>
+    <w:r>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:b/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="24"/>
+        <w:szCs w:val="26"/>
+      </w:rPr>
+      <w:t>{{COLLEGE2}}</w:t>
+    </w:r>
+  </w:p>
+  <w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+    <w:pPr>
+      <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
+      <w:jc w:val="center"/>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:b/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="24"/>
+        <w:szCs w:val="26"/>
+      </w:rPr>
+    </w:pPr>
+    <w:r>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:b/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="24"/>
+        <w:szCs w:val="26"/>
+      </w:rPr>
+      <w:t>{{COLLEGE3}}</w:t>
+    </w:r>
+  </w:p>
+  <w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+    <w:pPr>
+      <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
+      <w:jc w:val="right"/>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+    </w:pPr>
+  </w:p>
+  <w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+    <w:pPr>
+      <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
+      <w:jc w:val="right"/>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+    </w:pPr>
+  </w:p>
+  <w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+    <w:pPr>
+      <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
+      <w:ind w:left="4248" w:firstLine="708"/>
+      <w:jc w:val="both"/>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+    </w:pPr>
+    <w:r>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+      <w:t xml:space="preserve">Специальность {{SPECIALTY_CODE}}</w:t>
+    </w:r>
+  </w:p>
+  <w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+    <w:pPr>
+      <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
+      <w:ind w:left="4248" w:firstLine="708"/>
+      <w:jc w:val="both"/>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+    </w:pPr>
+    <w:r>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+      <w:t>{{SPEC1}}</w:t>
+    </w:r>
+  </w:p>
+  <w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+    <w:pPr>
+      <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
+      <w:ind w:left="4248" w:firstLine="708"/>
+      <w:jc w:val="both"/>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+    </w:pPr>
+    <w:r>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+      <w:t xml:space="preserve">{{SPEC2}}</w:t>
+    </w:r>
+  </w:p>
+  <w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+    <w:pPr>
+      <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
+      <w:ind w:left="4248" w:firstLine="708"/>
+      <w:jc w:val="both"/>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+    </w:pPr>
+    <w:r>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+      <w:t xml:space="preserve">{{SPEC3}}</w:t>
+    </w:r>
+  </w:p>
+  <w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+    <w:pPr>
+      <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
+      <w:jc w:val="center"/>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:b/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="72"/>
+        <w:szCs w:val="72"/>
+      </w:rPr>
+    </w:pPr>
+  </w:p>
+  <w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+    <w:pPr>
+      <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
+      <w:jc w:val="center"/>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:b/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="72"/>
+        <w:szCs w:val="72"/>
+      </w:rPr>
+    </w:pPr>
+  </w:p>
+  <w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+    <w:pPr>
+      <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
+      <w:jc w:val="center"/>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:b/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="72"/>
+        <w:szCs w:val="72"/>
+      </w:rPr>
+    </w:pPr>
+  </w:p>
+  <w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+    <w:pPr>
+      <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
+      <w:jc w:val="center"/>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="56"/>
+        <w:szCs w:val="72"/>
+      </w:rPr>
+    </w:pPr>
+    <w:r>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:b/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="56"/>
+        <w:szCs w:val="72"/>
+      </w:rPr>
+      <w:t>ОТЧЁТ</w:t>
+    </w:r>
+  </w:p>
+  <w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+    <w:pPr>
+      <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
+      <w:jc w:val="center"/>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="40"/>
+        <w:szCs w:val="44"/>
+      </w:rPr>
+    </w:pPr>
+    <w:r>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="40"/>
+        <w:szCs w:val="44"/>
+      </w:rPr>
+      <w:t>по лабораторным работам</w:t>
+    </w:r>
+  </w:p>
+  <w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+    <w:pPr>
+      <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
+      <w:jc w:val="center"/>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="44"/>
+        <w:szCs w:val="44"/>
+      </w:rPr>
+    </w:pPr>
+  </w:p>
+  <w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+    <w:pPr>
+      <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+    </w:pPr>
+    <w:r>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:b/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+      <w:t xml:space="preserve">     Учебный предмет: </w:t>
+    </w:r>
+    <w:r>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+      <w:t>{{SUBJECT}}</w:t>
+    </w:r>
+  </w:p>
+  <w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+    <w:pPr>
+      <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+        <w:u w:val="single"/>
+      </w:rPr>
+    </w:pPr>
+  </w:p>
+  <w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+    <w:pPr>
+      <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+    </w:pPr>
+    <w:r>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:b/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+      <w:t xml:space="preserve">     {{PERFORMED}} уч-ся </w:t>
+    </w:r>
+    <w:r>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+      <w:t xml:space="preserve">гр.{{GROUP}}</w:t>
+    </w:r>
+    <w:r>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+      <w:tab/>
+    </w:r>
+    <w:r>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+      <w:tab/>
+    </w:r>
+    <w:r>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+      <w:tab/>
+    </w:r>
+    <w:r>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+      <w:tab/>
+    </w:r>
+    <w:r>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+      <w:t xml:space="preserve">   {{NAME}}</w:t>
+    </w:r>
+  </w:p>
+  <w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+    <w:pPr>
+      <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+    </w:pPr>
+  </w:p>
+  <w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+    <w:pPr>
+      <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+    </w:pPr>
+    <w:r>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:b/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+      <w:t xml:space="preserve">     Руководитель </w:t>
+    </w:r>
+    <w:r>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+      <w:t>____________</w:t>
+    </w:r>
+    <w:r>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+      <w:tab/>
+    </w:r>
+    <w:r>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+      <w:tab/>
+    </w:r>
+    <w:r>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+      <w:tab/>
+    </w:r>
+    <w:r>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+      <w:tab/>
+    </w:r>
+    <w:r>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+      <w:t xml:space="preserve">   {{TEACHER}}</w:t>
+    </w:r>
+  </w:p>
+  <w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+    <w:pPr>
+      <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
+      <w:jc w:val="both"/>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+    </w:pPr>
+  </w:p>
+  <w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+    <w:pPr>
+      <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
+      <w:jc w:val="both"/>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+    </w:pPr>
+  </w:p>
+  <w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+    <w:pPr>
+      <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
+      <w:jc w:val="both"/>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+    </w:pPr>
+  </w:p>
+  <w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+    <w:pPr>
+      <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
+      <w:jc w:val="both"/>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+    </w:pPr>
+  </w:p>
+  <w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+    <w:pPr>
+      <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
+      <w:jc w:val="both"/>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+    </w:pPr>
+  </w:p>
+  <w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+    <w:pPr>
+      <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
+      <w:jc w:val="both"/>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+    </w:pPr>
+  </w:p>
+  <w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+    <w:pPr>
+      <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
+      <w:jc w:val="both"/>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+    </w:pPr>
+  </w:p>
+  <w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+    <w:pPr>
+      <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
+      <w:jc w:val="both"/>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+    </w:pPr>
+  </w:p>
+  <w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+    <w:pPr>
+      <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
+      <w:jc w:val="both"/>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+    </w:pPr>
+  </w:p>
+  <w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+    <w:pPr>
+      <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
+      <w:jc w:val="both"/>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+    </w:pPr>
+  </w:p>
+  <w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+    <w:pPr>
+      <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
+      <w:jc w:val="both"/>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+    </w:pPr>
+  </w:p>
+  <w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+    <w:pPr>
+      <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
+      <w:jc w:val="both"/>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+    </w:pPr>
+  </w:p>
+  <w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+    <w:pPr>
+      <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
+      <w:jc w:val="both"/>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+    </w:pPr>
+  </w:p>
+  <w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+    <w:pPr>
+      <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
+      <w:jc w:val="both"/>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+    </w:pPr>
+  </w:p>
+  <w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+    <w:pPr>
+      <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
+      <w:jc w:val="both"/>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+    </w:pPr>
+  </w:p>
+  <w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+    <w:pPr>
+      <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+    </w:pPr>
+  </w:p>
+  <w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+    <w:pPr>
+      <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
+      <w:jc w:val="center"/>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+    </w:pPr>
+    <w:r>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+      <w:t>{{CITY}}</w:t>
+    </w:r>
+  </w:p>
+  <w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+    <w:pPr>
+      <w:spacing w:line="240" w:lineRule="auto"/>
+      <w:jc w:val="center"/>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+    </w:pPr>
+    <w:r>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:color w:val="000000" w:themeColor="text1"/>
+        <w:sz w:val="28"/>
+        <w:szCs w:val="28"/>
+      </w:rPr>
+      <w:t xml:space="preserve">{{YEAR}}</w:t>
+    </w:r>
+  </w:p>
+</title>
