@@ -26,11 +26,26 @@ _MESSAGES = {
     "access": "Нет доступа к модели через облако.",
 }
 _ACCESS = {
-    "not approved": "Аккаунт ещё не одобрен администратором. Попроси его открыть «Пользователи» и одобрить тебя.",
+    "not approved": "Аккаунт ещё не одобрен администратором. Попроси его открыть раздел «Админ» и одобрить тебя.",
+    "member key rejected": "Твой ключ модели не принят провайдером — напиши администратору, чтобы он его заменил.",
+    "member key balance": "На твоём ключе закончился баланс — напиши администратору, чтобы он пополнил или заменил ключ.",
     "llm_api_key": "Администратор ещё не добавил ключ модели в Supabase (секрет LLM_API_KEY).",
     "not signed in": "Сессия истекла — войди в аккаунт заново.",
     "no key assigned": "Администратор ещё не выдал тебе ключ модели. Напиши ему — он добавит ключ в разделе «Админ».",
 }
+
+
+def _minsk_date(iso: str) -> str:
+    """Дата окончания подписки так же, как в шапке приложения: по Минску (UTC+3)."""
+    from datetime import datetime, timedelta, timezone
+
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    except ValueError:
+        return iso[:10]
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone(timedelta(hours=3))).strftime("%d.%m.%Y")
 
 
 class LLMError(Exception):
@@ -117,11 +132,10 @@ class LLM:
         if r.status_code >= 400:
             detail = r.text[:300]
             low = detail.lower()
-            expired = re.search(r"subscription expired:\s*(\d{4})-(\d{2})-(\d{2})", detail)
+            expired = re.search(r"subscription expired:\s*([0-9T:.\-+Z]+)", detail)
             if expired:
-                y, m, d = expired.groups()
-                raise LLMError("access", detail, f"Подписка закончилась {d}.{m}.{y} — напиши администратору, "
-                                                 "чтобы он её продлил.")
+                raise LLMError("access", detail, f"Подписка закончилась {_minsk_date(expired.group(1))} — напиши "
+                                                 "администратору, чтобы он её продлил.")
             for needle, msg in _ACCESS.items():
                 if needle in low:
                     raise LLMError("access", detail, msg)

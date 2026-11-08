@@ -2,7 +2,7 @@
 // или общий секрет LLM_API_KEY. Пускает только вошедших, одобренных и с действующей подпиской,
 // разрешает модели из списка, пишет расход по лабам. /balance — остаток на ключах у провайдера.
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
-import { decideAccess, labTag, parseBalance, pickKey } from "./logic.ts";
+import { decideAccess, labTag, ownKeyError, parseBalance, pickKey } from "./logic.ts";
 
 const BASE = (Deno.env.get("LLM_BASE_URL") ?? "https://api.aikeysforyou.com/v1").replace(/\/$/, "");
 const KEY = Deno.env.get("LLM_API_KEY") ?? "";
@@ -119,6 +119,10 @@ Deno.serve(async (req: Request) => {
     body: JSON.stringify(body),
   });
   const text = await upstream.text();
+  if (!upstream.ok) {
+    const own = ownKeyError(picked.kind, upstream.status, text);
+    if (own) return err(own.status, own.message);
+  }
   if (upstream.ok) {
     try {
       const usage = JSON.parse(text).usage ?? {};

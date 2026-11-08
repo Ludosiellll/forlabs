@@ -197,3 +197,27 @@ def test_with_headers_sends_lab():
     base.chat([{"role": "user", "content": "x"}])
     assert seen == ["ivanov%2Fssp%2F4", None]
     assert base.usage.requests == 2  # общий счётчик расхода
+
+
+def test_subscription_expired_date_is_minsk():
+    # 22:30 UTC 15.11 — это уже 16.11 по Минску, как в шапке приложения
+    llm = make_llm(lambda req: httpx.Response(403, json={"error": {"message": "subscription expired: 2026-11-15T22:30:00.000Z"}}))
+    with pytest.raises(LLMError) as e:
+        llm.chat([{"role": "user", "content": "x"}])
+    assert "16.11.2026" in e.value.message_ru
+
+
+def test_not_approved_points_to_admin_section():
+    llm = make_llm(lambda req: httpx.Response(403, json={"error": {"message": "account not approved"}}))
+    with pytest.raises(LLMError) as e:
+        llm.chat([{"role": "user", "content": "x"}])
+    assert "«Админ»" in e.value.message_ru and "Пользователи" not in e.value.message_ru
+
+
+@pytest.mark.parametrize("message,needle", [("member key rejected: 401", "не принят"),
+                                            ("member key balance: 402", "закончился баланс")])
+def test_own_key_problems_point_to_admin(message, needle):
+    llm = make_llm(lambda req: httpx.Response(402, json={"error": {"message": message}}))
+    with pytest.raises(LLMError) as e:
+        llm.chat([{"role": "user", "content": "x"}])
+    assert e.value.kind == "access" and needle in e.value.message_ru and "администратор" in e.value.message_ru

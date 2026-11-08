@@ -44,3 +44,17 @@ export function labTag(header: string | null): string | null {
     return null;
   }
 }
+
+/** Провайдер отказал по личному ключу участника: участнику нужен администратор, а не «настройки».
+ *  Временная перегрузка (429 без слов о квоте) и чужие ошибки проходят как есть. */
+export function ownKeyError(kind: "own" | "shared", status: number, body: string): { status: number; message: string } | null {
+  if (kind !== "own") return null;
+  const low = body.toLowerCase();
+  if (low.includes("model_not_allowed") || low.includes("model not")) return null;
+  const money = /balance|quota|insufficient|credit/.test(low);
+  if (status === 402 || ((status === 429 || status === 403) && money)) {
+    return { status: 402, message: `member key balance: ${status}` };
+  }
+  if (status === 401 || status === 403) return { status: 402, message: `member key rejected: ${status}` };
+  return null;
+}

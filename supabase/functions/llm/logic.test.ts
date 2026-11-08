@@ -1,7 +1,7 @@
 // Запуск: node --experimental-strip-types --test supabase/functions/llm/logic.test.ts
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { decideAccess, labTag, parseBalance, pickKey } from "./logic.ts";
+import { decideAccess, labTag, ownKeyError, parseBalance, pickKey } from "./logic.ts";
 
 const NOW = new Date("2026-11-08T12:00:00Z");
 
@@ -57,4 +57,14 @@ test("метка лабы", () => {
   assert.equal(labTag(null), null);
   assert.equal(labTag(""), null);
   assert.equal(labTag("a".repeat(500))?.length, 200);
+});
+
+test("ошибки личного ключа участника — понятный текст вместо «проверь ключ в настройках»", () => {
+  assert.deepEqual(ownKeyError("own", 401, "invalid key"), { status: 402, message: "member key rejected: 401" });
+  assert.deepEqual(ownKeyError("own", 402, "insufficient balance"), { status: 402, message: "member key balance: 402" });
+  assert.deepEqual(ownKeyError("own", 429, "token quota exceeded"), { status: 402, message: "member key balance: 429" });
+  assert.equal(ownKeyError("own", 429, "rate limit, slow down"), null); // временная перегрузка — повтор на клиенте
+  assert.equal(ownKeyError("own", 403, "model_not_allowed: x"), null);
+  assert.equal(ownKeyError("shared", 401, "invalid key"), null); // общий ключ — дело администратора, как раньше
+  assert.equal(ownKeyError("own", 500, "upstream"), null);
 });
