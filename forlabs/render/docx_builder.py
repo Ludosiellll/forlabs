@@ -104,12 +104,25 @@ class _Writer:
         # python-docx кладёт абзац в конец body — переносим перед sectPr (он уже там)
         return p
 
-    def code(self, code: str):
-        for line in code.replace("\r\n", "\n").replace("\t", "    ").split("\n"):
-            if line.strip():
-                self.para("code", line.rstrip())
-            else:
-                self.para("code_blank")
+    def bookmark(self, p, name: str, start: bool):
+        self._bm_id += 1 if start else 0
+        el = etree.Element(q("bookmarkStart" if start else "bookmarkEnd"))
+        el.set(q("id"), str(self._bm_id))
+        if start:
+            el.set(q("name"), name)
+            ppr = p.find(q("pPr"))
+            (ppr.addnext if ppr is not None else lambda e: p.insert(0, e))(el)
+        else:
+            p.append(el)
+
+    def code(self, code: str, bookmark: str | None = None):
+        lines = code.replace("\r\n", "\n").replace("\t", "    ").strip("\n").split("\n")
+        made = []
+        for line in lines:
+            made.append(self.para("code", line.rstrip()) if line.strip() else self.para("code_blank"))
+        if bookmark and made:
+            self.bookmark(made[0], bookmark, start=True)
+            self.bookmark(made[-1], bookmark, start=False)
 
     def table(self, rows: list[list[str]], header_rows: int):
         tbl_pr, tr_pr = canon.table_props()
@@ -168,6 +181,27 @@ def image_size_cm(path: str, width_cm: float | None = None) -> tuple[float, floa
     return round(w, 3), round(h, 3)
 
 
+def keep_next(p):
+    """«Не отрывать от следующего»: подводка, картинка и подпись не разъезжаются по страницам.
+    На вид абзаца не влияет — так делают вручную при вёрстке."""
+    ppr = p.find(q("pPr"))
+    if ppr is None:
+        ppr = etree.Element(q("pPr"))
+        p.insert(0, ppr)
+    if ppr.find(q("keepNext")) is None:
+        el = etree.Element(q("keepNext"))
+        anchor = ppr.find(q("pStyle"))
+        if anchor is not None:
+            anchor.addnext(el)
+        else:
+            ppr.insert(0, el)
+    return p
+
+
+def listing_bookmark(lab_number: str, n: int) -> str:
+    return f"_ForLabsL{re.sub(r'[^0-9A-Za-z]', '_', lab_number)}_{n}"
+
+
 def _dash(item: str) -> str:
     return "- " + re.sub(r"^\s*[-–—•]\s*", "", item).strip()
 
@@ -199,19 +233,19 @@ def write_lab(w: _Writer, doc: ReportDoc, bookmark: str | None = None) -> None:
                     if item.strip():
                         w.para("numbered_item", _numbered(i, item))
             elif isinstance(b, Figure):
-                w.para("figure_ref", figure_intro(b.topic, n))
+                keep_next(w.para("figure_ref", figure_intro(b.topic, n)))
                 if b.image_path and Path(b.image_path).exists():
-                    w.image(b.image_path, b.width_cm)
+                    keep_next(w.image(b.image_path, b.width_cm))
                 else:
-                    w.para("body", f"[Вставить скриншот: {b.slot or b.topic}]")
+                    keep_next(w.para("body", f"[Вставить скриншот: {b.slot or b.topic}]"))
                 w.para("figure_caption", caption("figure", n, b.topic))
             elif isinstance(b, Listing):
-                w.para("listing_ref", listing_intro(b.topic, n))
-                w.para("listing_caption", caption("listing", n, b.topic))
-                w.code(b.code)
+                keep_next(w.para("listing_ref", listing_intro(b.topic, n)))
+                keep_next(w.para("listing_caption", caption("listing", n, b.topic)))
+                w.code(b.code, bookmark=listing_bookmark(doc.lab_number, n))
             elif isinstance(b, Table):
-                w.para("table_ref", table_intro(b.topic, n))
-                w.para("table_caption", caption("table", n, b.topic))
+                keep_next(w.para("table_ref", table_intro(b.topic, n)))
+                keep_next(w.para("table_caption", caption("table", n, b.topic)))
                 w.table(b.rows, b.header_rows)
     if doc.questions:
         w.para("cq_title", "Ответы на контрольные вопросы:")
@@ -283,7 +317,7 @@ def _fill_title(profile: Profile, enrollment: Enrollment) -> list:
         "CITY": profile.city,
         "YEAR": enrollment.academic_year,
     }
-    root = etree.fromstring(canon.title_xml())
+    root = etree.fromstring(canon.title_xml(), canon._PARSER)
     for t in root.iter(q("t")):
         t.text = re.sub(r"\{\{([A-Z0-9_]+)\}\}", lambda m: values.get(m.group(1), ""), t.text or "")
     return list(root)

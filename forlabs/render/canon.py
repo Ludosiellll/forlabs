@@ -35,9 +35,12 @@ class Exemplar:
         return copy.deepcopy(src) if src is not None else None
 
 
+_PARSER = etree.XMLParser(remove_blank_text=True)
+
+
 @lru_cache(maxsize=1)
 def _root():
-    return etree.parse(str(ASSETS / "exemplars.xml")).getroot()
+    return etree.parse(str(ASSETS / "exemplars.xml"), _PARSER).getroot()
 
 
 @lru_cache(maxsize=None)
