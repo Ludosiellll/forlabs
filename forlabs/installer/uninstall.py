@@ -44,6 +44,14 @@ def target_from(argv: list[str], exe: Path | None) -> Path:
     return Path(exe).parent if exe else default_target()
 
 
+def program_exe() -> Path:
+    """Путь к работающему ForLabs.exe (у Nuitka это sys.executable, на всякий случай — argv[0])."""
+    for cand in (sys.executable, sys.argv[0] if sys.argv else ""):
+        if cand and Path(cand).name.lower() == "forlabs.exe":
+            return Path(cand).resolve()
+    return Path(sys.executable).resolve()
+
+
 def _forlabs_running() -> bool:
     from forlabs.core.instance import InstanceLock
 
@@ -60,6 +68,9 @@ def _forget_saved_keys(_: bool = True) -> None:
         import keyring
 
         from forlabs.cloud.auth import KEYRING_SESSION
+        from forlabs.core.settings import use_windows_vault
+
+        use_windows_vault()
         from forlabs.core.settings import KEYRING_SERVICE, KEYRING_USER
 
         for user in (KEYRING_USER, KEYRING_SESSION):
@@ -106,7 +117,7 @@ def main(argv: list[str] | None = None) -> int:
     from forlabs.version import frozen
 
     argv = sys.argv[1:] if argv is None else argv
-    exe = Path(sys.executable).resolve() if frozen() else None
+    exe = program_exe() if frozen() else None
     dialogs = SilentDialogs() if "--silent" in argv else WindowsDialogs()
     return run(argv, target=target_from(argv, exe), shell=WindowsShell(), dialogs=dialogs, data=data_dir(),
                is_running=_forlabs_running, exe=exe)

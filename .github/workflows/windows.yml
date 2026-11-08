@@ -1,0 +1,178 @@
+name: Windows
+
+on:
+  push:
+    branches: [main, exe]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONUTF8: "1"
+  PYTHONIOENCODING: utf-8
+  NUITKA_VERSION: "4.3.5"
+
+jobs:
+  tests:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Зависимости
+        run: python -m pip install ".[windows,dev]"
+      - name: Тесты
+        shell: pwsh
+        run: |
+          python -m pytest -q -p no:cacheprovider 2>&1 | Tee-Object -FilePath pytest.txt
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            Get-Content pytest.txt | Select-String -Pattern "FAILED|Error" | Select-Object -First 40 |
+              ForEach-Object { Write-Output "::error title=pytest::$($_.Line)" }
+          }
+          exit $code
+
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Зависимости и Nuitka
+        run: |
+          python -m pip install ".[windows]" "nuitka==${{ env.NUITKA_VERSION }}" zstandard ordered-set
+          python -m pip uninstall -y forlabs
+      - name: Кэш Nuitka
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\Nuitka
+          key: nuitka-${{ env.NUITKA_VERSION }}-${{ hashFiles('pyproject.toml') }}
+      - name: Правила внутрь программы
+        run: python tools/embed_rules.py
+      - name: Сборка ForLabs.exe
+        shell: pwsh
+        run: |
+          $ver = python -c "from forlabs.version import __version__ as v; print(v)"
+          python -m nuitka run_forlabs.py --mode=standalone --assume-yes-for-downloads `
+            --output-dir=build --output-filename=ForLabs.exe `
+            --windows-console-mode=disable --windows-icon-from-ico=packaging/forlabs.ico `
+            --company-name=ForLabs --product-name=ForLabs --file-description=ForLabs `
+            --file-version="$ver.0" --product-version="$ver.0" `
+            --include-package=forlabs --include-package-data=forlabs `
+            --noinclude-data-files="forlabs/rules/*.md" --noinclude-data-files="forlabs/rules/*/*.md" `
+            --include-package=uvicorn --include-package=keyring.backends --include-package=win32ctypes `
+            --include-package=webview --include-package-data=webview `
+            --include-package-data=pythonnet --include-package-data=clr_loader `
+            --include-package-data=pymorphy3_dicts_ru --include-package-data=pymorphy3 `
+            --include-package-data=docx --include-package-data=playwright `
+            --include-module=win32timezone `
+            --nofollow-import-to=pytest --nofollow-import-to=tests
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem build -Directory | Select-Object Name
+      - name: Нет исходников и файлов правил в сборке
+        shell: pwsh
+        run: |
+          $dist = "build/run_forlabs.dist"
+          $py = Get-ChildItem $dist -Recurse -Include *.py, *.pyc | Where-Object { $_.FullName -match "\\forlabs\\" }
+          $rules = Test-Path "$dist/forlabs/rules"
+          if ($py -or $rules) {
+            $py | ForEach-Object { Write-Output "::error title=leak::$($_.FullName)" }
+            if ($rules) { Write-Output "::error title=leak::папка forlabs/rules попала в сборку" }
+            exit 1
+          }
+          $size = (Get-ChildItem $dist -Recurse | Measure-Object Length -Sum).Sum / 1MB
+          Write-Output ("ForLabs.dist: {0:N0} МБ" -f $size)
+      - name: Самопроверка собранной программы
+        shell: pwsh
+        run: |
+          $env:FORLABS_HOME = "$env:RUNNER_TEMP\forlabs-home"
+          $out = "$env:RUNNER_TEMP\selfcheck-dist.txt"
+          $p = Start-Process build/run_forlabs.dist/ForLabs.exe -ArgumentList "--selfcheck --offline --out `"$out`"" -Wait -PassThru
+          if (Test-Path $out) { Get-Content $out -Encoding utf8 } else { Write-Output "::error title=selfcheck::нет отчёта (код $($p.ExitCode))" }
+          if ($p.ExitCode -ne 0) {
+            if (Test-Path $out) { Get-Content $out -Encoding utf8 | ForEach-Object { Write-Output "::error title=selfcheck dist::$_" } }
+            $log = "$env:FORLABS_HOME\forlabs.log"
+            if (Test-Path $log) { Get-Content $log -Tail 30 -Encoding utf8 | ForEach-Object { Write-Output "::error title=forlabs.log::$_" } }
+            exit 1
+          }
+      - name: Установщик ForLabsSetup.exe
+        shell: pwsh
+        run: |
+          python tools/make_payload.py build/run_forlabs.dist build/payload.zip
+          Invoke-WebRequest "https://go.microsoft.com/fwlink/p/?LinkId=2124703" -OutFile build/MicrosoftEdgeWebview2Setup.exe
+          $ver = python -c "from forlabs.version import __version__ as v; print(v)"
+          python -m nuitka run_setup.py --mode=onefile --assume-yes-for-downloads `
+            --output-dir=build --output-filename=ForLabsSetup.exe `
+            --windows-console-mode=disable --windows-icon-from-ico=packaging/forlabs.ico `
+            --company-name=ForLabs --product-name="Установка ForLabs" --file-description="Установка ForLabs" `
+            --file-version="$ver.0" --product-version="$ver.0" `
+            --include-package=forlabs.installer --include-package-data=forlabs.installer `
+            --nofollow-import-to=forlabs.cloud --nofollow-import-to=forlabs.core.settings `
+            --nofollow-import-to=forlabs.core.instance --nofollow-import-to=keyring `
+            --include-package=webview --include-package-data=webview `
+            --include-package-data=pythonnet --include-package-data=clr_loader `
+            --include-data-files=build/payload.zip=payload.zip `
+            --include-data-files=build/MicrosoftEdgeWebview2Setup.exe=MicrosoftEdgeWebview2Setup.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Output ("ForLabsSetup.exe: {0:N0} МБ" -f ((Get-Item build/ForLabsSetup.exe).Length / 1MB))
+      - name: Установка, проверка, удаление (как у студента)
+        shell: pwsh
+        run: |
+          $env:FORLABS_HOME = "$env:RUNNER_TEMP\forlabs-home"
+          $target = "$env:RUNNER_TEMP\Программы студента\ForLabs"
+          $log = "$env:RUNNER_TEMP\setup.log"
+          function Fail($title, $file) {
+            if ($file -and (Test-Path $file)) { Get-Content $file -Encoding utf8 | ForEach-Object { Write-Output "::error title=$title::$_" } }
+            else { Write-Output "::error title=$title::$file" }
+            exit 1
+          }
+          $p = Start-Process build/ForLabsSetup.exe -ArgumentList "--silent --target `"$target`" --log `"$log`"" -Wait -PassThru
+          if (Test-Path $log) { Get-Content $log -Encoding utf8 }
+          if ($p.ExitCode -ne 0) { Fail "setup" $log }
+          if (-not (Test-Path "$target\ForLabs.exe")) { Fail "setup" "нет ForLabs.exe в $target" }
+          $entry = Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\ForLabs" -ErrorAction SilentlyContinue
+          if (-not $entry -or $entry.InstallLocation -ne $target) { Fail "registry" "нет строки в «Приложениях»" }
+          Write-Output "UninstallString: $($entry.UninstallString)"
+          $lnk = Join-Path ([Environment]::GetFolderPath("Programs")) "ForLabs.lnk"
+          if (-not (Test-Path $lnk)) { Fail "shortcut" "нет ярлыка $lnk" }
+          $out = "$env:RUNNER_TEMP\selfcheck-installed.txt"
+          $p = Start-Process "$target\ForLabs.exe" -ArgumentList "--selfcheck --offline --out `"$out`"" -Wait -PassThru
+          if (Test-Path $out) { Get-Content $out -Encoding utf8 }
+          if ($p.ExitCode -ne 0) { Fail "selfcheck installed" $out }
+          # повторная установка поверх (обновление)
+          $p = Start-Process build/ForLabsSetup.exe -ArgumentList "--silent --log `"$log`"" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Fail "update" $log }
+          # удаление, как из «Параметры → Приложения»
+          $p = Start-Process "$target\ForLabs.exe" -ArgumentList "--uninstall --silent" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Fail "uninstall" "код $($p.ExitCode)" }
+          for ($i = 0; $i -lt 30 -and (Test-Path $target); $i++) { Start-Sleep -Seconds 1 }
+          if (Test-Path $target) { Fail "uninstall" "папка программы осталась: $target" }
+          if (Test-Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\ForLabs") { Fail "uninstall" "строка в «Приложениях» осталась" }
+          if (Test-Path $lnk) { Fail "uninstall" "ярлык остался" }
+          Write-Output "Установка, проверка, обновление и удаление прошли"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ForLabsSetup
+          path: build/ForLabsSetup.exe
+          retention-days: 14
+      - name: Выпуск
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/ForLabsSetup.exe
+          generate_release_notes: true

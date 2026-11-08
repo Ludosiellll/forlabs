@@ -163,11 +163,32 @@ def _server() -> str:
         sock.close()
 
 
+def _vault() -> str:
+    import keyring
+
+    from forlabs.core.settings import use_windows_vault
+
+    use_windows_vault()
+    name = type(keyring.get_keyring()).__name__
+    if name != "WinVaultKeyring":
+        raise RuntimeError(f"хранилище {name} вместо «Диспетчера учётных данных»")
+    keyring.set_password("ForLabs-selfcheck", "probe", "ok")
+    try:
+        if keyring.get_password("ForLabs-selfcheck", "probe") != "ok":
+            raise RuntimeError("запись не читается обратно")
+    finally:
+        keyring.delete_password("ForLabs-selfcheck", "probe")
+    return "«Диспетчер учётных данных» Windows"
+
+
 def build_checks() -> list[Check]:
     """Сама программа: всё это обязано работать в собранном exe."""
-    return [_run("Версия", _version), _run("Правила", _rules), _run("Морфология", _morph),
-            _run("Библиотеки", _libraries), _run("Шаблоны и оформление", _assets), _run("Документ", _document),
-            _run("PDF", _pdf), _run("Сервер", _server)]
+    checks = [_run("Версия", _version), _run("Правила", _rules), _run("Морфология", _morph),
+              _run("Библиотеки", _libraries), _run("Шаблоны и оформление", _assets), _run("Документ", _document),
+              _run("PDF", _pdf), _run("Сервер", _server)]
+    if sys.platform == "win32":
+        checks.append(_run("Хранилище паролей", _vault))
+    return checks
 
 
 def environment_lines(offline: bool = False) -> list[str]:

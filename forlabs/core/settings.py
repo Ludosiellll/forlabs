@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from typing import Literal
 
 from pydantic import BaseModel, field_validator
@@ -76,6 +77,21 @@ def save_settings(s: Settings) -> None:
     f = _settings_file()
     f.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(f, json.dumps(s.model_dump(), ensure_ascii=False, indent=2))
+
+
+def use_windows_vault() -> None:
+    """Собранная программа не видит метаданные пакетов, по которым keyring ищет хранилище, — указываем явно
+    «Диспетчер учётных данных» Windows (ключ API и вход в облако)."""
+    if sys.platform != "win32":
+        return
+    try:
+        import keyring
+        from keyring.backends.Windows import WinVaultKeyring
+
+        if type(keyring.get_keyring()).__name__ != "WinVaultKeyring":
+            keyring.set_keyring(WinVaultKeyring())
+    except Exception:
+        pass
 
 
 def _keyring_get() -> str | None:
