@@ -83,3 +83,24 @@ def test_output_root_quotes_and_relative(tmp_home, tmp_path):
     pipe.store.save_profile(prof)
     pipe.mark_final(st)
     assert list((tmp_path / "сдача2").rglob("*.docx"))
+
+
+# C6: заменённый снимок, на который не ссылается ни одна версия, удаляется (место в облаке)
+def test_replaced_screenshot_is_removed(tmp_home, tmp_path):
+    pipe, st = done(tmp_home, tmp_path)
+    st = pipe.attach_screenshot(st, section=1, block=4, image=png_bytes())
+    first = st.report.sections[0].blocks[3].image_path
+    st = pipe.attach_screenshot(st, section=1, block=4, image=png_bytes())
+    assert not (pipe.lab_dir(st) / first).exists()
+    assert (pipe.lab_dir(st) / st.report.sections[0].blocks[3].image_path).exists()
+
+
+def test_screenshot_kept_when_a_version_uses_it(tmp_home, tmp_path):
+    from forlabs.core.models import push_version
+
+    pipe, st = done(tmp_home, tmp_path)
+    st = pipe.attach_screenshot(st, section=1, block=4, image=png_bytes())
+    first = st.report.sections[0].blocks[3].image_path
+    push_version(st, "правка")  # откат к этой версии вернёт и снимок
+    st = pipe.attach_screenshot(st, section=1, block=4, image=png_bytes())
+    assert (pipe.lab_dir(st) / first).exists()

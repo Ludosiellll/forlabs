@@ -709,12 +709,27 @@ class Pipeline:
         f = self.lab_dir(st) / rel
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_bytes(image)
-        b.image_path = rel
+        old_rel, b.image_path = b.image_path, rel
         self._sync(st, [rel])
         self._emit(st, f"Скриншот для задания {section} добавлен")
         st.docx_sha = None
         self._save(st)  # скриншот сохранён до вёрстки
+        self._drop_replaced(st, old_rel)
         return self.render(st)
+
+    def _drop_replaced(self, st: LabState, rel: str | None) -> None:
+        """Заменённый снимок удаляется, если к нему не вернуть ни одной версией (иначе облако растёт)."""
+        if not rel or Path(rel).is_absolute():
+            return
+        for v in st.versions:
+            if any(getattr(b, "image_path", None) == rel for s in v.report.sections for b in s.blocks):
+                return
+        try:
+            (self.lab_dir(st) / rel).unlink(missing_ok=True)
+            if hasattr(self.store, "delete_file"):
+                self.store.delete_file(st.profile_id, st.subject_id, st.number, rel)
+        except Exception as e:  # не удалилось — не страшно
+            logging.getLogger("forlabs").info("Старый снимок %s не удалён: %s", rel, e)
 
     def render(self, st: LabState) -> LabState:
         try:
