@@ -51,9 +51,9 @@
         {% if trial %}
           <p class="small">Сейчас пробный: лаб {{ trial.labs_used }} из {{ trial.labs_limit }}, по {{ trial.chat_limit }} правок на лабу.</p>
           {% if trial.rows %}
-          <ul class="list small">
-            {% for r in trial.rows %}<li><span>{{ r.lab }}</span><span class="muted">правок {{ r.chats }} из {{ trial.chat_limit }} · запросов {{ r.calls }}</span></li>{% endfor %}
-          </ul>
+          <div class="trial-rows small">
+            {% for r in trial.rows %}<div><span>{{ r.lab }}</span><span class="muted">правок {{ r.chats }} из {{ trial.chat_limit }} · запросов {{ r.calls }}</span></div>{% endfor %}
+          </div>
           {% endif %}
           <form method="post" action="/admin/u/{{ m.user_id }}/access" class="row" style="margin-top:8px">
             <button class="btn small primary" type="submit" name="action" value="full">Полный доступ</button>
@@ -64,10 +64,10 @@
         {% endif %}
         <form method="post" action="/admin/u/{{ m.user_id }}/access" class="trial-form">
           <input type="hidden" name="action" value="trial">
-          <div class="row">
-            <label for="t-labs">Лаб</label><input id="t-labs" class="num" type="number" name="labs" min="1" max="100" value="3" required>
-            <label for="t-chat">правок на лабу</label><input id="t-chat" class="num" type="number" name="chat" min="0" max="100" value="5" required>
-            <label for="t-days">дней</label><input id="t-days" class="num" type="number" name="days" min="1" max="3650" value="7" required>
+          <div class="trial-grid">
+            <label>Лаб<input class="num" type="number" name="labs" min="1" max="100" value="3" required></label>
+            <label>Правок на лабу<input class="num" type="number" name="chat" min="0" max="100" value="5" required></label>
+            <label>Дней<input class="num" type="number" name="days" min="1" max="3650" value="7" required></label>
           </div>
           <button class="btn small" type="submit" style="margin-top:8px">{{ 'Выдать пробный заново' if trial else 'Выдать пробный доступ' }}</button>
         </form>
