@@ -1,0 +1,89 @@
+import json
+import os
+
+import httpx
+import pytest
+from pydantic import BaseModel
+
+from forlabs.core.llm import LLM, FakeLLM, LLMError
+from forlabs.core.settings import Settings
+
+
+class Answer(BaseModel):
+    city: str
+    population: int
+
+
+def _completion(content: str) -> dict:
+    return {"id": "x", "object": "chat.completion", "created": 0, "model": "deepseek-v4.1-flash",
+            "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": content}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}
+
+
+def make_llm(handler) -> LLM:
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    return LLM(Settings(base_url="https://example.test/v1"), api_key="k", http_client=client)
+
+
+def test_json_repair_loop():
+    replies = iter(["это не json", json.dumps({"city": "Минск", "population": "много"}),
+                    json.dumps({"city": "Минск", "population": 2000000})])
+    seen = []
+
+    def handler(req):
+        seen.append(json.loads(req.content))
+        return httpx.Response(200, json=_completion(next(replies)))
+
+    llm = make_llm(handler)
+    res = llm.json([{"role": "user", "content": "Столица?"}], Answer)
+    assert res == Answer(city="Минск", population=2000000)
+    assert len(seen) == 3
+    assert "ошиб" in seen[1]["messages"][-1]["content"].lower()
+    assert llm.usage.total_tokens == 45
+
+
+def test_json_gives_up():
+    llm = make_llm(lambda req: httpx.Response(200, json=_completion("нет")))
+    with pytest.raises(LLMError) as e:
+        llm.json([{"role": "user", "content": "x"}], Answer, repairs=2)
+    assert e.value.kind == "bad_response"
+
+
+@pytest.mark.parametrize("status,body,kind", [
+    (401, {"error": {"message": "invalid key"}}, "auth"),
+    (403, {"error": {"message": "model_not_allowed"}}, "model"),
+    (429, {"error": {"message": "rate limit"}}, "quota"),
+    (402, {"error": {"message": "insufficient balance"}}, "quota"),
+])
+def test_error_mapping(status, body, kind):
+    llm = make_llm(lambda req: httpx.Response(status, json=body))
+    with pytest.raises(LLMError) as e:
+        llm.chat([{"role": "user", "content": "x"}])
+    assert e.value.kind == kind
+    assert e.value.message_ru
+
+
+def test_network_error():
+    def handler(req):
+        raise httpx.ConnectError("нет сети")
+
+    with pytest.raises(LLMError) as e:
+        make_llm(handler).chat([{"role": "user", "content": "x"}])
+    assert e.value.kind == "network"
+
+
+def test_fake_llm_interface():
+    fake = FakeLLM([{"city": "Гомель", "population": 500000}, "привет"])
+    assert fake.json([], Answer).city == "Гомель"
+    assert fake.chat([]) == "привет"
+    assert len(fake.calls) == 2
+
+
+@pytest.mark.live
+def test_live_check():
+    s = Settings(base_url=os.environ.get("FORLABS_BASE_URL", Settings().base_url),
+                 model=os.environ.get("FORLABS_MODEL", Settings().model))
+    llm = LLM(s, api_key=os.environ["FORLABS_API_KEY"])
+    assert "flash" in llm.check()
+    res = llm.json([{"role": "user", "content": "Верни JSON: город Минск, население 2000000. Поля city, population."}], Answer)
+    assert res.city == "Минск"
