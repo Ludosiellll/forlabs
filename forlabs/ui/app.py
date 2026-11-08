@@ -99,7 +99,10 @@ def _same_origin(request: Request) -> bool:
     return urlparse(source).netloc == request.headers.get("host", "")
 
 
-def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = None) -> FastAPI:
+def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = None,
+               token: str | None = None) -> FastAPI:
+    """token — ключ этого запуска: без него (cookie или заголовок) сервер не отвечает. Порт 127.0.0.1 общий для
+    всех пользователей Windows — без ключа второй пользователь компьютера открыл бы чужие лабы."""
     ctx = ctx or AppContext()
     app = FastAPI(title="ForLabs", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.ctx = ctx
@@ -141,6 +144,26 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         return f"{p}/{s}/{n}" in ctx.running
 
     @app.middleware("http")
+    async def owner_only(request: Request, call_next):
+        if token is None or request.url.path == "/health" or request.url.path.startswith("/static/"):
+            return await call_next(request)
+        import secrets
+        from urllib.parse import urlencode
+
+        def same(v: str | None) -> bool:
+            return bool(v) and secrets.compare_digest(v.encode(), token.encode())
+
+        if same(request.query_params.get("t")):  # адрес окна с ключом → cookie, дальше адрес без ключа
+            rest = [(k, v) for k, v in request.query_params.multi_items() if k != "t"]
+            resp = RedirectResponse(request.url.path + ("?" + urlencode(rest) if rest else ""), status_code=303)
+            resp.set_cookie("forlabs_token", token, httponly=True, samesite="strict")
+            return resp
+        if same(request.cookies.get("forlabs_token")) or same(request.headers.get("x-forlabs-token")):
+            return await call_next(request)
+        return HTMLResponse("<p>Эта копия ForLabs запущена другим пользователем компьютера или ссылка устарела. "
+                            "Открой ForLabs своим ярлыком.</p>", status_code=403)
+
+    @app.middleware("http")
     async def same_origin_only(request: Request, call_next):
         if request.method not in ("GET", "HEAD", "OPTIONS") and not _same_origin(request):
             return HTMLResponse("Запрос пришёл с другого сайта и отклонён.", status_code=403)
@@ -153,6 +176,14 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
 
     # Последним добавлен — значит, срабатывает первым: чужое имя хоста (DNS rebinding) отсекается сразу.
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts or LOCAL_HOSTS)
+
+    @app.post("/focus")
+    def focus():
+        """Второй запуск ForLabs просит вывести окно этого вперёд (ключ — в заголовке)."""
+        f = getattr(ctx, "focus", None)
+        if callable(f):
+            f()
+        return {"ok": True}
 
     @app.get("/health")
     def health():

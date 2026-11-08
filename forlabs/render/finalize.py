@@ -65,10 +65,23 @@ def patch_toc_pages(docx: Path, pages: dict[str, int]) -> None:
     durable_replace(tmp, docx)
 
 
+def _clean_old_copies(workdir: Path, age: float = 3600) -> None:
+    """Копии для Word, оставшиеся от зависшего Word (он держал файл), — убрать, когда старше часа."""
+    import time
+
+    for f in workdir.glob("word_*.docx"):
+        try:
+            if time.time() - f.stat().st_mtime > age:
+                f.unlink()
+        except OSError:
+            pass
+
+
 def finalize(docx: Path, author: str, workdir: Path, soffice: str | None = None,
              prefer_word: bool = True) -> FinalizeReport:
     docx, workdir = Path(docx), Path(workdir)
     workdir.mkdir(parents=True, exist_ok=True)
+    _clean_old_copies(workdir)
     pdf = workdir / (docx.stem + ".pdf")
     warnings: list[str] = []
     if prefer_word and word_com.available():

@@ -40,11 +40,13 @@ def to_pdf(docx: Path, outdir: Path, soffice: str | None = None, timeout: float 
         cmd = [exe, f"-env:UserInstallation={uri}", "--headless", "--convert-to", "pdf", "--outdir", str(outdir),
                str(docx)]
         try:
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
-                                 env={**os.environ, "HOME": profile} if sys.platform != "win32" else None)
+            res = subprocess.run(cmd, capture_output=True, timeout=timeout,  # вывод — в кодировке Windows
+                                 env={**os.environ, "HOME": profile} if sys.platform != "win32" else None,
+                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except subprocess.TimeoutExpired as e:
             raise RuntimeError("LibreOffice думал слишком долго и был остановлен. Закрой окна LibreOffice "
                                "и попробуй ещё раз.") from e
     if res.returncode != 0 or not pdf.exists():
-        raise RuntimeError(f"LibreOffice не смог сделать PDF: {res.stderr.strip()[:300]}")
+        err = (res.stderr or b"").decode("utf-8", errors="replace").strip()
+        raise RuntimeError(f"LibreOffice не смог сделать PDF: {err[:300]}")
     return pdf

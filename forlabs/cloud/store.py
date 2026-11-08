@@ -120,7 +120,7 @@ class CloudStore:
                 attempt += 1
                 continue
             except httpx.TransportError as e:
-                if attempt == len(delays) or is_cert_error(str(e)):
+                if attempt == len(delays) or is_cert_error(e):
                     raise CloudError(offline_message(e), str(e), offline=True) from e
                 time.sleep(delays[attempt])
                 attempt += 1
@@ -371,7 +371,7 @@ class CloudStore:
                 if not e.offline or attempt >= len(self.retry_delays) or is_cert_error(e.detail):
                     raise
             except httpx.TransportError as e:
-                if attempt >= len(self.retry_delays) or is_cert_error(str(e)):
+                if attempt >= len(self.retry_delays) or is_cert_error(e):
                     raise CloudError(offline_message(e), str(e), offline=True) from e
             else:
                 if r.status_code == 401 and not refreshed:

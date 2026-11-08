@@ -14,6 +14,31 @@ from forlabs.core import paths
 _configured: Path | None = None
 
 
+class _LogWriter:
+    """Файлоподобный вывод (print, трассировки) построчно в журнал."""
+
+    encoding = "utf-8"
+
+    def __init__(self, logger: logging.Logger, level: int):
+        self.logger, self.level, self._buf = logger, level, ""
+
+    def write(self, s: str) -> int:
+        self._buf += s
+        while "\n" in self._buf:
+            line, self._buf = self._buf.split("\n", 1)
+            if line.strip():
+                self.logger.log(self.level, line.rstrip())
+        return len(s)
+
+    def flush(self) -> None:
+        if self._buf.strip():
+            self.logger.log(self.level, self._buf.rstrip())
+        self._buf = ""
+
+    def isatty(self) -> bool:
+        return False
+
+
 def log_path() -> Path:
     return paths.data_home() / "forlabs.log"
 
@@ -23,9 +48,9 @@ def setup_logging() -> Path:
     f = log_path()
     f.parent.mkdir(parents=True, exist_ok=True)
     if sys.stdout is None or sys.stderr is None:
-        stream = open(f, "a", encoding="utf-8", buffering=1)  # noqa: SIM115 — живёт всё время работы
-        sys.stdout = sys.stdout or stream
-        sys.stderr = sys.stderr or stream
+        # вывод — через журнал, а не вторым дескриптором forlabs.log: Windows не даёт повернуть открытый файл
+        sys.stdout = sys.stdout or _LogWriter(logging.getLogger("forlabs.console"), logging.INFO)
+        sys.stderr = sys.stderr or _LogWriter(logging.getLogger("forlabs.console"), logging.ERROR)
     if _configured == f:
         return f
     root = logging.getLogger()
@@ -38,6 +63,8 @@ def setup_logging() -> Path:
     root.addHandler(handler)
     if root.level > logging.INFO or root.level == logging.NOTSET:
         root.setLevel(logging.INFO)
+    for noisy in ("httpx", "httpcore"):  # каждый запрос — не повод для строки журнала
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
     def log_thread_error(args):  # ошибки фоновых потоков — в журнал, а не в никуда
         logging.getLogger("forlabs").error("Ошибка в потоке %s", args.thread.name if args.thread else "?",

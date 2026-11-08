@@ -231,9 +231,10 @@ def _word_pids() -> set[int]:
     import subprocess
 
     try:
-        out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq WINWORD.EXE", "/FO", "CSV", "/NH"],
-                             capture_output=True, text=True, timeout=15,
+        raw = subprocess.run(["tasklist", "/FI", "IMAGENAME eq WINWORD.EXE", "/FO", "CSV", "/NH"],
+                             capture_output=True, timeout=15,
                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
+        out = raw.decode("cp866", errors="replace")  # консоль Windows — не UTF-8
     except Exception:
         return set()
     pids = set()
@@ -242,6 +243,83 @@ def _word_pids() -> set[int]:
         if len(parts) > 1 and parts[1].isdigit():
             pids.add(int(parts[1]))
     return pids
+
+
+def parse_word_processes(listing: str) -> set[int]:
+    """Строки «PID командная_строка»: только Word, запущенный для автоматизации (/Automation -Embedding), —
+    Word студента с его документами в этот список не попадает и не будет завершён."""
+    out = set()
+    for line in listing.splitlines():
+        pid, _, cmd = line.strip().partition(" ")
+        low = cmd.lower()
+        if pid.isdigit() and "winword" in low and ("/automation" in low or "-embedding" in low):
+            out.add(int(pid))
+    return out
+
+
+def _automation_word_pids() -> set[int]:
+    """PID Word, запущенных для автоматизации (наших), — с этого компьютера, по командной строке процесса."""
+    if sys.platform != "win32":
+        return set()
+    import subprocess
+
+    ps = ("Get-CimInstance Win32_Process -Filter \"Name='WINWORD.EXE'\" | "
+          "ForEach-Object { \"$($_.ProcessId) $($_.CommandLine)\" }")
+    try:
+        raw = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], capture_output=True,
+                             timeout=20, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
+    except Exception:
+        return set()
+    return parse_word_processes(raw.decode("utf-8", errors="replace"))
+
+
+def _pids_file():
+    from forlabs.core import paths
+
+    return paths.data_home() / "word_pids.json"
+
+
+def _remembered_pids() -> set[int]:
+    import json
+
+    try:
+        return {int(x) for x in json.loads(_pids_file().read_text(encoding="utf-8"))}
+    except (OSError, ValueError, TypeError):
+        return set()
+
+
+def _remember_pids(pids) -> None:
+    import json
+
+    from forlabs.core.fs import atomic_write_text
+
+    try:
+        atomic_write_text(_pids_file(), json.dumps(sorted(set(pids))))
+    except OSError:
+        pass
+
+
+def _kill_ours(pids) -> None:
+    """Завершить наш зависший Word: на Windows — только процессы, запущенные для автоматизации (не Word студента,
+    открытый в те же секунды)."""
+    pids = set(pids)
+    if sys.platform == "win32":
+        pids &= _automation_word_pids()
+    if pids:
+        _kill_pids(sorted(pids))
+    _remember_pids(_remembered_pids() - pids)
+
+
+def cleanup_stale_word() -> None:
+    """При запуске: Word, оставшийся от прошлой доводки (приложение закрыли во время неё), — завершить.
+    Только те PID, что мы запомнили, и только если это всё ещё Word для автоматизации."""
+    remembered = _remembered_pids()
+    if not remembered:
+        return
+    stale = remembered & _automation_word_pids()
+    if stale:
+        _kill_pids(sorted(stale))
+    _remember_pids(set())
 
 
 def _kill_pids(pids) -> None:
@@ -286,11 +364,19 @@ def finalize_isolated(docx: Path, pdf_out: Path, author: str, timeout: float = 3
     ctx = mp.get_context("spawn")
     q = ctx.Queue()
     p = ctx.Process(target=target or _child, args=(str(docx), str(pdf_out), author, q), daemon=True)
+    baseline = _automation_word_pids()  # Word для автоматизации, что уже были до нас (другой программы)
     p.start()
-    pids: list[int] = []
+    pids: set[int] = set()
     result = None
     deadline = time.monotonic() + timeout
+    next_scan = time.monotonic() + 1.0
     while time.monotonic() < deadline and result is None:
+        if time.monotonic() >= next_scan:  # Word завис при запуске (активация) — PID видим из родителя
+            new = _automation_word_pids() - baseline
+            if new - pids:
+                pids |= new
+                _remember_pids(pids | _remembered_pids())
+            next_scan = time.monotonic() + 3.0
         try:
             msg = q.get(timeout=0.5)
         except queue_mod.Empty:
@@ -298,19 +384,20 @@ def finalize_isolated(docx: Path, pdf_out: Path, author: str, timeout: float = 3
                 break
             continue
         if msg[0] == "pids":
-            pids = list(msg[1])
+            pids |= set(msg[1])
         else:
             result = msg
     if result is None:
         if p.is_alive():
             p.terminate()
-            _kill_pids(pids)
+            _kill_ours(pids)
             raise TimeoutError("Word не ответил за отведённое время (возможно, открыто окно-предупреждение Word)")
-        _kill_pids(pids)
+        _kill_ours(pids)
         raise RuntimeError("Word завершился без результата")
     p.join(10)
     status, cont, warnings = result
     if status != "ok":
-        _kill_pids(pids)
+        _kill_ours(pids)
         raise RuntimeError("; ".join(warnings))
+    _remember_pids(_remembered_pids() - pids)  # Word закрылся сам
     return WordReport(cont, warnings)

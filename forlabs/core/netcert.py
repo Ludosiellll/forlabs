@@ -8,6 +8,14 @@ OFFLINE_MESSAGE = "Нет связи с облаком. Проверь инте�
 
 
 def is_cert_error(e: BaseException | str) -> bool:
+    """Ошибка проверки сертификата. На Windows (truststore) текст русский — узнаём по типу в цепочке причин."""
+    import ssl
+
+    seen, cur = 0, e
+    while isinstance(cur, BaseException) and seen < 8:
+        if isinstance(cur, ssl.SSLCertVerificationError):
+            return True
+        cur, seen = cur.__cause__ or cur.__context__, seen + 1
     text = str(e).lower()
     return "certificate_verify_failed" in text or "certificate verify failed" in text
 
