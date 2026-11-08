@@ -24,8 +24,8 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -47,8 +47,8 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -68,7 +68,7 @@ jobs:
         shell: pwsh
         run: |
           $ver = python -c "from forlabs.version import __version__ as v; print(v)"
-          python -m nuitka run_forlabs.py --mode=standalone --assume-yes-for-downloads `
+          python tools/ci_run.py nuitka-app python -m nuitka run_forlabs.py --mode=standalone --assume-yes-for-downloads `
             --output-dir=build --output-filename=ForLabs.exe `
             --windows-console-mode=disable --windows-icon-from-ico=packaging/forlabs.ico `
             --company-name=ForLabs --product-name=ForLabs --file-description=ForLabs `
@@ -116,7 +116,7 @@ jobs:
           python tools/make_payload.py build/run_forlabs.dist build/payload.zip
           Invoke-WebRequest "https://go.microsoft.com/fwlink/p/?LinkId=2124703" -OutFile build/MicrosoftEdgeWebview2Setup.exe
           $ver = python -c "from forlabs.version import __version__ as v; print(v)"
-          python -m nuitka run_setup.py --mode=onefile --assume-yes-for-downloads `
+          python tools/ci_run.py nuitka-setup python -m nuitka run_setup.py --mode=onefile --assume-yes-for-downloads `
             --output-dir=build --output-filename=ForLabsSetup.exe `
             --windows-console-mode=disable --windows-icon-from-ico=packaging/forlabs.ico `
             --company-name=ForLabs --product-name="Установка ForLabs" --file-description="Установка ForLabs" `
