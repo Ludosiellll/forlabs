@@ -139,14 +139,26 @@ def event_text(e) -> str:
     return e.kind
 
 
+class AdminOffline(Exception):
+    """Раздел «Админ» без связи с облаком: объяснить на главной, а не молча уйти."""
+
+
 def register_admin(app: FastAPI, ctx, render, redirect) -> None:
+    @app.exception_handler(AdminOffline)
+    async def admin_offline(request: Request, exc: AdminOffline):
+        return redirect("/", err=f"{exc} Раздел «Админ» работает только с интернетом.")
+
     def current_admin():
         if not ctx.cloud or not ctx.auth.session:
             return None
         try:
             m = ctx.store.member()
-        except CloudError:
+        except CloudError as e:
+            if e.offline:
+                raise AdminOffline(e.message_ru) from e
             return None
+        if getattr(ctx.store, "offline", False):  # участник из памяти — а сам раздел без связи не работает
+            raise AdminOffline("Нет связи с облаком.")
         return m if m and m.approved and m.role == "admin" else None
 
     def home():

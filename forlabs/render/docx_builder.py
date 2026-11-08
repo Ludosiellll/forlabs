@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import copy
+import os
 import random
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from docx import Document
@@ -13,12 +14,27 @@ from docx.shared import Cm
 from lxml import etree
 from PIL import Image
 
+from forlabs.core.fs import durable_replace
 from forlabs.core.models import (
-    DashList, Enrollment, Figure, Listing, NumberedList, Paragraph, Profile, ReportDoc, Table,
+    DashList,
+    Enrollment,
+    Figure,
+    Listing,
+    NumberedList,
+    Paragraph,
+    Profile,
+    ReportDoc,
+    Table,
 )
 from forlabs.render import canon
 from forlabs.render.conformance import q
-from forlabs.report.derive import caption, figure_intro, listing_intro, numbered_blocks, table_intro
+from forlabs.report.derive import (
+    caption,
+    figure_intro,
+    listing_intro,
+    numbered_blocks,
+    table_intro,
+)
 from forlabs.report.morph import performed_word
 
 XML_SPACE = "{http://www.w3.org/XML/1998/namespace}space"
@@ -26,14 +42,26 @@ MAX_IMAGE_HEIGHT_CM = 22.0
 SCREEN_DPI = 96
 
 
+_XML_BAD = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff\ud800-\udfff]")
+
+
+def xml_safe(text: str) -> str:
+    """Символы, которых не бывает в XML (мусор из PDF или ответа модели), — вон: иначе документ не соберётся."""
+    return _XML_BAD.sub("", text or "")
+
+
 def _run(text: str, rpr) -> etree._Element:
+    text = xml_safe(text)
     r = etree.Element(q("r"))
     if rpr is not None:
         r.append(rpr)
-    t = etree.SubElement(r, q("t"))
-    t.text = text
-    if text != text.strip() or "  " in text:
-        t.set(XML_SPACE, "preserve")
+    for i, part in enumerate(text.split("\n")):  # перевод строки в тексте модели — разрыв строки в Word
+        if i:
+            etree.SubElement(r, q("br"))
+        t = etree.SubElement(r, q("t"))
+        t.text = part
+        if part != part.strip() or "  " in part:
+            t.set(XML_SPACE, "preserve")
     return r
 
 
@@ -119,12 +147,15 @@ class _Writer:
         lines = code.replace("\r\n", "\n").replace("\t", "    ").strip("\n").split("\n")
         made = []
         for line in lines:
-            made.append(self.para("code", line.rstrip()) if line.strip() else self.para("code_blank"))
+            made.append(keep_lines(self.para("code", line.rstrip())) if line.strip() else self.para("code_blank"))
         if bookmark and made:
             self.bookmark(made[0], bookmark, start=True)
             self.bookmark(made[-1], bookmark, start=False)
 
     def table(self, rows: list[list[str]], header_rows: int):
+        rows = [r for r in rows if r]
+        if not rows:  # пустая таблица от модели — не верстаем
+            return None
         tbl_pr, tr_pr = canon.table_props()
         ncols = max(len(r) for r in rows)
         widths = column_widths(rows, ncols)
@@ -162,7 +193,16 @@ def column_widths(rows: list[list[str]], ncols: int) -> list[int]:
         longest = max((len(r[ci]) if ci < len(r) else 0) for r in rows)
         lengths.append(max(6, min(longest, 60)))
     total = sum(lengths)
-    widths = [max(900, int(canon.TEXT_WIDTH_TWIPS * n / total)) for n in lengths]
+    # не уже самого длинного слова столбца (0,23 см на букву 12 pt + поля ячейки): «Параметр» не рвётся на «Парамет/р»
+    words = [max((len(w) for r in rows if ci < len(r) for w in r[ci].split()), default=0) for ci in range(ncols)]
+    floor = [min(int((n * 0.23 + 0.3) * 567), canon.TEXT_WIDTH_TWIPS // ncols * 2) for n in words]
+    widths = [max(900, f, int(canon.TEXT_WIDTH_TWIPS * n / total)) for n, f in zip(lengths, floor)]
+    if sum(widths) > canon.TEXT_WIDTH_TWIPS:  # длинным столбцам — остаток, коротким — их минимум
+        spare = canon.TEXT_WIDTH_TWIPS - sum(f if f > 900 else 900 for f in floor)
+        if spare > 0:
+            extra = [max(0, w - max(900, f)) for w, f in zip(widths, floor)]
+            k = spare / sum(extra) if sum(extra) else 0
+            widths = [max(900, f) + int(e * k) for f, e in zip(floor, extra)]
     scale = canon.TEXT_WIDTH_TWIPS / sum(widths)
     widths = [int(w * scale) for w in widths]
     widths[-1] += canon.TEXT_WIDTH_TWIPS - sum(widths)
@@ -172,7 +212,9 @@ def column_widths(rows: list[list[str]], ncols: int) -> list[int]:
 def image_size_cm(path: str, width_cm: float | None = None) -> tuple[float, float]:
     with Image.open(path) as im:
         w_px, h_px = im.size
-    natural_w = w_px / SCREEN_DPI * 2.54
+        dpi = im.info.get("dpi")
+    density = float(dpi[0]) if dpi and dpi[0] and float(dpi[0]) > 1 else SCREEN_DPI  # схема с масштабом 2 → 192
+    natural_w = w_px / density * 2.54
     w = min(width_cm or natural_w, canon.TEXT_WIDTH_CM)
     h = w * h_px / w_px
     if h > MAX_IMAGE_HEIGHT_CM:
@@ -181,21 +223,34 @@ def image_size_cm(path: str, width_cm: float | None = None) -> tuple[float, floa
     return round(w, 3), round(h, 3)
 
 
-def keep_next(p):
-    """«Не отрывать от следующего»: подводка, картинка и подпись не разъезжаются по страницам.
-    На вид абзаца не влияет — так делают вручную при вёрстке."""
+_PPR_ORDER = ["pStyle", "keepNext", "keepLines", "pageBreakBefore"]
+
+
+def _ppr_flag(p, name: str):
+    """Флаг абзаца (keepNext, keepLines, pageBreakBefore) в порядке схемы OOXML. На вид абзаца не влияет."""
     ppr = p.find(q("pPr"))
     if ppr is None:
         ppr = etree.Element(q("pPr"))
         p.insert(0, ppr)
-    if ppr.find(q("keepNext")) is None:
-        el = etree.Element(q("keepNext"))
-        anchor = ppr.find(q("pStyle"))
+    if ppr.find(q(name)) is None:
+        el = etree.Element(q(name))
+        before = [ppr.find(q(x)) for x in _PPR_ORDER[:_PPR_ORDER.index(name)]]
+        anchor = next((x for x in reversed(before) if x is not None), None)
         if anchor is not None:
             anchor.addnext(el)
         else:
             ppr.insert(0, el)
     return p
+
+
+def keep_next(p):
+    """«Не отрывать от следующего»: подводка, картинка и подпись не разъезжаются по страницам."""
+    return _ppr_flag(p, "keepNext")
+
+
+def keep_lines(p):
+    """Строка кода, перенесённая на две строки, не разрывается между страницами."""
+    return _ppr_flag(p, "keepLines")
 
 
 def listing_bookmark(lab_number: str, n: int) -> str:
@@ -218,7 +273,7 @@ def write_lab(w: _Writer, doc: ReportDoc, bookmark: str | None = None) -> None:
     w.para("results_title", "Результаты выполнения работы:")
     numbers = {(b.section_index, b.block_index): b.n for b in numbered_blocks(doc)}
     for si, sec in enumerate(doc.sections):
-        w.para("task_heading", sec.title.strip(), label=f"Задание {sec.n}. ")
+        keep_next(w.para("task_heading", sec.title.strip(), label=f"Задание {sec.n}. "))
         for bi, b in enumerate(sec.blocks):
             n = numbers.get((si, bi))
             if isinstance(b, Paragraph):
@@ -244,13 +299,15 @@ def write_lab(w: _Writer, doc: ReportDoc, bookmark: str | None = None) -> None:
                 keep_next(w.para("listing_caption", caption("listing", n, b.topic)))
                 w.code(b.code, bookmark=listing_bookmark(doc.lab_number, n))
             elif isinstance(b, Table):
+                if not any(b.rows):
+                    continue
                 keep_next(w.para("table_ref", table_intro(b.topic, n)))
                 keep_next(w.para("table_caption", caption("table", n, b.topic)))
                 w.table(b.rows, b.header_rows)
     if doc.questions:
-        w.para("cq_title", "Ответы на контрольные вопросы:")
+        keep_next(w.para("cq_title", "Ответы на контрольные вопросы:"))
         for qa in doc.questions:
-            w.para("cq_question", f"{qa.n}. {qa.question.strip()}")
+            keep_next(w.para("cq_question", f"{qa.n}. {qa.question.strip()}"))
             w.para("cq_answer", "Ответ: " + re.sub(r"^\s*Ответ:\s*", "", qa.answer.strip()))
     w.para("conclusion", re.sub(r"^\s*Вывод:\s*", "", doc.conclusion.strip()), label="Вывод: ")
 
@@ -260,8 +317,9 @@ def _new_document():
 
 
 def _set_properties(document, author: str) -> None:
-    now = datetime.now().replace(microsecond=0)
+    now = datetime.now(timezone.utc).replace(microsecond=0, tzinfo=None)  # в core.xml время пишется как UTC («Z»)
     cp = document.core_properties
+    author = xml_safe(author)
     cp.author = author
     cp.last_modified_by = author
     cp.created = now
@@ -274,8 +332,13 @@ def _save(document, out: Path, author: str) -> Path:
     _set_properties(document, author)
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    document.save(str(out))
-    _set_total_time(out)
+    tmp = out.with_name(f".{out.stem}.{os.getpid()}.tmp.docx")
+    try:  # выключение посреди записи не должно испортить прежний отчёт
+        document.save(str(tmp))
+        _set_total_time(tmp)
+        durable_replace(tmp, out)
+    finally:
+        tmp.unlink(missing_ok=True)
     return out
 
 
@@ -289,6 +352,13 @@ def _set_total_time(path: Path) -> None:
             if item.filename == "docProps/app.xml":
                 s = data.decode("utf-8")
                 s = re.sub(r"<TotalTime>\d*</TotalTime>", f"<TotalTime>{random.randint(40, 75)}</TotalTime>", s)
+                # статистика эталонного файла (83 страницы, 19 664 слова) — не про этот документ; Word посчитает сам
+                s = re.sub(r"<(Pages|Words|Characters|CharactersWithSpaces|Lines|Paragraphs)>\d*</\1>", "", s)
+                data = s.encode("utf-8")
+            elif item.filename == "word/settings.xml":
+                s = data.decode("utf-8")  # идентификаторы эталонного документа из шаблона — не этого
+                s = re.sub(r"<w1[45]:docId [^>]*/>", "", s)
+                s = re.sub(r"<w:rsids>.*?</w:rsids>", "", s, flags=re.S)
                 data = s.encode("utf-8")
             zout.writestr(item, data)
     tmp.replace(path)
@@ -365,7 +435,12 @@ def build_semester(docs: list[ReportDoc], profile: Profile, enrollment: Enrollme
     seed = f"{profile.id}:{enrollment.subject_id}"
     entries = [(f"Лабораторная работа №{d.lab_number}", bookmark_name(seed, i),
                 str((toc_pages or {}).get(d.lab_number, ""))) for i, d in enumerate(docs)]
-    w._append(_toc(entries))
+    toc = _toc(entries)
+    for p in toc.iter(q("p")):  # «Содержание» — всегда с новой страницы: длинный титул не смешивается с ним
+        if "".join(t.text or "" for t in p.iter(q("t"))).strip() == "Содержание":
+            _ppr_flag(p, "pageBreakBefore")
+            break
+    w._append(toc)
     for i, d in enumerate(docs):
         w.page_break()
         write_lab(w, d, bookmark=entries[i][1])

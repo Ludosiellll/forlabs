@@ -1,6 +1,16 @@
 import pytest
 
-from forlabs.core.models import QA, DashList, Figure, LabSpec, Listing, Paragraph, ReportDoc, Task, TaskSection
+from forlabs.core.models import (
+    QA,
+    DashList,
+    Figure,
+    LabSpec,
+    Listing,
+    Paragraph,
+    ReportDoc,
+    Task,
+    TaskSection,
+)
 from forlabs.report.derive import build_header
 from forlabs.report.standard import check_standard
 

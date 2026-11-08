@@ -7,15 +7,35 @@ import uuid
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from forlabs.core.models import (
-    QA, DashList, Figure, LabSpec, LabState, Listing, NumberedList, Paragraph, Profile, Table, TaskSection,
+    QA,
+    DashList,
+    Figure,
+    LabSpec,
+    LabState,
+    Listing,
+    NumberedList,
+    Paragraph,
+    Profile,
+    Table,
+    TaskSection,
 )
 from forlabs.core.rules import RuleBook
 from forlabs.core.subjects import Subject
-from forlabs.pipeline.prompts import CHAT_ANSWERS_SYSTEM, CHAT_PLAN_SYSTEM, CHAT_REVISE_SYSTEM
-from forlabs.pipeline.write import BlockDraft, SectionDraft, _gender_ru, draft_to_blocks, wishes_text
+from forlabs.pipeline.prompts import (
+    CHAT_ANSWERS_SYSTEM,
+    CHAT_PLAN_SYSTEM,
+    CHAT_REVISE_SYSTEM,
+)
+from forlabs.pipeline.write import (
+    BlockDraft,
+    SectionDraft,
+    _gender_ru,
+    draft_to_blocks,
+    wishes_text,
+)
 
 SOURCE_LIMIT = 30_000
 _NEEDS_SOURCE = re.compile(r"вариант|приложени|методичк|по заданию|из задания|дословно", re.IGNORECASE)
@@ -34,6 +54,14 @@ class QuestionEdit(BaseModel):
 
 class EditPlan(BaseModel):
     kind: Literal["edit", "answer", "question"] = "question"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _type_alias(cls, v):  # модель иногда пишет type вместо kind
+        if isinstance(v, dict) and "kind" not in v and "type" in v:
+            v = {**v, "kind": v["type"]}
+        return v
+
     reply: str = ""
     tasks: list[TaskEdit] = Field(default_factory=list)
     questions: list[QuestionEdit] = Field(default_factory=list)

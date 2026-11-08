@@ -9,6 +9,12 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
+%PY% -c "import platform, sys; sys.exit(0 if platform.machine().upper() in ('AMD64', 'X86_64') and sys.maxsize > 2**32 else 1)" 2>nul
+if errorlevel 1 (
+  echo Нужен 64-битный Python ^(Windows installer 64-bit, процессор AMD64^): https://www.python.org/downloads/
+  pause
+  exit /b 1
+)
 if not exist .venv %PY% -m venv .venv
 .venv\Scripts\python -m pip install --upgrade pip
 .venv\Scripts\python -m pip install -e .[windows]

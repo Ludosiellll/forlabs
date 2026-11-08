@@ -108,7 +108,13 @@ def test_memory_updated_on_final(tmp_home, tmp_path):
     st = pipe.execute(pipe.confirm(pipe.parse(st, date="24.09.2026"), None))
     st = pipe.attach_screenshot(st, section=1, block=4, image=png_bytes())
     pipe.mark_final(st)
-    mem = pipe.memory.read("ivanov", "psip")
+    import time
+
+    for _ in range(100):  # память обновляется в фоне после сдачи
+        mem = pipe.memory.read("ivanov", "psip")
+        if mem:
+            break
+        time.sleep(0.05)
     assert mem.startswith("ЛР №7: Сайт о Бобруйске")
 
 
@@ -129,9 +135,10 @@ def test_renumber_collision_never_deletes_existing(tmp_home, tmp_path):
 
 def test_create_lab_with_existing_number_refuses(tmp_home, tmp_path):
     import pytest
+
     from forlabs.pipeline.run import PipelineError
     pipe, fake = setup(tmp_home, tmp_path, [RAW])
-    st = pipe.parse(pipe.create_lab("ivanov", "psip", [(FIXTURE.name, FIXTURE.read_bytes())], number="7"),
+    pipe.parse(pipe.create_lab("ivanov", "psip", [(FIXTURE.name, FIXTURE.read_bytes())], number="7"),
                     date="24.09.2026")
     with pytest.raises(PipelineError):
         pipe.create_lab("ivanov", "psip", [("x.txt", b"other")], number="7")
@@ -176,7 +183,7 @@ class SharedStore(Store):
         self.lab_dir(st.profile_id, st.subject_id, st.number).mkdir(parents=True, exist_ok=True)
         self.shared["labs"][(st.profile_id, st.subject_id, st.number)] = st.model_dump_json()
 
-    def load_lab(self, profile_id, subject_id, number):
+    def load_lab(self, profile_id, subject_id, number, strict=False):
         from forlabs.core.models import LabState
 
         raw = self.shared["labs"].get((profile_id, subject_id, number))
@@ -224,7 +231,7 @@ def test_lab_files_follow_to_another_computer(tmp_home, tmp_path, monkeypatch):
     assert st.status == "needs_manual", st.error
     st = pipe_a.attach_screenshot(st, section=1, block=3, image=png_bytes())
     assert st.status == "rendered", st.error
-    assert ("ivanov", "psip", "7", "assets/scheme_1_2.png") in shared["files"]
+    assert any(k[:3] == ("ivanov", "psip", "7") and k[3].startswith("assets/scheme_1_2") for k in shared["files"])
 
     # второй компьютер: те же данные в облаке, пустая папка лабы
     pipe_b, _ = setup(tmp_home, tmp_path, [])

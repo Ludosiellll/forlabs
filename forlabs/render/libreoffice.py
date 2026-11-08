@@ -26,19 +26,27 @@ def find_soffice(configured: str | None = None) -> str | None:
     return None
 
 
-def to_pdf(docx: Path, outdir: Path, soffice: str | None = None, timeout: int = 240) -> Path:
+def to_pdf(docx: Path, outdir: Path, soffice: str | None = None, timeout: float = 240) -> Path:
     exe = find_soffice(soffice)
     if not exe:
         raise RuntimeError("LibreOffice не найден")
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="forlabs-lo-") as profile:
+    pdf = outdir / (Path(docx).stem + ".pdf")
+    pdf.unlink(missing_ok=True)  # PDF от прошлой сборки не должен сойти за новый
+    # ignore_cleanup_errors: на Windows зависший soffice ещё держит файлы профиля
+    with tempfile.TemporaryDirectory(prefix="forlabs-lo-", ignore_cleanup_errors=True) as profile:
         uri = Path(profile).as_uri()
         cmd = [exe, f"-env:UserInstallation={uri}", "--headless", "--convert-to", "pdf", "--outdir", str(outdir),
                str(docx)]
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
-                             env={**os.environ, "HOME": profile} if sys.platform != "win32" else None)
-    pdf = outdir / (Path(docx).stem + ".pdf")
+        try:
+            res = subprocess.run(cmd, capture_output=True, timeout=timeout,  # вывод — в кодировке Windows
+                                 env={**os.environ, "HOME": profile} if sys.platform != "win32" else None,
+                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except subprocess.TimeoutExpired as e:
+            raise RuntimeError("LibreOffice думал слишком долго и был остановлен. Закрой окна LibreOffice "
+                               "и попробуй ещё раз.") from e
     if res.returncode != 0 or not pdf.exists():
-        raise RuntimeError(f"LibreOffice не смог сделать PDF: {res.stderr.strip()[:300]}")
+        err = (res.stderr or b"").decode("utf-8", errors="replace").strip()
+        raise RuntimeError(f"LibreOffice не смог сделать PDF: {err[:300]}")
     return pdf

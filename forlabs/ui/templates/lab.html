@@ -41,7 +41,7 @@
           <div class="msg msg-{{ m.role }} k-{{ m.kind }}">
             <div class="who-said">{{ 'Ты' if m.role == 'user' else 'ForLabs' }}{% if m.role == 'user' and m.remember %} · запомнить{% endif %}</div>
             {% if m.text %}<div class="txt">{{ m.text }}</div>{% endif %}
-            {% if m.images %}<div class="thumbs">{% for img in m.images %}<a href="{{ base_url }}/{{ img }}" target="_blank" rel="noopener"><img src="{{ base_url }}/{{ img }}" alt="Фото к сообщению" loading="lazy"></a>{% endfor %}</div>{% endif %}
+            {% if m.images %}<div class="thumbs">{% for img in m.images %}<a href="{{ base_url }}/{{ img }}"><img src="{{ base_url }}/{{ img }}" alt="Фото к сообщению" loading="lazy"></a>{% endfor %}</div>{% endif %}
             {% if m.image_text %}<details class="read"><summary>Что прочитано с фото</summary><div class="txt">{{ m.image_text }}</div></details>{% endif %}
             {% if m.role == 'assistant' and m.version in version_ids %}
             <form method="post" action="{{ base_url }}/chat/revert/{{ m.version }}" onsubmit="return confirm('Вернуть отчёт к состоянию до этого сообщения? Правки после него тоже откатятся.')">
@@ -56,7 +56,7 @@
       <details class="rules-mem">
         <summary class="small">Требования преподавателя: {{ teacher_rules|length }}</summary>
         <ul>{% for r in teacher_rules %}<li>{{ r }}
-          <form method="post" action="{{ base_url }}/teacher/remove/{{ loop.index0 }}" style="display:inline"><button class="btn link small" type="submit" title="Больше не учитывать в следующих лабах">убрать</button></form></li>{% endfor %}</ul>
+          <form method="post" action="{{ base_url }}/teacher/remove/{{ r|teacher_key }}" style="display:inline"><button class="btn link small" type="submit" title="Больше не учитывать в следующих лабах">убрать</button></form></li>{% endfor %}</ul>
         <div class="hint">Учитываются во всех лабах этого предмета.</div>
       </details>
       {% endif %}
@@ -90,11 +90,22 @@
 
   <section class="lab-center" aria-label="Документ">
     {% include "_flash.html" %}
-    {% if st.status == 'failed' and st.error %}<div class="notice err" style="width:100%;max-width:760px">{{ st.error }}
-      {% if st.spec and not busy %}<form method="post" action="{{ base_url }}/execute" style="margin-top:8px">
-        <button class="btn small" type="submit">Продолжить</button>
-        <span class="small">{{ 'Написанные задания сохранены — допишу остальные.' if st.report else 'Начну выполнение заново.' }}</span>
-      </form>{% endif %}</div>{% endif %}
+    {% set interrupted = st.status == 'executing' and not busy and not elsewhere %}
+    {% if elsewhere %}<div class="notice warn" style="width:100%;max-width:760px">Лаба сейчас выполняется на другом компьютере. Когда там закончится — обнови страницу.</div>{% endif %}
+    {% if st.pending_uploads %}<div class="notice warn" style="width:100%;max-width:760px">{{ st.pending_uploads|length }} файл(ов) ещё не отправлено в облако (не было связи) — отправлю при следующей сборке документа. Не удаляй их с этого компьютера.</div>{% endif %}
+    {% if (st.status == 'failed' and st.error) or interrupted %}<div class="notice err" style="width:100%;max-width:760px">
+      {{ st.error if st.status == 'failed' else 'Работа прервалась: приложение закрывали или пропала связь. Написанное сохранено.' }}
+      {% if st.spec and not busy %}
+        {% if complete %}
+        <form method="post" action="{{ base_url }}/rerender" style="margin-top:8px">
+          <button class="btn small" type="submit">Пересобрать документ</button>
+          <span class="small">Текст отчёта на месте — осталось собрать документ.</span></form>
+        {% else %}
+        <form method="post" action="{{ base_url }}/execute" style="margin-top:8px">
+          <button class="btn small" type="submit">Продолжить</button>
+          <span class="small">{{ 'Написанное сохранено — допишу остальное.' if st.report else 'Начну выполнение заново.' }}</span></form>
+        {% endif %}
+      {% endif %}</div>{% endif %}
     <nav class="tabs" aria-label="Вид">
       <a href="{{ base_url }}?tab=report" class="{{ 'on' if tab == 'report' }}">Отчёт</a>
       <a href="{{ base_url }}?tab=spec" class="{{ 'on' if tab == 'spec' }}">Разбор методички</a>
@@ -106,8 +117,8 @@
     {% if tab == 'report' %}
       {% if st.pages and not preview_here and not busy %}
         <div class="pane">
-          <h2>Предпросмотр сделан на другом компьютере</h2>
-          <p class="muted">Текст отчёта сохранён в облаке. Нажми «Пересобрать документ» — я скачаю рисунки и сверстаю отчёт здесь.</p>
+          <h2>Документ нужно пересобрать</h2>
+          <p class="muted">Отчёт менялся после последней вёрстки (правка, скриншот, другой компьютер) или вёрстку прервали. Текст сохранён — нажми «Пересобрать документ».</p>
           <form method="post" action="{{ base_url }}/rerender"><button class="btn primary" type="submit">Пересобрать документ</button></form>
         </div>
       {% elif st.pages and preview_here %}
@@ -131,8 +142,13 @@
               Подробности — во вкладке «Журнал».</p>
             {% if not st.spec %}<form method="post" action="{{ base_url }}/reparse"><button class="btn primary" type="submit">Разобрать ещё раз</button></form>{% endif %}
           {% else %}
+            {% if docx_here %}
+            <h2>Документ готов</h2>
+            <p class="muted">Предпросмотра нет: на компьютере нет ни Word, ни LibreOffice. Документ можно скачать, открыть и сдать.</p>
+            {% else %}
             <h2>Документа пока нет</h2>
             <p class="muted">Посмотри журнал: там видно, на каком шаге остановилось.</p>
+            {% endif %}
           {% endif %}
         </div>
       {% else %}
@@ -142,8 +158,8 @@
       <div class="pane">
         {% if st.spec %}
         {% set spec_findings = st.findings|selectattr('stage', 'equalto', 'spec')|list %}
-        {% if spec_findings %}<div class="notice warn">Не всё найдено в методичке дословно — проверь отмеченные места:
-          {% for f in spec_findings %}<div class="small">· {{ f.location }}: {{ f.text }}</div>{% endfor %}</div>{% endif %}
+        {% if spec_findings %}<div class="notice warn">Проверь разбор:
+          {% for f in spec_findings %}<div class="small">· {{ f.location }}: {{ f.message }}{% if f.text %} — «{{ f.text[:160] }}»{% endif %}</div>{% endfor %}</div>{% endif %}
         <form method="post" action="{{ base_url }}/confirm">
           <div class="field"><label for="topic">Тема</label><input id="topic" name="topic" type="text" value="{{ st.spec.topic }}"></div>
           <div class="field"><label for="goal">Цель</label><textarea id="goal" name="goal" rows="2">{{ st.spec.goal }}</textarea></div>
@@ -170,7 +186,7 @@
           <div class="field"><label for="variant_text">Текст варианта из методички</label>
             <textarea id="variant_text" name="variant_text" rows="3">{{ st.spec.variant_text or '' }}</textarea></div>
           <div class="field"><label for="wishes">Пожелания и отклонения от методички</label>
-            {% if st.wish_images %}<div class="thumbs">{% for img in st.wish_images %}<a href="{{ base_url }}/{{ img }}" target="_blank" rel="noopener"><img src="{{ base_url }}/{{ img }}" alt="Фото к пожеланиям" loading="lazy"></a>{% endfor %}</div>{% endif %}
+            {% if st.wish_images %}<div class="thumbs">{% for img in st.wish_images %}<a href="{{ base_url }}/{{ img }}"><img src="{{ base_url }}/{{ img }}" alt="Фото к пожеланиям" loading="lazy"></a>{% endfor %}</div>{% endif %}
             <textarea id="wishes" name="wishes" rows="4" maxlength="4000" placeholder="Например: вариант мне дали 7; код на C# вместо Java">{{ st.spec.wishes or '' }}</textarea>
             <div class="hint">Учтутся при написании всех заданий — они важнее методички.</div></div>
           <div class="field"><label for="questions">Контрольные вопросы — по одному в строке</label>
@@ -178,9 +194,10 @@
 {% endfor %}</textarea><div class="hint">Пусто — раздела с вопросами в отчёте не будет.</div></div>
           <div class="row"><button class="btn" type="submit">Сохранить разбор</button></div>
         </form>
-        <form method="post" action="{{ base_url }}/execute" style="margin-top:10px">
+        <form method="post" action="{{ base_url }}/execute" style="margin-top:10px"{% if st.report and not (st.status in ('failed', 'executing') and not complete) %} onsubmit="return confirm('Текст всех заданий будет написан заново, вставленные скриншоты нужно будет вставить снова. Нынешний отчёт сохранится в версиях — к нему можно вернуться из чата правок. Продолжить?')"{% endif %}>
+          {% if st.report and not (st.status in ('failed', 'executing') and not complete) %}<input type="hidden" name="full" value="1">{% endif %}
           <button class="btn primary" type="submit" {{ 'disabled' if busy }}>{{ 'Выполнить заново' if st.report else 'Выполнить' }}</button>
-          {% if st.report %}<span class="small muted">Текст всех заданий будет написан заново.</span>{% endif %}
+          {% if st.report %}<span class="small muted">{{ 'Допишу недостающие задания и ответы.' if st.status in ('failed', 'executing') and not complete else 'Текст всех заданий будет написан заново.' }}</span>{% endif %}
         </form>
         {% else %}
         <p class="muted">Разбор ещё не готов.</p>

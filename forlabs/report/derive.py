@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Literal
 
@@ -28,6 +29,8 @@ def numbered_blocks(doc: ReportDoc) -> list[NumberedBlock]:
     for si, sec in enumerate(doc.sections):
         for bi, b in enumerate(sec.blocks):
             kind = {Figure: "figure", Listing: "listing", Table: "table"}.get(type(b))
+            if kind == "table" and not any(b.rows):
+                continue  # пустую таблицу не верстаем — и номер ей не нужен
             if kind:
                 counters[kind] += 1
                 out.append(NumberedBlock(si, bi, kind, counters[kind]))
@@ -38,7 +41,12 @@ def clean_topic(topic: str) -> str:
     return " ".join(topic.split()).rstrip(" .;:")
 
 
+_FILE_START = re.compile(r"^[a-z0-9_.-]+\.[a-z0-9]{1,5}\b")
+
+
 def upper_first(s: str) -> str:
+    if _FILE_START.match(s):  # «index.html …» — имя файла, его регистр не трогаем
+        return s
     return s[:1].upper() + s[1:]
 
 

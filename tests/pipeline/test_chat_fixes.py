@@ -6,10 +6,9 @@ import io
 import pytest
 from PIL import Image
 from test_chat_run import PLAN_T2, REVISE_T2, ready
-from test_run import ANS, FIXTURE, RAW, SEC, SEC2, setup
+from test_run import FIXTURE, RAW, SEC, setup
 
-from forlabs.core.llm import FakeLLM, LLMError
-from forlabs.core.rules import RuleBook
+from forlabs.core.llm import LLMError
 from forlabs.pipeline.run import PipelineError
 
 
@@ -107,7 +106,9 @@ def test_teacher_requirements_can_be_removed(tmp_home, tmp_path):
     mem.add_teacher("ivanov", "psip", "Комментарии к каждому методу")
     mem.add_teacher("ivanov", "psip", "Скриншоты на весь экран")
     assert mem.teacher_list("ivanov", "psip") == ["Комментарии к каждому методу.", "Скриншоты на весь экран."]
-    mem.remove_teacher("ivanov", "psip", 0)
+    from forlabs.pipeline.memory import teacher_key
+
+    mem.remove_teacher("ivanov", "psip", teacher_key("Комментарии к каждому методу."))
     assert mem.teacher_list("ivanov", "psip") == ["Скриншоты на весь экран."]
 
 

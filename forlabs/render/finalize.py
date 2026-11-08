@@ -3,24 +3,30 @@
 from __future__ import annotations
 
 import re
+import shutil
+import uuid
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from lxml import etree
 
+from forlabs.core.fs import durable_replace
 from forlabs.render import libreoffice, word_com
 from forlabs.render.conformance import q
 from forlabs.render.preview import heading_pages, pdf_to_pngs
 
-NO_WORD_WARNING = ("Word на этом компьютере не найден, поэтому «Продолжение листинга» не расставлено. "
+NO_OFFICE_WARNING = ("Нет ни Word, ни LibreOffice: документ собран, но без предпросмотра и без «Продолжения листинга». "
+                     "Поставь бесплатный LibreOffice (libreoffice.org) и нажми «Пересобрать документ».")
+NO_WORD_WARNING = ("Word на этом компьютере не найден, поэтому «Продолжение листинга» и «Продолжение таблицы» не "
+                   "расставлены. "
                    "Открой лабу в ForLabs на ПК с Word и нажми «Пересобрать документ».")
 
 
 @dataclass
 class FinalizeReport:
     engine: str
-    pdf: Path
+    pdf: Path | None
     pages: list[Path]
     continuations: int = 0
     warnings: list[str] = field(default_factory=list)
@@ -59,28 +65,56 @@ def patch_toc_pages(docx: Path, pages: dict[str, int]) -> None:
     with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
         for info, data in out_items:
             zout.writestr(info, data)
-    tmp.replace(docx)
+    durable_replace(tmp, docx)
+
+
+def _clean_old_copies(workdir: Path, age: float = 3600) -> None:
+    """Копии для Word, оставшиеся от зависшего Word (он держал файл), — убрать, когда старше часа."""
+    import time
+
+    for f in workdir.glob("word_*.docx"):
+        try:
+            if time.time() - f.stat().st_mtime > age:
+                f.unlink()
+        except OSError:
+            pass
 
 
 def finalize(docx: Path, author: str, workdir: Path, soffice: str | None = None,
              prefer_word: bool = True) -> FinalizeReport:
     docx, workdir = Path(docx), Path(workdir)
     workdir.mkdir(parents=True, exist_ok=True)
+    _clean_old_copies(workdir)
     pdf = workdir / (docx.stem + ".pdf")
     warnings: list[str] = []
     if prefer_word and word_com.available():
-        backup = docx.read_bytes()
+        # Word работает с копией: зависший WINWORD.EXE не заблокирует report.docx, а неудача его не испортит
+        work = workdir / f"word_{uuid.uuid4().hex[:8]}.docx"
+        shutil.copyfile(docx, work)
         try:
-            rep = word_com.finalize_isolated(docx, pdf, author)
+            rep = word_com.finalize_isolated(work, pdf, author)
+            durable_replace(work, docx)
             return FinalizeReport("word", pdf, pdf_to_pngs(pdf, workdir / "pages"), rep.continuations, rep.warnings)
-        except Exception as e:  # Word завис или упал — документ не теряем, доводим через LibreOffice
-            docx.write_bytes(backup)
-            warnings.append(f"Word не справился ({e}). Документ доведён через LibreOffice; "
-                            f"«Продолжение листинга» не расставлено — нажми «Пересобрать документ» ещё раз.")
+        except Exception as e:  # Word завис или упал — доводим исходный документ через LibreOffice
+            word_com._failed = True  # следующая вёрстка не ждёт его снова по 5 минут
+            warnings.append(f"Word не справился ({e}). Документ доведён без Word; «Продолжение листинга» и "
+                            "«Продолжение таблицы» не расставлены. Закрой окна Word и перезапусти ForLabs, потом "
+                            "нажми «Пересобрать документ».")
+        finally:
+            try:
+                work.unlink(missing_ok=True)
+            except OSError:
+                pass  # копию держит зависший Word — удалится при следующей доводке
     else:
         warnings.append(NO_WORD_WARNING)
 
-    pdf = libreoffice.to_pdf(docx, workdir, soffice)
+    if not libreoffice.find_soffice(soffice):
+        # ни Word, ни LibreOffice: документ уже собран и годится для сдачи — только без предпросмотра
+        return FinalizeReport("none", None, [], 0, warnings + [NO_OFFICE_WARNING])
+    try:
+        pdf = libreoffice.to_pdf(docx, workdir, soffice)
+    except Exception as e:
+        return FinalizeReport("none", None, [], 0, warnings + [f"Предпросмотр не получился ({e}). Документ готов."])
     marks = toc_bookmarks(docx)
     if marks:
         hp = heading_pages(pdf, list(marks.values()))

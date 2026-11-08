@@ -12,15 +12,18 @@ from pydantic import BaseModel
 
 from forlabs.cloud.config import DEFAULT, CloudConfig
 from forlabs.core import paths
+from forlabs.core.fs import atomic_write_text, quarantine
+from forlabs.core.netcert import offline_message
 
 KEYRING_SERVICE = "ForLabs"
 KEYRING_SESSION = "cloud_session"
 
 
 class CloudError(Exception):
-    def __init__(self, message_ru: str, detail: str = ""):
+    def __init__(self, message_ru: str, detail: str = "", offline: bool = False):
         self.message_ru = message_ru
         self.detail = detail
+        self.offline = offline  # нет связи (или сеть не пропускает) — можно показать копию с компьютера
         super().__init__(message_ru)
 
 
@@ -56,7 +59,7 @@ def _error_from(r: httpx.Response) -> CloudError:
 class CloudAuth:
     def __init__(self, config: CloudConfig = DEFAULT, http: httpx.Client | None = None, use_keyring: bool = True):
         self.config = config
-        self.http = http or httpx.Client(timeout=30)
+        self.http = http or httpx.Client(timeout=httpx.Timeout(30, connect=5))
         self.use_keyring = use_keyring
         self.session: Session | None = None
         self._lock = threading.Lock()
@@ -81,7 +84,7 @@ class CloudAuth:
         f = self._session_file()
         f.parent.mkdir(parents=True, exist_ok=True)
         if raw:
-            f.write_text(raw, encoding="utf-8")
+            atomic_write_text(f, raw)
             try:
                 os.chmod(f, 0o600)
             except OSError:
@@ -99,8 +102,15 @@ class CloudAuth:
             except Exception:
                 raw = None
         if not raw and self._session_file().exists():
-            raw = self._session_file().read_text(encoding="utf-8")
-        self.session = Session.model_validate_json(raw) if raw else None
+            try:
+                raw = self._session_file().read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                raw = None
+        try:
+            self.session = Session.model_validate_json(raw) if raw else None
+        except ValueError:  # обрезанный файл сессии — просто войти заново
+            quarantine(self._session_file(), "сессия повреждена")
+            self.session = None
         return self.session
 
     # запросы
@@ -112,13 +122,14 @@ class CloudAuth:
             r = self.http.post(f"{self.config.url}/auth/v1/token", params={"grant_type": grant}, json=body,
                                headers=self._headers())
         except httpx.TransportError as e:
-            raise CloudError("Нет связи с облаком. Проверь интернет.", str(e)) from e
+            raise CloudError(offline_message(e), str(e), offline=True) from e
         if r.status_code >= 400:
             raise _error_from(r)
         d = r.json()
         user = d.get("user") or {}
         self.session = Session(access_token=d["access_token"], refresh_token=d["refresh_token"],
-                               expires_at=int(d.get("expires_at") or time.time() + int(d.get("expires_in", 3600))),
+                               # по своим часам: у ноутбука может быть неверное время или пояс
+                               expires_at=int(time.time()) + int(d.get("expires_in") or 3600),
                                user_id=user.get("id", ""), email=user.get("email", ""))
         self._save()
         return self.session
@@ -132,7 +143,7 @@ class CloudAuth:
             r = self.http.post(f"{self.config.url}/auth/v1/signup", headers=self._headers(),
                                json={"email": email.strip(), "password": password, "data": {"name": name.strip()}})
         except httpx.TransportError as e:
-            raise CloudError("Нет связи с облаком. Проверь интернет.", str(e)) from e
+            raise CloudError(offline_message(e), str(e), offline=True) from e
         if r.status_code >= 400:
             raise _error_from(r)
         d = r.json()
@@ -167,7 +178,7 @@ class CloudAuth:
     def sign_out(self) -> None:
         if self.session:
             try:
-                self.http.post(f"{self.config.url}/auth/v1/logout",
+                self.http.post(f"{self.config.url}/auth/v1/logout", params={"scope": "local"},  # другие компьютеры не трогаем
                                headers={**self._headers(), "Authorization": f"Bearer {self.session.access_token}"})
             except httpx.TransportError:
                 pass

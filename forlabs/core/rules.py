@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Callable, Literal
 
 from forlabs.core import paths
+from forlabs.core.fs import atomic_write_text
 
 RULES_DIR = Path(__file__).resolve().parents[2] / "rules"
 Stage = Literal["write", "repair", "code", "design"]
@@ -66,9 +67,7 @@ def _default_overrides() -> dict[str, str]:
 
 
 def _default_save(path: str, text: str) -> None:
-    f = paths.data_home() / "rules" / path
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(text, encoding="utf-8")
+    atomic_write_text(paths.data_home() / "rules" / path, text)
 
 
 def _default_reset(path: str) -> None:

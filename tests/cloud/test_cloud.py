@@ -13,6 +13,25 @@ CFG = CloudConfig(url="https://proj.supabase.test", publishable_key="sb_publisha
 UID = "11111111-2222-3333-4444-555555555555"
 
 
+def _field(row: dict, key: str):
+    """Поле строки, в том числе путь внутрь JSON: state->>rev."""
+    if "->>" in key:
+        col, _, sub_key = key.partition("->>")
+        v = (row.get(col) or {}).get(sub_key)
+        return None if v is None else str(v)
+    v = row.get(key)
+    return None if v is None else str(v)
+
+
+def _match(row: dict, params) -> bool:
+    for k, v in params.items():
+        if v.startswith("eq.") and _field(row, k) != v[3:]:
+            return False
+        if v == "is.null" and _field(row, k) is not None:
+            return False
+    return True
+
+
 class FakeSupabase:
     def __init__(self):
         self.tables = {"student_profiles": [], "labs": [], "members": [
@@ -26,6 +45,9 @@ class FakeSupabase:
         self.rpc_calls = []
         self.functions_down = False
         self.balance_errors = {}  # uid -> текст ошибки, как в ответе функции
+        self.drop_next = 0  # сколько следующих запросов к REST оборвать (как пропавший Wi-Fi)
+        self.drop_auth_next = 0  # то же для обновления входа
+        self.expired = set()  # токены, которые сервер уже считает просроченными (часы ноутбука спешат)
 
     def session(self, expires_in=3600):
         return {"access_token": f"tok{len(self.requests)}", "refresh_token": "ref", "expires_in": expires_in,
@@ -36,6 +58,9 @@ class FakeSupabase:
         assert req.headers["apikey"] == "sb_publishable_x"
         path = req.url.path
         if path == "/auth/v1/token":
+            if self.drop_auth_next:
+                self.drop_auth_next -= 1
+                raise httpx.ConnectError("Wi-Fi пропал")
             body = json.loads(req.content)
             if req.url.params["grant_type"] == "password" and body["password"] != "верный":
                 return httpx.Response(400, json={"error": "invalid_grant", "error_description": "Invalid login credentials"})
@@ -43,6 +68,11 @@ class FakeSupabase:
         if path == "/auth/v1/signup":
             return httpx.Response(200, json={"id": UID, "email": "a@b.c", "confirmation_sent_at": "now"})
         assert req.headers["authorization"].startswith("Bearer tok")
+        if req.headers["authorization"][7:] in self.expired and path.startswith("/rest/v1/"):
+            return httpx.Response(401, json={"code": "PGRST301", "message": "JWT expired"})
+        if self.drop_next and path.startswith("/rest/v1/"):
+            self.drop_next -= 1
+            raise httpx.ConnectError("Wi-Fi пропал")
         if path.startswith("/rest/v1/rpc/"):
             fn = path.rsplit("/", 1)[-1]
             args = json.loads(req.content or b"{}")
@@ -85,24 +115,39 @@ class FakeSupabase:
                         row.setdefault("owner", UID)  # в базе owner = auth.uid() по умолчанию
                     keys = {"student_profiles": ("id",), "labs": ("profile_id", "subject_id", "number"),
                             "member_notes": ("user_id",)}.get(table, ())
+                    same = [r for r in rows if keys and all(r.get(k) == row.get(k) for k in keys)]
+                    if same and "merge-duplicates" not in req.headers.get("prefer", ""):
+                        return httpx.Response(409, json={"code": "23505", "message": "duplicate key"})
                     rows[:] = [r for r in rows if any(r.get(k) != row.get(k) for k in keys)] if keys else rows
                     rows.append(row)
                 return httpx.Response(201, json=[])
             if req.method == "GET":
-                out = rows
-                for k, v in req.url.params.items():
-                    if v.startswith("eq."):
-                        out = [r for r in out if str(r.get(k)) == v[3:]]
-                return httpx.Response(200, json=out)
+                return httpx.Response(200, json=[r for r in rows if _match(r, req.url.params)])
             if req.method == "PATCH":
-                for k, v in req.url.params.items():
-                    if v.startswith("eq."):
-                        for r in rows:
-                            if str(r.get(k)) == v[3:]:
-                                r.update(json.loads(req.content))
+                hit = [r for r in rows if _match(r, req.url.params)]
+                for r in hit:
+                    r.update(json.loads(req.content))
+                if "return=representation" in req.headers.get("prefer", ""):
+                    return httpx.Response(200, json=hit)
                 return httpx.Response(204)
             if req.method == "DELETE":
+                conds = {k: v[3:] for k, v in req.url.params.items() if v.startswith("eq.")}
+                rows[:] = [r for r in rows if any(str(r.get(k)) != v for k, v in conds.items())] if conds else rows
                 return httpx.Response(204)
+        if path == "/storage/v1/object/list/labs":
+            body = json.loads(req.content)
+            prefix = body["prefix"].rstrip("/") + "/"
+            names = set()
+            for key in self.objects:
+                if key.startswith(prefix):
+                    rest = key[len(prefix):]
+                    head = rest.split("/", 1)[0]
+                    names.add((head, "/" not in rest))
+            return httpx.Response(200, json=[{"name": n, "id": "x" if is_file else None} for n, is_file in sorted(names)])
+        if path == "/storage/v1/object/labs" and req.method == "DELETE":
+            for key in json.loads(req.content)["prefixes"]:
+                self.objects.pop(key, None)
+            return httpx.Response(200, json=[])
         if path.startswith("/storage/v1/object/labs/"):
             key = path[len("/storage/v1/object/labs/"):]
             if req.method == "POST":
@@ -205,3 +250,52 @@ def test_members_admin(auth):
     assert me.role == "admin" and me.approved
     store.set_approved(UID, False)
     assert store.list_members()[0].approved is False
+
+
+def test_rest_retries_a_dropped_connection(auth, fake):
+    auth.sign_in("a@b.c", "верный")
+    store = CloudStore(auth, retry_delays=(0, 0))
+    fake.drop_next = 2  # два обрыва подряд — третий запрос проходит
+    assert store.list_profiles() == []
+    fake.drop_next = 5
+    with pytest.raises(CloudError):
+        store.list_members()  # у этого запроса нет копии «без связи» — после повторов ошибка
+
+
+def test_delete_lab_removes_cache_and_cloud_files(auth, fake, tmp_home, tmp_path):
+    from forlabs.core.llm import FakeLLM
+    from forlabs.pipeline.run import Pipeline
+
+    auth.sign_in("a@b.c", "верный")
+    store = CloudStore(auth, retry_delays=(0, 0))
+    store.save_profile(Profile(id="ivanov", full_name="Иванов Иван", title_name="И.И. Иванов"))
+    pipe = Pipeline(store, llm_factory=lambda: FakeLLM([]), prefer_word=False, render_diagrams=False)
+    st = pipe.create_lab("ivanov", "ssp", [("старая_методичка_ЛР5.txt", b"old")], number="5")
+    asset = pipe.lab_dir(st) / "assets" / "fig.png"
+    asset.parent.mkdir(parents=True, exist_ok=True)
+    asset.write_bytes(b"PNG")
+    store.upload(asset, "ivanov", "ssp", "5", "assets/fig.png")
+    store.upload(asset, "ivanov", "ssp", "5", "report.docx")
+    store.delete_lab("ivanov", "ssp", "5")
+    assert store.load_lab("ivanov", "ssp", "5") is None
+    assert not any("/lr5/" in k for k in fake.objects)  # файлы лабы в облаке удалены
+    st = pipe.create_lab("ivanov", "ssp", [("новая.txt", b"new")], number="5")
+    assert [f.name for f in (pipe.lab_dir(st) / "source").iterdir()] == ["новая.txt"]
+
+
+def test_offline_shows_local_copy(auth, fake, tmp_home):
+    auth.sign_in("a@b.c", "верный")
+    store = CloudStore(auth, retry_delays=(0, 0))
+    store.save_profile(Profile(id="ivanov", full_name="Иванов Иван", title_name="И.И. Иванов"))
+    store.save_lab(LabState(profile_id="ivanov", subject_id="ssp", number="4", status="rendered"))
+    assert [p.id for p in store.list_profiles()] == ["ivanov"]  # заодно кэш профилей
+    fake.drop_next = 10_000  # интернет пропал
+    assert store.load_lab("ivanov", "ssp", "4").status == "rendered"
+    assert [s.number for s in store.list_labs("ivanov", "ssp")] == ["4"]
+    assert store.get_profile("ivanov").full_name == "Иванов Иван"
+    assert [p.id for p in store.list_profiles()] == ["ivanov"]
+    assert store.offline is True
+    fake.drop_next = 0
+    store._offline_until = 0  # прошло 30 с — снова пробуем облако
+    store.list_profiles()
+    assert store.offline is False

@@ -19,12 +19,23 @@ DESCRIBE_SYSTEM = """Студент прикладывает фото к лаб�
 Каждое фото — с новой строки «Фото N: …». Без вступлений и выводов, по-русски."""
 
 
+MAX_PIXELS = 40_000_000  # больше — подозрительно (картинка-«бомба» распакуется в гигабайты памяти)
+
+
+def _check_size(im) -> None:
+    w, h = im.size
+    if w * h > MAX_PIXELS:
+        raise ValueError(f"Картинка {w}×{h} точек — слишком большая. Уменьши её или сделай снимок части экрана.")
+
+
 def prepare_image(data: bytes) -> bytes:
     """Проверяет, что это картинка, поворачивает по EXIF, уменьшает до MAX_SIDE и сохраняет в JPEG."""
     if len(data) > MAX_BYTES:
         raise ValueError("Фото больше 15 МБ")
     try:
         with Image.open(io.BytesIO(data)) as im:
+            _check_size(im)  # размер из заголовка — до распаковки
+            im.draft("RGB", (MAX_SIDE, MAX_SIDE))
             im = ImageOps.exif_transpose(im).convert("RGB")
             im.thumbnail((MAX_SIDE, MAX_SIDE))
             out = io.BytesIO()
@@ -47,3 +58,37 @@ def describe_images(paths: list[Path], llm) -> str:
     content += [image_part(p) for p in paths]
     return llm.chat([{"role": "system", "content": DESCRIBE_SYSTEM}, {"role": "user", "content": content}],
                     temperature=0.1).strip()
+
+
+def normalize_screenshot(data: bytes) -> tuple[bytes, str]:
+    """Скриншот для отчёта: любой формат, который читает Pillow (PNG, JPG, WebP, BMP…) → PNG или JPG.
+    Word понимает только их, а WebP или битый файл раньше навсегда ломал вёрстку."""
+    if len(data) > MAX_BYTES:
+        raise ValueError("Снимок больше 15 МБ")
+    try:
+        with Image.open(io.BytesIO(data)) as im:
+            _check_size(im)
+            fmt = im.format
+            im = ImageOps.exif_transpose(im)
+            im.thumbnail((4000, 4000))
+            out = io.BytesIO()
+            if fmt == "JPEG":
+                im.convert("RGB").save(out, format="JPEG", quality=92)
+                return out.getvalue(), ".jpg"
+            im.save(out, format="PNG", optimize=True)
+            return out.getvalue(), ".png"
+    except Image.DecompressionBombError as e:
+        raise ValueError("Снимок слишком большой по размеру в пикселях") from e
+    except (UnidentifiedImageError, OSError, ValueError) as e:
+        raise ValueError("Это не картинка — вставь снимок экрана (PNG или JPG)") from e
+
+
+def image_ok(path: Path) -> bool:
+    try:
+        with Image.open(path) as im:
+            im.verify()
+        with Image.open(path) as im:
+            im.load()
+        return True
+    except Exception:
+        return False

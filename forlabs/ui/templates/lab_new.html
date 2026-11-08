@@ -5,7 +5,8 @@
   {% include "_flash.html" %}
   <h1>Новая лаба</h1>
   <p class="muted">Добавь методичку — приложение разберёт тему, цель, задания, вариант и контрольные вопросы. Перед выполнением всё покажет на проверку.</p>
-  <form method="post" action="/labs/new" enctype="multipart/form-data">
+  <form method="post" action="/labs/new" enctype="multipart/form-data" data-once>
+    <input type="hidden" name="form_token" value="{{ form_token }}">
     <div class="grid3">
       <div class="field"><label for="profile_id">Профиль</label>
         <select id="profile_id" name="profile_id">{% for p in profiles %}<option value="{{ p.id }}" {{ 'selected' if p.id == profile_id }}>{{ p.full_name }}</option>{% endfor %}</select></div>

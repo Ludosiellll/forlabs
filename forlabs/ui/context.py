@@ -30,10 +30,18 @@ def slug(text: str) -> str:
     return s or "profile"
 
 
+LLM_TIMEOUT = 240.0
+
+
 class AppContext:
     def __init__(self, settings: Settings | None = None, llm_override: Callable[[], object] | None = None,
                  prefer_word: bool = True, render_diagrams: bool = True, synchronous: bool = False):
         self.settings = settings or load_settings()
+        from forlabs.core import settings as settings_mod
+
+        self.notice = ("Настройки были повреждены (например, при выключении) и сброшены: режим — облако, модель — по "
+                       "умолчанию. Если работал без облака — открой «Настройки» и выбери «Локально»."
+                       if settings is None and settings_mod.SETTINGS_WERE_RESET else "")
         self.llm_override = llm_override
         self.prefer_word = prefer_word
         self.render_diagrams = render_diagrams
@@ -43,6 +51,7 @@ class AppContext:
         self._store = None
         self._pipeline = None
         self.running: set[str] = set()
+        self.form_tokens: dict[str, str] = {}  # одноразовые токены формы «Новая лаба» → адрес созданной лабы
         self._lock = threading.Lock()
         if self.cloud:
             self.auth.load_session()
@@ -91,21 +100,36 @@ class AppContext:
         if self.llm_override:
             return self.llm_override()
         if self.cloud:
-            llm = LLM(self.settings, api_key=self.auth.access_token, base_url=CLOUD.llm_base_url)
+            llm = LLM(self.settings, api_key=self.auth.access_token, base_url=CLOUD.llm_base_url,
+                      http_client=self._llm_http())
             llm.accepts_lab_tag = True
+            llm.on_unauthorized = self.auth.refresh
             return llm
         key = get_api_key()
         if not key:
             raise CloudError("Не задан ключ API. Открой «Настройки» и вставь ключ.")
-        return LLM(self.settings, api_key=key)
+        return LLM(self.settings, api_key=key, http_client=self._llm_http())
+
+    def _llm_http(self):
+        """Один HTTP-клиент на все запросы к модели (а не новый на каждый вызов)."""
+        if getattr(self, "_http_llm", None) is None:
+            import httpx
+
+            self._http_llm = httpx.Client(timeout=httpx.Timeout(LLM_TIMEOUT, connect=10))
+        return self._http_llm
 
     @property
     def pipeline(self) -> Pipeline:
         if self._pipeline is None:
             self._pipeline = Pipeline(self.store, self.llm, rules=self.rules(), bus=self.bus,
                                       render_diagrams=self.render_diagrams, prefer_word=self.prefer_word,
-                                      soffice=self.settings.soffice_path, memory=self.memory())
+                                      soffice=self.settings.soffice_path, memory=self.memory(),
+                                      tesseract=self.settings.tesseract_path)
         return self._pipeline
+
+    def busy(self) -> bool:
+        """Идёт работа: задача по лабе или фоновое обновление памяти после сдачи."""
+        return bool(self.running) or bool(self._pipeline is not None and self._pipeline.background)
 
     def claim(self, key: str) -> bool:
         """Занять лабу под короткое действие в запросе (сдача). False — по ней уже идёт работа."""
@@ -127,6 +151,7 @@ class AppContext:
             self.running.add(key)
 
         def job():
+            pipe = self._pipeline  # настройки могут сброситься посреди работы — перенос лабы помнит этот конвейер
             try:
                 fn(*args, **kwargs)
             except Exception as e:  # ошибка должна дойти до журнала, а не потеряться в потоке
@@ -136,7 +161,7 @@ class AppContext:
                 with self._lock:
                     self.running.discard(key)
                 self.bus.publish(key, "", "idle")
-                moved = self.pipeline.renamed.get(key) if self._pipeline is not None else None
+                moved = pipe.renamed.get(key) if pipe is not None else None
                 if moved:  # лабу перенесли под номер из методички — её страница ждёт конца работы по новому ключу
                     self.bus.publish(f"{key.rsplit('/', 1)[0]}/{moved}", "", "idle")
 

@@ -167,7 +167,7 @@ def test_preview_from_other_computer_offers_rerender(client, tmp_path):
     st.status = "rendered"
     ctx.store.save_lab(st)
     page = client.get(lab + "?tab=report").text
-    assert "на другом компьютере" in page and "/page/1" not in page
+    assert "Документ нужно пересобрать" in page and "/page/1" not in page
     assert "Скачать .docx" not in page and "Word на том компьютере" not in page
 
 
@@ -225,7 +225,9 @@ def test_screenshot_does_not_block_the_server(tmp_home, tmp_path):
 
     ctx.pipeline.attach_screenshot = slow_attach
     t0 = time.monotonic()
-    r = client.post(lab + "/screenshot/1/2", content=b"png", headers={"Content-Type": "image/png"})
+    buf = io.BytesIO()
+    Image.new("RGB", (400, 300), "white").save(buf, format="PNG")
+    r = client.post(lab + "/screenshot/1/2", content=buf.getvalue(), headers={"Content-Type": "image/png"})
     elapsed = time.monotonic() - t0
     release.set()
     assert r.status_code == 200 and elapsed < 2

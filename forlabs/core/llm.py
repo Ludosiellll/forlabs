@@ -12,6 +12,7 @@ from typing import Any, Callable, Literal, TypeVar
 import httpx
 from pydantic import BaseModel, ValidationError
 
+from forlabs.core.netcert import CERT_MESSAGE, is_cert_error
 from forlabs.core.settings import MODEL_FALLBACKS, Settings
 
 T = TypeVar("T", bound=BaseModel)
@@ -35,6 +36,20 @@ _ACCESS = {
 }
 
 
+DEFAULT_MAX_TOKENS = 8000  # предел ответа: ни один вызов не растянется дольше лимита прокси (~150 с)
+TIMEOUT_MESSAGE = ("Модель не ответила за 2,5 минуты — сервер модели перегружен. Подожди пару минут и нажми ещё раз "
+                   "(написанное сохранено).")
+RATE_LIMIT_MESSAGE = "Сервер модели просит подождать: слишком много запросов подряд. Подожди минуту и нажми ещё раз."
+MAX_RETRY_AFTER = 60.0
+
+
+def _retry_after(value: str | None) -> float | None:
+    try:
+        return max(0.0, float(value)) if value else None
+    except ValueError:  # дата вместо секунд — обычная пауза
+        return None
+
+
 def _minsk_date(iso: str) -> str:
     """Дата окончания подписки так же, как в шапке приложения: по Минску (UTC+3)."""
     from datetime import datetime, timedelta, timezone
@@ -49,10 +64,13 @@ def _minsk_date(iso: str) -> str:
 
 
 class LLMError(Exception):
-    def __init__(self, kind: Kind, detail: str = "", message_ru: str | None = None, retryable: bool = False):
+    def __init__(self, kind: Kind, detail: str = "", message_ru: str | None = None, retryable: bool = False,
+                 retry_after: float | None = None):
         self.kind = kind
         self.detail = detail
         self.retryable = retryable  # временный сбой: сеть, перегрузка сервера, частые запросы
+        self.retry_after = retry_after  # сколько секунд просит подождать сервер (заголовок Retry-After)
+        self.unauthorized = False  # прокси не принял вход: можно обновить вход и повторить один раз
         self.message_ru = message_ru or _MESSAGES[kind]
         super().__init__(f"{self.message_ru} ({detail})" if detail else self.message_ru)
 
@@ -78,7 +96,11 @@ class UsageCounter:
 
 def _extract_json(text: str) -> Any:
     text = text.strip()
-    fence = re.search(r"```(?:json)?\s*(.+?)```", text, re.S)
+    try:  # сначала как есть: ``` внутри строки (листинг) — не обёртка
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    fence = re.match(r"```(?:json)?\s*(.+?)```\s*$", text, re.S)
     if fence:
         text = fence.group(1).strip()
     try:
@@ -94,6 +116,7 @@ def _extract_json(text: str) -> Any:
 
 class LLM:
     accepts_lab_tag = False  # True только для прокси ForLabs в облаке
+    on_unauthorized: "Callable[[], object] | None" = None  # облако: обновить вход при 401 (сбитые часы)
     def __init__(self, settings: Settings, api_key: "str | Callable[[], str]", http_client: httpx.Client | None = None,
                  base_url: str | None = None, timeout: float = 240.0,
                  retry_delays: tuple[float, ...] = (3.0, 10.0)):
@@ -122,19 +145,29 @@ class LLM:
 
     def _post_retrying(self, payload: dict) -> dict:
         """Запрос с повторами при временных сбоях; ключ, лимит и баланс не повторяются."""
-        for attempt in range(len(self.retry_delays) + 1):
+        attempt, refreshed = 0, False
+        while True:
             try:
                 return self._post_once(payload)
             except LLMError as e:
-                if not e.retryable or attempt == len(self.retry_delays):
+                if e.unauthorized and self.on_unauthorized is not None and not refreshed:
+                    refreshed = True
+                    try:
+                        self.on_unauthorized()
+                    except Exception:
+                        raise e from None
+                    continue
+                if not e.retryable or attempt >= len(self.retry_delays):
                     raise
-                time.sleep(self.retry_delays[attempt])
-        raise AssertionError("недостижимо")
+                time.sleep(max(self.retry_delays[attempt], min(e.retry_after or 0, MAX_RETRY_AFTER)))
+                attempt += 1
 
     def _post_once(self, payload: dict) -> dict:
         try:
             key = self.api_key() if callable(self.api_key) else self.api_key
         except Exception as e:  # обновление токена облака не удалось
+            if getattr(e, "offline", False):  # обрыв связи в момент обновления входа — повторяемо
+                raise LLMError("network", str(e), getattr(e, "message_ru", None), retryable=True) from e
             raise LLMError("access", str(e), getattr(e, "message_ru", None) or
                            "Не удалось получить доступ к модели. Войди в аккаунт заново.") from e
         try:
@@ -142,6 +175,8 @@ class LLM:
                                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json",
                                         **self.extra_headers})
         except (httpx.TransportError, httpx.TimeoutException) as e:
+            if is_cert_error(e):  # сам не пройдёт — повторять бессмысленно
+                raise LLMError("network", str(e), CERT_MESSAGE) from e
             raise LLMError("network", str(e), retryable=True) from e
         if r.status_code >= 400:
             detail = r.text[:300]
@@ -152,14 +187,25 @@ class LLM:
                                                  "администратору, чтобы он её продлил.")
             for needle, msg in _ACCESS.items():
                 if needle in low:
-                    raise LLMError("access", detail, msg)
+                    err = LLMError("access", detail, msg)
+                    err.unauthorized = needle == "not signed in"
+                    raise err
+            if r.status_code in (400, 413) and any(w in low for w in ("context length", "maximum context",
+                                                                     "too many tokens", "too long", "token limit")):
+                raise LLMError("bad_response", detail, "Методичка слишком большая для модели — оставь в файле только "
+                                                       "страницы своей лабы.")
             if r.status_code == 401:
                 raise LLMError("auth", detail)
             if r.status_code == 403:
                 raise LLMError("model" if "model" in low else "auth", detail)
             if r.status_code in (402, 429) or "balance" in low or "quota" in low:
-                rate_limited = r.status_code == 429 and not ("balance" in low or "quota" in low)
-                raise LLMError("quota", detail, retryable=rate_limited)
+                if r.status_code == 429 and not ("balance" in low or "quota" in low):  # просто часто — не баланс
+                    raise LLMError("quota", detail, RATE_LIMIT_MESSAGE, retryable=True,
+                                   retry_after=_retry_after(r.headers.get("retry-after")))
+                raise LLMError("quota", detail)
+            if r.status_code in (504, 546) or "provider timeout" in low or "worker_limit" in low:
+                # прокси оборвал долгий запрос по времени: повтор того же запроса оборвётся так же и снова оплатится
+                raise LLMError("network", f"сервер ответил {r.status_code}: {detail}", TIMEOUT_MESSAGE)
             if r.status_code >= 500:
                 raise LLMError("network", f"сервер ответил {r.status_code}: {detail}", retryable=True)
             raise LLMError("bad_response", f"{r.status_code}: {detail}")
@@ -188,15 +234,21 @@ class LLM:
             payload["response_format"] = {"type": "json_object"}
         data = self._post(payload)
         try:
-            return data["choices"][0]["message"]["content"] or ""
+            choice = data["choices"][0]
+            content = choice["message"]["content"] or ""
         except (KeyError, IndexError, TypeError) as e:
             raise LLMError("bad_response", str(data)[:200]) from e
+        if choice.get("finish_reason") == "length":  # обрезан по длине: «чинить» формат бессмысленно и платно
+            raise LLMError("bad_response", "finish_reason=length",
+                           "Ответ модели не поместился в лимит длины — попробуй ещё раз или раздели задание на части.")
+        return content
 
-    def json(self, messages: list[dict], schema: type[T], repairs: int = 3, temperature: float | None = None) -> T:
+    def json(self, messages: list[dict], schema: type[T], repairs: int = 3, temperature: float | None = None,
+             max_tokens: int = DEFAULT_MAX_TOKENS) -> T:
         msgs = list(messages)
         last_error = ""
         for _ in range(repairs + 1):
-            text = self.chat(msgs, temperature=temperature, json_mode=True)
+            text = self.chat(msgs, temperature=temperature, json_mode=True, max_tokens=max_tokens)
             try:
                 return schema.model_validate(_extract_json(text))
             except (json.JSONDecodeError, ValidationError, ValueError) as e:
@@ -223,6 +275,7 @@ class FakeLLM:
         self.model = "fake"
         self.headers: dict[str, str] = {}
         self.accepts_lab_tag = True
+        self.max_tokens: list[int | None] = []
 
     def with_headers(self, extra: dict[str, str]) -> "FakeLLM":
         self.headers = {**self.headers, **extra}
@@ -241,7 +294,8 @@ class FakeLLM:
         r = self._next(messages)
         return r if isinstance(r, str) else json.dumps(r, ensure_ascii=False)
 
-    def json(self, messages, schema, repairs=3, temperature=None):
+    def json(self, messages, schema, repairs=3, temperature=None, max_tokens=DEFAULT_MAX_TOKENS):
+        self.max_tokens.append(max_tokens)
         r = self._next(messages)
         return schema.model_validate(r if not isinstance(r, str) else _extract_json(r))
 

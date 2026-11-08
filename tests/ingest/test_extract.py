@@ -7,6 +7,7 @@ from PIL import Image
 
 from forlabs.ingest.extract import extract_text, normalize
 
+
 def _cyrillic_font():
     from pathlib import Path
     for c in ["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",

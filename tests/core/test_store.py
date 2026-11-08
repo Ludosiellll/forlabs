@@ -1,6 +1,6 @@
 from forlabs.core.models import Enrollment, LabSpec, LabState, Profile, ReportDoc, Task
 from forlabs.core.store import Store
-from forlabs.core.subjects import SUBJECTS, all_subjects, add_custom_subject, Subject
+from forlabs.core.subjects import SUBJECTS, Subject, add_custom_subject, all_subjects
 
 
 def make_profile() -> Profile:

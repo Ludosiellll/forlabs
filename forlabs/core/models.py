@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated, Literal, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 Gender = Literal["m", "f"]
 HeaderStyle = Literal["long", "short"]
@@ -188,6 +188,8 @@ class LabState(BaseModel):
     findings: list[Finding] = Field(default_factory=list)
     accepted_rules: list[str] = Field(default_factory=list)
     docx_path: str | None = None
+    docx_sha: str | None = None  # отпечаток report.docx последней удачной вёрстки; None — документ устарел
+    render_inputs: str | None = None  # отпечаток профиля на момент вёрстки
     pdf_path: str | None = None
     pages: list[str] = Field(default_factory=list)
     engine: str | None = None
@@ -199,6 +201,28 @@ class LabState(BaseModel):
     wishes: str = ""  # пожелания, введённые при создании (до разбора)
     wish_images: list[str] = Field(default_factory=list)  # фото к пожеланиям
     wish_images_text: str = ""  # что модель прочитала с этих фото
+    rev: int = 0  # номер записи в облаке: запись с другого компьютера не затирается молча
+    write_id: str = ""  # метка последней записи: повтор после обрыва узнаёт свою же запись
+    lease_machine: str | None = None  # какой компьютер сейчас выполняет лабу
+    lease_until: str | None = None  # до какого времени (UTC) это считается правдой
+    pending_uploads: list[str] = Field(default_factory=list)  # файлы, не ушедшие в облако из-за обрыва
+    _offline_copy: bool = PrivateAttr(default=False)  # прочитана из копии без связи — только смотреть
+    _attempted: str | None = PrivateAttr(default=None)  # write_id записи, ответ на которую потерялся
+
+
+class LabSummary(BaseModel):
+    """Строка списка лаб на главной: без отчёта, версий и методички."""
+    profile_id: str
+    subject_id: str
+    number: str
+    status: str
+    updated_at: str = ""
+    topic: str | None = None
+
+
+def summarize(st: "LabState") -> LabSummary:
+    return LabSummary(profile_id=st.profile_id, subject_id=st.subject_id, number=st.number, status=st.status,
+                      updated_at=st.updated_at, topic=st.spec.topic if st.spec else None)
 
 
 def push_version(st: "LabState", label: str) -> int:

@@ -8,6 +8,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 from forlabs.core import paths
+from forlabs.core.fs import atomic_write_text, quarantine
 
 SubjectKind = Literal["theory", "code", "1c", "network"]
 
@@ -43,8 +44,12 @@ def custom_subjects() -> dict[str, Subject]:
     f = _custom_file()
     if not f.exists():
         return {}
-    data = json.loads(f.read_text(encoding="utf-8"))
-    return {d["id"]: Subject.model_validate(d) for d in data}
+    try:
+        data = json.loads(f.read_text(encoding="utf-8"))
+        return {d["id"]: Subject.model_validate(d) for d in data}
+    except (ValueError, TypeError, KeyError, UnicodeDecodeError) as e:  # обрезан — свои предметы придут из облака
+        quarantine(f, str(e)[:120])
+        return {}
 
 
 def all_subjects() -> dict[str, Subject]:
@@ -53,11 +58,11 @@ def all_subjects() -> dict[str, Subject]:
 
 def add_custom_subject(subject: Subject) -> None:
     items = custom_subjects()
+    if items.get(subject.id) == subject:
+        return  # не переписываем файл без нужды (синхронизация с облаком на каждом открытии главной)
     items[subject.id] = subject
-    f = _custom_file()
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps([s.model_dump() for s in items.values()], ensure_ascii=False, indent=2),
-                 encoding="utf-8")
+    atomic_write_text(_custom_file(), json.dumps([s.model_dump() for s in items.values()], ensure_ascii=False,
+                                                 indent=2))
 
 
 def get_subject(subject_id: str) -> Subject:

@@ -10,15 +10,15 @@ import pymupdf
 def pdf_to_pngs(pdf: Path, outdir: Path, zoom: float = 1.5) -> list[Path]:
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
-    for old in outdir.glob("page-*.png"):
-        old.unlink()
     out = []
-    with pymupdf.open(pdf) as doc:
+    with pymupdf.open(pdf) as doc:  # старые страницы остаются, пока новые не готовы
         for i, page in enumerate(doc, start=1):
             pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), alpha=False)
             path = outdir / f"page-{i:03d}.png"
             pix.save(path)
             out.append(path)
+    for old in set(outdir.glob("page-*.png")) - set(out):
+        old.unlink(missing_ok=True)
     return out
 
 

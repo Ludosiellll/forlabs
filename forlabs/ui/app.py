@@ -4,29 +4,65 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import os
+import re
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
-from starlette.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from forlabs.cloud.auth import CloudError
+from forlabs.core.fs import os_error_text
 from forlabs.core.llm import LLMError
-from forlabs.core.models import Enrollment, LabSpec, Profile, Task, finding_key, is_accepted
-from forlabs.core.settings import API_PRESETS, MODEL_CHOICES, Settings, get_api_key, save_settings, set_api_key
+from forlabs.core.models import (
+    Enrollment,
+    LabSpec,
+    Profile,
+    Task,
+    finding_key,
+    is_accepted,
+)
+from forlabs.core.settings import (
+    API_PRESETS,
+    MODEL_CHOICES,
+    Settings,
+    get_api_key,
+    save_settings,
+    set_api_key,
+)
+from forlabs.core.store import safe_file_name, safe_name
 from forlabs.core.subjects import Subject, all_subjects, get_subject
-from forlabs.pipeline.images import MAX_IMAGES, prepare_image
-from forlabs.pipeline.run import PipelineError, lab_complete, today
+from forlabs.pipeline.images import MAX_IMAGES, normalize_screenshot, prepare_image
+from forlabs.pipeline.run import (
+    PipelineError,
+    docx_fresh,
+    lab_complete,
+    output_root,
+    running_elsewhere,
+    today,
+)
 from forlabs.render import libreoffice, word_com
 from forlabs.report.derive import numbered_blocks
 from forlabs.report.morph import goal_to_conclusion
-from forlabs.ui.admin_routes import access_text, ago, date_ru, labs_estimate, register_admin
+from forlabs.ui.admin_routes import (
+    access_text,
+    ago,
+    date_ru,
+    labs_estimate,
+    register_admin,
+)
 from forlabs.ui.charts import fmt_tokens
 from forlabs.ui.context import AppContext, slug
 
@@ -38,6 +74,14 @@ STATUS_RU = {"draft": "Черновик", "parsed": "Проверь разбор
              "final": "Сдана", "failed": "Ошибка"}
 STEPS = [("parse", "Разбор методички"), ("write", "Текст отчёта"), ("check", "Проверка"), ("render", "Вёрстка"),
          ("finalize", "Доводка и предпросмотр")]
+
+
+EVENT_WAITERS = __import__("concurrent.futures").futures.ThreadPoolExecutor(max_workers=32,
+                                                                            thread_name_prefix="events")
+MAX_UPLOAD = 50_000_000  # байт на файл методички или фото
+ELSEWHERE = ("Эта лаба сейчас выполняется на другом компьютере. Дождись окончания там (или 15 минут, если тот "
+             "компьютер выключили) и обнови страницу.")
+BUSY_MESSAGE = "Сейчас идёт работа над лабой — дождись её окончания, потом меняй настройки или выходи."
 
 
 def _q(s: str) -> str:
@@ -56,12 +100,18 @@ def _same_origin(request: Request) -> bool:
     return urlparse(source).netloc == request.headers.get("host", "")
 
 
-def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = None) -> FastAPI:
+def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = None,
+               token: str | None = None) -> FastAPI:
+    """token — ключ этого запуска: без него (cookie или заголовок) сервер не отвечает. Порт 127.0.0.1 общий для
+    всех пользователей Windows — без ключа второй пользователь компьютера открыл бы чужие лабы."""
     ctx = ctx or AppContext()
     app = FastAPI(title="ForLabs", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.ctx = ctx
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
     tpl = Jinja2Templates(directory=HERE / "templates")
+    from forlabs.pipeline.memory import teacher_key
+
+    tpl.env.filters["teacher_key"] = teacher_key
     tpl.env.globals.update(STATUS_RU=STATUS_RU, q=_q, finding_key=finding_key, date_ru=date_ru, ago=ago,
                            fmt_tokens=fmt_tokens, access_text=access_text, labs_estimate=labs_estimate)
 
@@ -94,22 +144,71 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
     def busy_lab(p: str, s: str, n: str) -> bool:
         return f"{p}/{s}/{n}" in ctx.running
 
+    # Порядок: последний добавленный работает первым — имя хоста → ключ запуска → чужой сайт → вход.
+    @app.middleware("http")
+    async def require_login(request: Request, call_next):
+        path = request.url.path
+        open_paths = ("/login", "/register", "/static", "/settings", "/health", "/focus")
+        if ctx.cloud and not ctx.auth.session and not path.startswith(open_paths):
+            return RedirectResponse("/login", status_code=303)
+        return await call_next(request)
+
+    @app.middleware("http")
+    async def owner_only(request: Request, call_next):
+        if token is None or request.url.path == "/health" or request.url.path.startswith("/static/"):
+            return await call_next(request)
+        import secrets
+        from urllib.parse import urlencode
+
+        def same(v: str | None) -> bool:
+            return bool(v) and secrets.compare_digest(v.encode(), token.encode())
+
+        if same(request.query_params.get("t")):  # адрес окна с ключом → cookie, дальше адрес без ключа
+            rest = [(k, v) for k, v in request.query_params.multi_items() if k != "t"]
+            resp = RedirectResponse(request.url.path + ("?" + urlencode(rest) if rest else ""), status_code=303)
+            resp.set_cookie("forlabs_token", token, httponly=True, samesite="strict")
+            return resp
+        if same(request.cookies.get("forlabs_token")) or same(request.headers.get("x-forlabs-token")):
+            return await call_next(request)
+        return HTMLResponse("<p>Эта копия ForLabs запущена другим пользователем компьютера или ссылка устарела. "
+                            "Открой ForLabs своим ярлыком.</p>", status_code=403)
+
     @app.middleware("http")
     async def same_origin_only(request: Request, call_next):
         if request.method not in ("GET", "HEAD", "OPTIONS") and not _same_origin(request):
             return HTMLResponse("Запрос пришёл с другого сайта и отклонён.", status_code=403)
-        return await call_next(request)
+        response = await call_next(request)
+        # чужой сайт не встроит ForLabs во фрейм, чтобы подсунуть клик по кнопке (кликджекинг)
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Content-Security-Policy"] = "frame-ancestors 'none'"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
 
     # Последним добавлен — значит, срабатывает первым: чужое имя хоста (DNS rebinding) отсекается сразу.
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts or LOCAL_HOSTS)
 
-    @app.middleware("http")
-    async def require_login(request: Request, call_next):
-        path = request.url.path
-        open_paths = ("/login", "/register", "/static", "/settings")
-        if ctx.cloud and not ctx.auth.session and not path.startswith(open_paths):
-            return RedirectResponse("/login", status_code=303)
-        return await call_next(request)
+    @app.post("/focus")
+    def focus():
+        """Второй запуск ForLabs просит вывести окно этого вперёд (ключ — в заголовке)."""
+        f = getattr(ctx, "focus", None)
+        if callable(f):
+            f()
+        return {"ok": True}
+
+    @app.get("/health")
+    def health():
+        return {"app": "forlabs"}
+
+    @app.exception_handler(Exception)
+    async def unexpected_error(request: Request, exc: Exception):
+        import logging
+
+        logging.getLogger("forlabs").error("Ошибка на %s %s", request.method, request.url.path, exc_info=exc)
+        text = os_error_text(exc) if isinstance(exc, OSError) else (str(exc) or type(exc).__name__)
+        response = render(request, "error.html", message="Что-то пошло не так. Подробности записаны в журнал "
+                                                         "forlabs.log в папке данных.", detail=text[:300])
+        response.status_code = 500
+        return response
 
     @app.exception_handler(CloudError)
     async def cloud_error(request: Request, exc: CloudError):
@@ -141,7 +240,14 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         return redirect("/" if ctx.auth.session else "/login", msg=msg)
 
     @app.post("/logout")
-    def logout():
+    def logout(wipe: str = Form("")):
+        if ctx.running:
+            return redirect("/", err=BUSY_MESSAGE)
+        if wipe and ctx.cloud and hasattr(ctx.store, "wipe_local"):
+            try:
+                ctx.store.wipe_local()  # общий компьютер: копию своих лаб не оставлять
+            except CloudError as e:
+                return redirect("/", err=e.message_ru)
         ctx.auth.sign_out()
         ctx.reset()
         return redirect("/login")
@@ -151,7 +257,12 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
     def home(request: Request, profile: str | None = None, subject: str | None = None):
         member = None
         if ctx.cloud:
-            member = ctx.store.member()
+            try:
+                member = ctx.store.member()
+            except CloudError as e:
+                if not e.offline:
+                    raise
+                member = None  # без связи: главная из копии на этом компьютере
             if member and not member.approved:
                 return render(request, "pending.html", member=member)
             try:
@@ -164,11 +275,11 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         current = next((p for p in profiles if p.id == profile), profiles[0])
         enrolled = [e.subject_id for e in current.enrollments if e.subject_id in all_subjects()]
         subject_id = subject if subject in all_subjects() else (enrolled[0] if enrolled else next(iter(all_subjects())))
-        labs = ctx.store.list_labs(current.id, subject_id)
+        labs = ctx.store.list_lab_summaries(current.id, subject_id)
         counts = {}
         for sid in enrolled:
             try:
-                counts[sid] = len(ctx.store.list_labs(current.id, sid)) if sid != subject_id else len(labs)
+                counts[sid] = len(ctx.store.list_lab_summaries(current.id, sid)) if sid != subject_id else len(labs)
             except Exception:
                 counts[sid] = 0
         return render(request, "home.html", profiles=profiles, current=current, subject_id=subject_id,
@@ -238,7 +349,10 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
     @app.post("/subjects/add")
     def subject_add(name: str = Form(...), short_name: str = Form(...), kind: str = Form("theory"),
                     header_style: str = Form("long"), variant: int = Form(14)):
-        sid = slug(short_name)
+        sid, k = slug(short_name), 2
+        base = sid
+        while sid in {getattr(x, 'id', x) for x in all_subjects()}:  # не заменять предмет с тем же сокращением
+            sid, k = f"{base}-{k}", k + 1
         ctx.add_subject(Subject(id=sid, name=name.strip(), short_name=short_name.strip(),
                                    kind=kind if kind in ("theory", "code", "1c", "network") else "theory",
                                    default_header_style="short" if header_style == "short" else "long",
@@ -252,13 +366,27 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         if not profiles:
             return redirect("/profiles/new", err="Сначала создай профиль")
         return render(request, "lab_new.html", profiles=profiles, profile_id=profile or profiles[0].id,
-                      subject_id=subject, nav="home")
+                      subject_id=subject, nav="home", form_token=uuid.uuid4().hex)
 
     @app.post("/labs/new")
     async def lab_new(profile_id: str = Form(...), subject_id: str = Form(...), number: str = Form(""),
                       text: str = Form(""), wishes: str = Form(""), files: list[UploadFile] | None = File(None),
-                      wish_images: list[UploadFile] | None = File(None)):
+                      wish_images: list[UploadFile] | None = File(None), form_token: str = Form("")):
+        if form_token:  # двойной клик или повторная отправка формы — одна лаба
+            with ctx._lock:
+                done = ctx.form_tokens.get(form_token)
+                if done is None:
+                    ctx.form_tokens[form_token] = "pending"
+            if done == "pending":
+                return redirect("/", msg="Лаба уже создаётся — она появится в списке")
+            if done:
+                return RedirectResponse(done, status_code=303)
         data = []
+        back = f"/labs/new?profile={_q(profile_id)}&subject={_q(subject_id)}"
+        for uf in [*(files or []), *(wish_images or [])]:
+            if uf.filename and (uf.size or 0) > MAX_UPLOAD:
+                return redirect(back, err=f"Файл «{uf.filename}» больше {MAX_UPLOAD // 1_000_000} МБ — оставь только "
+                                          "страницы своей лабы или сожми его.")
         for uf in files or []:
             if uf.filename:
                 data.append((uf.filename, await uf.read()))
@@ -270,8 +398,12 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
             st = await asyncio.to_thread(ctx.pipeline.create_lab, profile_id, subject_id, data,
                                          number=number.strip() or None, pasted_text=text, wishes=wishes,
                                          wish_images=photos)
-        except PipelineError as e:
-            return redirect(f"/labs/new?profile={_q(profile_id)}&subject={_q(subject_id)}", err=str(e))
+        except Exception as e:  # лаба не создана — форму можно отправить снова
+            if form_token:
+                ctx.form_tokens.pop(form_token, None)
+            if isinstance(e, PipelineError):
+                return redirect(back, err=str(e))
+            raise
         key = ctx.pipeline.key(st)
         result = {}
 
@@ -280,11 +412,16 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
 
         ctx.run(key, job)
         final = result.get("st", st)
-        return redirect(lab_url(profile_id, subject_id, final.number))
+        url = lab_url(profile_id, subject_id, final.number)
+        if form_token:
+            ctx.form_tokens[form_token] = url
+        return redirect(url)
 
     # лаба
-    def load(p: str, s: str, n: str):
-        st = ctx.store.load_lab(p, s, n)
+    def load(p: str, s: str, n: str, strict: bool = True):
+        """strict — для действий: без связи с облаком не работать с копией на компьютере (её можно только смотреть),
+        иначе после возврата связи она перезапишет лабу, изменённую на другом компьютере."""
+        st = ctx.store.load_lab(p, s, n, strict=strict)
         if st is None:
             raise CloudError("Лаба не найдена")
         return st
@@ -337,10 +474,12 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
             teacher_rules = ctx.memory().teacher_list(p, s)
         except Exception:
             teacher_rules = []
-        preview_here = bool(st.pages) and all(Path(x).exists() for x in st.pages)
-        docx_here = bool(st.docx_path) and Path(st.docx_path).exists()
+        fresh = docx_fresh(st, ctx.store.lab_dir(p, s, n))  # документ — от последней удачной вёрстки этой лабы
+        preview_here = fresh and bool(st.pages) and all(Path(x).exists() for x in st.pages)
+        docx_here = fresh
         return render(request, "lab.html", st=st, profile=profile, subject=get_subject(s), busy=busy,
                       preview_here=preview_here, docx_here=docx_here, teacher_rules=teacher_rules,
+                      elsewhere=running_elsewhere(st),
                       complete=lab_complete(st),
                       events=events, journal=journal, slot_items=slot_items, errors=errors, tab=tab, steps=STEPS,
                       step_state=step_state, conclusion=conclusion, conclusion_note=conclusion_note,
@@ -375,22 +514,28 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         return redirect(lab_url(p, s, n), msg="Разбор сохранён")
 
     @app.post("/labs/{p}/{s}/{n}/execute")
-    def lab_execute(p: str, s: str, n: str):
+    def lab_execute(p: str, s: str, n: str, full: str = Form("")):
         st = load(p, s, n)
+        if running_elsewhere(st):
+            return redirect(lab_url(p, s, n), err=ELSEWHERE)
         if st.status in ("parsed",):
             st = ctx.pipeline.confirm(st, None)
-        ctx.run(ctx.pipeline.key(st), ctx.pipeline.execute, st)
+        ctx.run(ctx.pipeline.key(st), ctx.pipeline.execute, st, full=bool(full))
         return redirect(lab_url(p, s, n))
 
     @app.post("/labs/{p}/{s}/{n}/reparse")
     def lab_reparse(p: str, s: str, n: str):
         st = load(p, s, n)
+        if running_elsewhere(st):
+            return redirect(lab_url(p, s, n), err=ELSEWHERE)
         ctx.run(ctx.pipeline.key(st), ctx.pipeline.parse, st, st.spec.date if st.spec else today())
         return redirect(lab_url(p, s, n))
 
     @app.post("/labs/{p}/{s}/{n}/redo/{t}")
     def lab_redo(p: str, s: str, n: str, t: int):
         st = load(p, s, n)
+        if running_elsewhere(st):
+            return redirect(lab_url(p, s, n), err=ELSEWHERE)
         ctx.run(ctx.pipeline.key(st), ctx.pipeline.redo_task, st, t)
         return redirect(lab_url(p, s, n))
 
@@ -435,9 +580,9 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
             return JSONResponse({"error": "нет такого фото"}, status_code=404)
         return FileResponse(f, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})
 
-    @app.post("/labs/{p}/{s}/{n}/teacher/remove/{index}")
-    def lab_teacher_remove(p: str, s: str, n: str, index: int):
-        ctx.memory().remove_teacher(p, s, index)
+    @app.post("/labs/{p}/{s}/{n}/teacher/remove/{key}")
+    def lab_teacher_remove(p: str, s: str, n: str, key: str):
+        ctx.memory().remove_teacher(p, s, key)  # по тексту, а не по номеру: двойной клик не убирает соседнее
         return redirect(lab_url(p, s, n) + "?tab=report", msg="Требование убрано")
 
     @app.post("/labs/{p}/{s}/{n}/chat/revert/{vid}")
@@ -453,6 +598,8 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
     @app.post("/labs/{p}/{s}/{n}/rerender")
     def lab_rerender(p: str, s: str, n: str):
         st = load(p, s, n)
+        if running_elsewhere(st):
+            return redirect(lab_url(p, s, n), err=ELSEWHERE)
         ctx.run(ctx.pipeline.key(st), ctx.pipeline.render, st)
         return redirect(lab_url(p, s, n))
 
@@ -460,7 +607,10 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
     async def lab_screenshot(request: Request, p: str, s: str, n: str, sec: int, blk: int):
         if busy_lab(p, s, n):
             return JSONResponse({"error": BUSY}, status_code=409)
-        st = await asyncio.to_thread(load, p, s, n)
+        try:
+            st = await asyncio.to_thread(load, p, s, n)
+        except CloudError as e:  # ответ читает app.js: нужна причина в JSON, а не страница ошибки
+            return JSONResponse({"error": e.message_ru}, status_code=503 if e.offline else 400)
         ctype = request.headers.get("content-type", "")
         if ctype.startswith("multipart/"):
             form = await request.form()
@@ -475,6 +625,10 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         suffix = ".jpg" if (name.lower().endswith((".jpg", ".jpeg")) or "jpeg" in ctype) else ".png"
         if not any(sn == sec and bi == blk for sn, bi, _ in ctx.pipeline.slots(st)):
             return JSONResponse({"error": "Этого места для скриншота уже нет — обнови страницу"}, status_code=400)
+        try:
+            normalize_screenshot(data)  # проверка сразу: ошибка видна у места для снимка, а не в журнале
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
         key = ctx.pipeline.key(st)
         # вставка пересобирает документ (Word или LibreOffice) — это в фоне, сервер не замирает
         ctx.run(key, ctx.pipeline.attach_screenshot, st, sec, blk, data, suffix)
@@ -514,16 +668,18 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
 
     @app.get("/labs/{p}/{s}/{n}/docx")
     def lab_docx(p: str, s: str, n: str):
-        st = load(p, s, n)
-        if not st.docx_path or not Path(st.docx_path).exists():
-            raise CloudError("Документ ещё не свёрстан")
+        st = load(p, s, n, strict=False)
+        if not docx_fresh(st, ctx.store.lab_dir(p, s, n)):
+            return redirect(lab_url(p, s, n), err="Документ устарел или ещё не свёрстан — нажми «Пересобрать документ».")
         subj = get_subject(s)
         return FileResponse(st.docx_path, filename=f"ЛР{n}_{subj.short_name}.docx",
                             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
     @app.post("/labs/{p}/{s}/{n}/open")
     def lab_open(p: str, s: str, n: str, what: str = Form("docx")):
-        st = load(p, s, n)
+        st = load(p, s, n, strict=False)
+        if what == "docx" and not docx_fresh(st, ctx.store.lab_dir(p, s, n)):
+            return redirect(lab_url(p, s, n), err="Документ устарел или ещё не свёрстан — нажми «Пересобрать документ».")
         target = st.docx_path if what == "docx" else str(ctx.store.lab_dir(p, s, n))
         if target and Path(target).exists():
             _open_local(target)
@@ -531,14 +687,14 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
 
     @app.get("/labs/{p}/{s}/{n}/page/{i}")
     def lab_page_png(p: str, s: str, n: str, i: int):
-        st = load(p, s, n)
+        st = load(p, s, n, strict=False)
         if not (1 <= i <= len(st.pages)) or not Path(st.pages[i - 1]).exists():
             return JSONResponse({"error": "нет страницы"}, status_code=404)
         return FileResponse(st.pages[i - 1], media_type="image/png", headers={"Cache-Control": "no-store"})
 
     @app.get("/labs/{p}/{s}/{n}/state")
     def lab_state(p: str, s: str, n: str):
-        st = load(p, s, n)
+        st = load(p, s, n, strict=False)
         key = ctx.pipeline.key(st)
         return {"status": st.status, "busy": key in ctx.running, "pages": len(st.pages)}
 
@@ -548,10 +704,11 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
 
         async def gen():
             last = after
-            for _ in range(240):
+            for _ in range(800):  # ~40 минут по 3 с
                 if await request.is_disconnected():
                     break
-                evs = await asyncio.to_thread(ctx.bus.wait, key, last, 10.0)
+                # своё множество потоков: открытые страницы журнала не занимают общие потоки приложения
+                evs = await asyncio.get_running_loop().run_in_executor(EVENT_WAITERS, ctx.bus.wait, key, last, 3.0)
                 for e in evs:
                     last = e.seq
                     payload = {"seq": e.seq, "text": e.text, "kind": e.kind, "step": e.step,
@@ -580,17 +737,22 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         f = await request.form()
         pid, sid = f.get("profile_id"), f.get("subject_id")
         numbers = f.getlist("numbers")
-        out_dir = ctx.store.local.home if hasattr(ctx.store, "local") else ctx.store.home
-        out = Path(out_dir) / "semester" / f"{pid}_{sid}.docx"
+        back = f"/semester?profile={_q(pid)}&subject={_q(sid)}"
+        subj = get_subject(sid)
+        profile = await asyncio.to_thread(ctx.store.get_profile, pid)
+        if profile is None:
+            return redirect(back, err="Профиль не найден")
+        root = output_root(profile)
+        name = f"{subj.short_name}_{(profile.full_name.split() or ['отчёт'])[0]}_семестр.docx"
+        out = root / safe_name(subj.short_name) / safe_file_name(name)  # рядом со сданными лабами, путь виден
         try:
             path, rep = await asyncio.to_thread(ctx.pipeline.build_semester, pid, sid, numbers, out)
         except PipelineError as e:
-            return redirect(f"/semester?profile={_q(pid)}&subject={_q(sid)}", err=str(e))
-        subj = get_subject(sid)
-        profile = await asyncio.to_thread(ctx.store.get_profile, pid)
-        name = f"{subj.short_name}_{(profile.full_name.split() or ['отчёт'])[0]}_семестр.docx"
-        return FileResponse(path, filename=name,
-                            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+            return redirect(back, err=str(e))
+        except OSError as e:
+            return redirect(back, err=os_error_text(e))
+        notes = " ".join(getattr(rep, "warnings", None) or [])
+        return redirect(back, msg=f"Отчёт за семестр сохранён: {path}" + (f" ({notes})" if notes else ""))
 
     # правила
     @app.get("/rules", response_class=HTMLResponse)
@@ -633,6 +795,8 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
 
     @app.post("/settings")
     async def settings_save(request: Request):
+        if ctx.running:  # смена режима или модели посреди работы над лабой
+            return redirect("/settings", err=BUSY_MESSAGE)
         f = await request.form()
         data = ctx.settings.model_dump()
         for key in ("mode", "base_url", "model", "soffice_path", "tesseract_path", "browser_channel"):
@@ -643,6 +807,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         data["model"] = data.get("model") or Settings().model
         ctx.settings = Settings.model_validate(data)
         save_settings(ctx.settings)
+        ctx.notice = ""
         key = (f.get("api_key") or "").strip()
         if key and not set_api_key(key):
             os.environ["FORLABS_API_KEY"] = key
