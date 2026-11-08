@@ -152,7 +152,7 @@ def revise_section(spec: LabSpec, section: TaskSection, instruction: str, profil
             b = orig.model_copy(deep=True)
             if rb.retake and isinstance(b, Figure) and not is_diagram(b):
                 b.image_path = None
-                b.slot = f"Пересними после правки: {b.topic}"
+                b.slot = "Пересними после правки — поменялись код или результат."
                 retake.append(b.topic)
             out.append(b)
             continue
