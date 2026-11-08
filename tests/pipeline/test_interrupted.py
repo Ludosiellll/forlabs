@@ -70,3 +70,44 @@ def test_fail_does_not_raise_when_saving_fails(tmp_home, tmp_path):
     pipe.store.save_lab = offline
     st = pipe._fail(st, RuntimeError("что-то сломалось"))
     assert st.status == "failed"
+
+
+def _webp():
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (800, 500), (200, 220, 240)).save(buf, format="WEBP")
+    return buf.getvalue()
+
+
+def test_webp_screenshot_is_converted(tmp_home, tmp_path):
+    pipe, fake = setup(tmp_home, tmp_path, [RAW, SEC, SEC2, ANS])
+    st = pipe.create_lab("ivanov", "psip", [(FIXTURE.name, FIXTURE.read_bytes())], number="7")
+    st = pipe.execute(pipe.confirm(pipe.parse(st, date="24.09.2026"), None))
+    st = pipe.attach_screenshot(st, section=1, block=4, image=_webp(), suffix=".webp")
+    assert st.status == "rendered", st.error
+    assert st.report.sections[0].blocks[3].image_path.endswith(".png")
+
+
+def test_not_an_image_is_refused_and_slot_stays(tmp_home, tmp_path):
+    from forlabs.pipeline.run import PipelineError
+
+    pipe, fake = setup(tmp_home, tmp_path, [RAW, SEC, SEC2, ANS])
+    st = pipe.create_lab("ivanov", "psip", [(FIXTURE.name, FIXTURE.read_bytes())], number="7")
+    st = pipe.execute(pipe.confirm(pipe.parse(st, date="24.09.2026"), None))
+    with pytest.raises(PipelineError):
+        pipe.attach_screenshot(st, section=1, block=4, image=b"<html>not an image</html>")
+    assert pipe.slots(st)
+
+
+def test_broken_image_file_becomes_a_slot_again(tmp_home, tmp_path):
+    pipe, fake = setup(tmp_home, tmp_path, [RAW, SEC, SEC2, ANS])
+    st = pipe.create_lab("ivanov", "psip", [(FIXTURE.name, FIXTURE.read_bytes())], number="7")
+    st = pipe.execute(pipe.confirm(pipe.parse(st, date="24.09.2026"), None))
+    st = pipe.attach_screenshot(st, section=1, block=4, image=png_bytes())
+    (pipe.lab_dir(st) / st.report.sections[0].blocks[3].image_path).write_bytes(b"\x89PNG broken")
+    st = pipe.render(st)
+    assert st.status == "needs_manual", st.error
+    assert pipe.slots(st) and "вставь снимок ещё раз" in pipe.slots(st)[0][2].slot

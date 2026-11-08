@@ -19,7 +19,7 @@ from forlabs.core.subjects import get_subject
 from forlabs.ingest.extract import SourceText, extract_many
 from forlabs.pipeline.chat import plan_edit, revise_answers, revise_section
 from forlabs.pipeline.events import EventBus
-from forlabs.pipeline.images import MAX_IMAGES, describe_images, prepare_image
+from forlabs.pipeline.images import MAX_IMAGES, describe_images, image_ok, normalize_screenshot, prepare_image
 from forlabs.pipeline.repair import check_all, check_and_repair, report_text
 from forlabs.pipeline.write import refresh_derived, write_report
 from forlabs.render.docx_builder import build_lab, build_semester
@@ -158,6 +158,18 @@ class Pipeline:
                         continue
                 raise PipelineError(f"Нет файла рисунка «{b.topic}» ({b.image_path}) ни здесь, ни в облаке. "
                                     "Вставь его заново.")
+
+    def _drop_broken_images(self, st: LabState) -> None:
+        """Повреждённый или нечитаемый снимок не валит вёрстку: место для него возвращается в «Нужно от тебя»."""
+        d = self.lab_dir(st)
+        for sec in st.report.sections if st.report else []:
+            for b in sec.blocks:
+                if isinstance(b, Figure) and b.image_path:
+                    f = Path(b.image_path) if Path(b.image_path).is_absolute() else d / b.image_path
+                    if f.exists() and not image_ok(f):
+                        b.image_path = None
+                        b.slot = "Картинка повреждена или в неподходящем формате — вставь снимок ещё раз."
+                        self._emit(st, f"Рисунок «{b.topic}» не читается — вставь снимок ещё раз", "warn")
 
     def _fail(self, st: LabState, e: Exception) -> LabState:
         st.status = "failed"
@@ -529,6 +541,10 @@ class Pipeline:
         b = sec.blocks[block - 1]
         if not isinstance(b, Figure):
             raise PipelineError("Это не рисунок")
+        try:
+            image, suffix = normalize_screenshot(image)
+        except ValueError as e:
+            raise PipelineError(str(e)) from e
         rel = f"assets/fig_{section}_{block}_{uuid.uuid4().hex[:6]}{suffix}"  # новый файл: старые снимки целы
         f = self.lab_dir(st) / rel
         f.parent.mkdir(parents=True, exist_ok=True)
@@ -551,6 +567,7 @@ class Pipeline:
             self._emit(st, "Вёрстка по канону", step="render")
             d = self.lab_dir(st)
             self._fetch_missing(st)
+            self._drop_broken_images(st)
             docx = d / "report.docx"
             try:
                 build_lab(_absolute_images(st.report, d), docx, author=profile.doc_author or profile.full_name)

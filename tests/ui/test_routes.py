@@ -225,7 +225,9 @@ def test_screenshot_does_not_block_the_server(tmp_home, tmp_path):
 
     ctx.pipeline.attach_screenshot = slow_attach
     t0 = time.monotonic()
-    r = client.post(lab + "/screenshot/1/2", content=b"png", headers={"Content-Type": "image/png"})
+    buf = io.BytesIO()
+    Image.new("RGB", (400, 300), "white").save(buf, format="PNG")
+    r = client.post(lab + "/screenshot/1/2", content=buf.getvalue(), headers={"Content-Type": "image/png"})
     elapsed = time.monotonic() - t0
     release.set()
     assert r.status_code == 200 and elapsed < 2

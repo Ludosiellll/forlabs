@@ -21,7 +21,7 @@ from forlabs.core.llm import LLMError
 from forlabs.core.models import Enrollment, LabSpec, Profile, Task, finding_key, is_accepted
 from forlabs.core.settings import API_PRESETS, MODEL_CHOICES, Settings, get_api_key, save_settings, set_api_key
 from forlabs.core.subjects import Subject, all_subjects, get_subject
-from forlabs.pipeline.images import MAX_IMAGES, prepare_image
+from forlabs.pipeline.images import MAX_IMAGES, normalize_screenshot, prepare_image
 from forlabs.pipeline.run import PipelineError, lab_complete, today
 from forlabs.render import libreoffice, word_com
 from forlabs.report.derive import numbered_blocks
@@ -479,6 +479,10 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         suffix = ".jpg" if (name.lower().endswith((".jpg", ".jpeg")) or "jpeg" in ctype) else ".png"
         if not any(sn == sec and bi == blk for sn, bi, _ in ctx.pipeline.slots(st)):
             return JSONResponse({"error": "Этого места для скриншота уже нет — обнови страницу"}, status_code=400)
+        try:
+            normalize_screenshot(data)  # проверка сразу: ошибка видна у места для снимка, а не в журнале
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
         key = ctx.pipeline.key(st)
         # вставка пересобирает документ (Word или LibreOffice) — это в фоне, сервер не замирает
         ctx.run(key, ctx.pipeline.attach_screenshot, st, sec, blk, data, suffix)
