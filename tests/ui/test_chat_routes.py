@@ -95,3 +95,67 @@ def test_wishes_on_new_lab_and_spec_tab(tmp_home, tmp_path):
                                         "wishes": "Вариант 7, анимации на CSS"})
     st = ctx.store.load_lab("ivanov_ivan_petrovich", "psip", "7")
     assert st.spec.wishes == "Вариант 7, анимации на CSS"
+
+
+def _png(w=600, h=400):
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (w, h), (240, 240, 240)).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+@pytest.fixture
+def lab_photo(tmp_home, tmp_path):
+    fake = FakeLLM([RAW, SEC, "Фото 1: «Добавить анимацию меню», подпись преподавателя.", PLAN, REVISE])
+    ctx = AppContext(settings=Settings(mode="local"), llm_override=lambda: fake, prefer_word=False,
+                     render_diagrams=False, synchronous=True)
+    client = TestClient(create_app(ctx), base_url="http://127.0.0.1:8765")
+    make_profile(client, tmp_path)
+    r = client.post("/labs/new", data={"profile_id": "ivanov_ivan_petrovich", "subject_id": "psip", "number": "",
+                                       "text": ""},
+                    files={"files": (FIXTURE.name, FIXTURE.read_bytes(), "text/plain")}, follow_redirects=False)
+    url = r.headers["location"]
+    client.post(url + "/execute", follow_redirects=False)
+    return client, ctx, url
+
+
+def test_chat_photo_upload_and_thumbnail(lab_photo):
+    client, ctx, url = lab_photo
+    r = client.post(url + "/chat", data={"message": ""}, files={"images": ("note.png", _png(), "image/png")},
+                    follow_redirects=False)
+    assert "err=" not in r.headers["location"]
+    page = client.get(url + "?tab=report").text
+    st = ctx.store.load_lab("ivanov_ivan_petrovich", "psip", "7")
+    src = f"{url}/notes/chat_{st.chat[0].id}_1.jpg"
+    assert src in page and "Что прочитано с фото" in page and "подпись преподавателя" in page
+    img = client.get(src)
+    assert img.status_code == 200 and img.headers["content-type"] == "image/jpeg"
+    assert client.get(url + "/notes/../state.json").status_code == 404
+    assert client.get(url + "/notes/evil.jpg").status_code == 404
+
+
+def test_chat_bad_photo_refused(lab_photo):
+    client, ctx, url = lab_photo
+    r = client.post(url + "/chat", data={"message": "смотри"}, files={"images": ("x.png", b"nope", "image/png")},
+                    follow_redirects=False)
+    assert "err=" in r.headers["location"]
+    assert ctx.store.load_lab("ivanov_ivan_petrovich", "psip", "7").chat == []
+
+
+def test_new_lab_with_wish_photo(tmp_home, tmp_path):
+    fake = FakeLLM(["Фото 1: Вариант 7.", RAW])
+    ctx = AppContext(settings=Settings(mode="local"), llm_override=lambda: fake, prefer_word=False,
+                     render_diagrams=False, synchronous=True)
+    client = TestClient(create_app(ctx), base_url="http://127.0.0.1:8765")
+    make_profile(client, tmp_path)
+    assert 'name="wish_images"' in client.get("/labs/new").text
+    r = client.post("/labs/new", data={"profile_id": "ivanov_ivan_petrovich", "subject_id": "psip", "number": "",
+                                       "text": "", "wishes": ""},
+                    files=[("files", (FIXTURE.name, FIXTURE.read_bytes(), "text/plain")),
+                           ("wish_images", ("board.png", _png(), "image/png"))], follow_redirects=False)
+    url = r.headers["location"]
+    page = client.get(url + "?tab=spec").text
+    assert f"{url}/notes/wish_1.jpg" in page and "Вариант 7." in page

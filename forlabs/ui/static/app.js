@@ -143,3 +143,33 @@
     if (b) { b.disabled = true; b.textContent = "Отправляю…"; }
   });
 })();
+
+// фото: кнопка «Прикрепить фото» и вставка картинок из буфера (Ctrl+V) в поле текста
+(function () {
+  function picked(input) {
+    var out = document.querySelector('[data-images-picked="' + input.id + '"]');
+    if (!out) return;
+    var n = input.files ? input.files.length : 0;
+    out.textContent = n ? ("Фото: " + n + (n > 4 ? " — можно не больше 4" : "")) : "";
+  }
+  document.querySelectorAll("[data-images-input]").forEach(function (input) {
+    input.addEventListener("change", function () { picked(input); });
+  });
+  document.querySelectorAll("[data-paste-images]").forEach(function (area) {
+    var input = document.getElementById(area.getAttribute("data-paste-images"));
+    if (!input || typeof DataTransfer === "undefined") return;
+    area.addEventListener("paste", function (e) {
+      var items = (e.clipboardData && e.clipboardData.files) || [];
+      var images = Array.prototype.filter.call(items, function (f) { return /^image\//.test(f.type); });
+      if (!images.length) return;
+      e.preventDefault();
+      var dt = new DataTransfer();
+      Array.prototype.forEach.call(input.files || [], function (f) { dt.items.add(f); });
+      images.forEach(function (f, i) {
+        dt.items.add(new File([f], "фото-" + Date.now() + "-" + i + ".png", { type: f.type }));
+      });
+      input.files = dt.files;
+      picked(input);
+    });
+  });
+})();

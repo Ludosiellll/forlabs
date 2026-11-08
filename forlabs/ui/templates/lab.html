@@ -38,7 +38,9 @@
         {% for m in st.chat %}
           <div class="msg msg-{{ m.role }} k-{{ m.kind }}">
             <div class="who-said">{{ 'Ты' if m.role == 'user' else 'ForLabs' }}{% if m.role == 'user' and m.remember %} · запомнить{% endif %}</div>
-            <div class="txt">{{ m.text }}</div>
+            {% if m.text %}<div class="txt">{{ m.text }}</div>{% endif %}
+            {% if m.images %}<div class="thumbs">{% for img in m.images %}<a href="{{ base_url }}/{{ img }}" target="_blank" rel="noopener"><img src="{{ base_url }}/{{ img }}" alt="Фото к сообщению" loading="lazy"></a>{% endfor %}</div>{% endif %}
+            {% if m.image_text %}<details class="read"><summary>Что прочитано с фото</summary><div class="txt">{{ m.image_text }}</div></details>{% endif %}
             {% if m.role == 'assistant' and m.version in version_ids %}
             <form method="post" action="{{ base_url }}/chat/revert/{{ m.version }}">
               <button class="btn link small" type="submit" {{ 'disabled' if busy }}>{{ 'Отменить откат' if m.kind == 'revert' else 'Вернуть как было' }}</button></form>
@@ -48,9 +50,13 @@
           <p class="small muted">Напиши, что сказал преподаватель: «во втором задании добавить проверку ввода», «вывод подробнее», «вариант 7». Поменяю только нужное, проверю и пересоберу документ.</p>
         {% endfor %}
       </div>
-      <form method="post" action="{{ base_url }}/chat" class="chat-form" data-chat-form>
+      <form method="post" action="{{ base_url }}/chat" class="chat-form" data-chat-form enctype="multipart/form-data">
         <label class="visually-hidden" for="chat-msg">Что сказал преподаватель</label>
-        <textarea id="chat-msg" name="message" rows="3" maxlength="4000" placeholder="Что сказал преподаватель…" required {{ 'disabled' if busy }}></textarea>
+        <textarea id="chat-msg" name="message" rows="3" maxlength="4000" placeholder="Что сказал преподаватель… Фото можно вставить через Ctrl+V" data-paste-images="chat-images" {{ 'disabled' if busy }}></textarea>
+        <div class="row attach-row">
+          <label class="btn link small">Прикрепить фото<input id="chat-images" class="visually-hidden" type="file" name="images" accept="image/png,image/jpeg,image/webp" multiple data-images-input {{ 'disabled' if busy }}></label>
+          <span class="small muted" data-images-picked="chat-images"></span>
+        </div>
         <label class="check small"><input type="checkbox" name="remember" value="1" {{ 'disabled' if busy }}> Запомнить для следующих лаб по предмету</label>
         <div class="row"><button class="btn primary small" type="submit" {{ 'disabled' if busy }}>Отправить</button><span class="hint">Ctrl+Enter</span></div>
       </form>
@@ -154,7 +160,8 @@
           <div class="field"><label for="variant_text">Текст варианта из методички</label>
             <textarea id="variant_text" name="variant_text" rows="3">{{ st.spec.variant_text or '' }}</textarea></div>
           <div class="field"><label for="wishes">Пожелания и отклонения от методички</label>
-            <textarea id="wishes" name="wishes" rows="3" maxlength="4000" placeholder="Например: вариант мне дали 7; код на C# вместо Java">{{ st.spec.wishes or '' }}</textarea>
+            {% if st.wish_images %}<div class="thumbs">{% for img in st.wish_images %}<a href="{{ base_url }}/{{ img }}" target="_blank" rel="noopener"><img src="{{ base_url }}/{{ img }}" alt="Фото к пожеланиям" loading="lazy"></a>{% endfor %}</div>{% endif %}
+            <textarea id="wishes" name="wishes" rows="4" maxlength="4000" placeholder="Например: вариант мне дали 7; код на C# вместо Java">{{ st.spec.wishes or '' }}</textarea>
             <div class="hint">Учтутся при написании всех заданий — они важнее методички.</div></div>
           <div class="field"><label for="questions">Контрольные вопросы — по одному в строке</label>
             <textarea id="questions" name="questions" rows="{{ [st.spec.questions|length + 1, 3]|max }}">{% for qq in st.spec.questions %}{{ qq }}

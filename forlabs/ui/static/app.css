@@ -281,3 +281,8 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .redo { margin-top: 12px; }
 .redo summary { cursor: pointer; color: var(--muted); }
 .redo form { margin-top: 8px; }
+.thumbs { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.thumbs img { width: 64px; height: 64px; object-fit: cover; border-radius: 4px; border: 1px solid var(--line); display: block; }
+.msg details.read { margin-top: 4px; font-size: 12.5px; }
+.msg details.read summary { cursor: pointer; color: var(--muted); }
+.attach-row { margin: 4px 0 0 -6px; }

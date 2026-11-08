@@ -123,3 +123,39 @@ def test_wishes_reach_parse_write_and_chat(tmp_home, tmp_path):
     assert wishes in fake.calls[1][-1]["content"]  # написание задания
     pipe.chat(st, "почему так?")
     assert wishes in fake.calls[-1][-1]["content"]  # чат правок
+
+
+def test_wish_photo_is_read_before_parse(tmp_home, tmp_path):
+    from test_images import png
+    from test_run import setup as base_setup
+
+    pipe, fake = base_setup(tmp_home, tmp_path, ["Фото 1: Преподаватель: вариант 7, анимации только на CSS.", RAW])
+    st = pipe.create_lab("ivanov", "psip", [(FIXTURE.name, FIXTURE.read_bytes())], number="7",
+                         wishes="см. фото", wish_images=[("доска.png", png(800, 600))])
+    assert st.wish_images == ["notes/wish_1.jpg"]
+    st = pipe.parse(st, date="24.09.2026")
+    assert "вариант 7, анимации только на CSS" in st.spec.wishes and st.spec.wishes.startswith("см. фото")
+    assert "вариант 7, анимации только на CSS" in fake.calls[1][-1]["content"]  # разбор видит текст с фото
+
+
+def test_chat_photo_without_text(tmp_home, tmp_path):
+    from test_images import png
+
+    pipe, fake, st = ready(tmp_home, tmp_path, ["Фото 1: на скриншоте ошибка в строке 12.",
+                                                {"kind": "answer", "reply": "Ошибка в строке 12 из-за опечатки."}])
+    st = pipe.chat(st, "", images=[("err.png", png(600, 400))])
+    user = st.chat[-2]
+    assert user.images == [f"notes/chat_{user.id}_1.jpg"] and "строке 12" in user.image_text
+    assert (pipe.lab_dir(st) / user.images[0]).exists()
+    assert "на скриншоте ошибка в строке 12" in fake.calls[-1][-1]["content"]
+
+
+def test_too_many_photos_refused(tmp_home, tmp_path):
+    from test_images import png
+
+    pipe, fake, st = ready(tmp_home, tmp_path, [])
+    with pytest.raises(PipelineError):
+        pipe.chat(st, "смотри", images=[(f"{i}.png", png(100, 100)) for i in range(5)])
+    with pytest.raises(PipelineError):
+        pipe.chat(st, "смотри", images=[("x.png", b"not an image")])
+    assert st.chat == []

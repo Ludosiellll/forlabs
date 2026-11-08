@@ -162,6 +162,8 @@ class ChatMessage(BaseModel):
     changed: list[str] = Field(default_factory=list)
     retake: list[str] = Field(default_factory=list)
     version: int | None = None  # версия «до этой правки» — для кнопки «Вернуть как было»
+    images: list[str] = Field(default_factory=list)  # приложенные фото (пути внутри папки лабы)
+    image_text: str = ""  # что модель прочитала с фото
 
 
 class LabVersion(BaseModel):
@@ -195,6 +197,8 @@ class LabState(BaseModel):
     chat: list[ChatMessage] = Field(default_factory=list)
     versions: list[LabVersion] = Field(default_factory=list)
     wishes: str = ""  # пожелания, введённые при создании (до разбора)
+    wish_images: list[str] = Field(default_factory=list)  # фото к пожеланиям
+    wish_images_text: str = ""  # что модель прочитала с этих фото
 
 
 def push_version(st: "LabState", label: str) -> int:

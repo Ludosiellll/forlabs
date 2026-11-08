@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import os
 import subprocess
 import sys
@@ -20,6 +21,7 @@ from forlabs.core.llm import LLMError
 from forlabs.core.models import Enrollment, LabSpec, Profile, Task, finding_key, is_accepted
 from forlabs.core.settings import API_PRESETS, MODEL_CHOICES, Settings, get_api_key, save_settings, set_api_key
 from forlabs.core.subjects import Subject, all_subjects, get_subject
+from forlabs.pipeline.images import MAX_IMAGES, prepare_image
 from forlabs.pipeline.run import PipelineError, today
 from forlabs.render import libreoffice, word_com
 from forlabs.report.derive import numbered_blocks
@@ -29,6 +31,7 @@ from forlabs.ui.charts import fmt_tokens
 from forlabs.ui.context import AppContext, slug
 
 HERE = Path(__file__).parent
+_NOTE_NAME = re.compile(r"(wish|chat_[0-9a-f]{8})_\d{1,2}\.jpg")
 LOCAL_HOSTS = ["127.0.0.1", "localhost"]
 STATUS_RU = {"draft": "Черновик", "parsed": "Проверь разбор", "confirmed": "Готова к выполнению",
              "executing": "Выполняется", "needs_manual": "Нужны скриншоты", "rendered": "Свёрстана",
@@ -253,7 +256,8 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
 
     @app.post("/labs/new")
     async def lab_new(profile_id: str = Form(...), subject_id: str = Form(...), number: str = Form(""),
-                      text: str = Form(""), wishes: str = Form(""), files: list[UploadFile] | None = File(None)):
+                      text: str = Form(""), wishes: str = Form(""), files: list[UploadFile] | None = File(None),
+                      wish_images: list[UploadFile] | None = File(None)):
         data = []
         for uf in files or []:
             if uf.filename:
@@ -261,9 +265,11 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         if not data and not text.strip():
             return redirect(f"/labs/new?profile={_q(profile_id)}&subject={_q(subject_id)}",
                             err="Добавь файл методички или вставь её текст")
+        photos = [(uf.filename, await uf.read()) for uf in (wish_images or []) if uf.filename]
         try:
             st = await asyncio.to_thread(ctx.pipeline.create_lab, profile_id, subject_id, data,
-                                         number=number.strip() or None, pasted_text=text, wishes=wishes)
+                                         number=number.strip() or None, pasted_text=text, wishes=wishes,
+                                         wish_images=photos)
         except PipelineError as e:
             return redirect(f"/labs/new?profile={_q(profile_id)}&subject={_q(subject_id)}", err=str(e))
         key = ctx.pipeline.key(st)
@@ -384,16 +390,38 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         return redirect(lab_url(p, s, n))
 
     @app.post("/labs/{p}/{s}/{n}/chat")
-    def lab_chat(p: str, s: str, n: str, message: str = Form(""), remember: str = Form("")):
+    def lab_chat(p: str, s: str, n: str, message: str = Form(""), remember: str = Form(""),
+                 images: list[UploadFile] | None = File(None)):
         if busy_lab(p, s, n):
             return redirect(lab_url(p, s, n), err=BUSY)
         st = load(p, s, n)
-        if not message.strip():
-            return redirect(lab_url(p, s, n), err="Напиши, что поменять в отчёте")
+        photos = [(uf.filename, uf.file.read()) for uf in (images or []) if uf.filename]
+        if not message.strip() and not photos:
+            return redirect(lab_url(p, s, n), err="Напиши, что поменять в отчёте, или приложи фото")
         if not st.report:
             return redirect(lab_url(p, s, n), err="Чат правок работает после выполнения лабы")
-        ctx.run(ctx.pipeline.key(st), ctx.pipeline.chat, st, message, remember == "1")
+        if len(photos) > MAX_IMAGES:
+            return redirect(lab_url(p, s, n), err=f"Не больше {MAX_IMAGES} фото за раз")
+        try:
+            for _, data in photos:
+                prepare_image(data)  # проверка сразу, а не в фоне
+        except ValueError as e:
+            return redirect(lab_url(p, s, n), err=str(e))
+        ctx.run(ctx.pipeline.key(st), ctx.pipeline.chat, st, message, remember == "1", photos)
         return redirect(lab_url(p, s, n) + "?tab=report")
+
+    @app.get("/labs/{p}/{s}/{n}/notes/{name}")
+    def lab_note_image(p: str, s: str, n: str, name: str):
+        if not _NOTE_NAME.fullmatch(name):
+            return JSONResponse({"error": "нет такого фото"}, status_code=404)
+        st = load(p, s, n)
+        rel = f"notes/{name}"
+        f = ctx.store.lab_dir(p, s, n) / rel
+        if not f.exists() and hasattr(ctx.store, "fetch"):
+            ctx.store.fetch(p, s, n, rel, f)
+        if not f.exists() or (rel not in st.wish_images and not any(rel in m.images for m in st.chat)):
+            return JSONResponse({"error": "нет такого фото"}, status_code=404)
+        return FileResponse(f, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})
 
     @app.post("/labs/{p}/{s}/{n}/chat/revert/{vid}")
     def lab_chat_revert(p: str, s: str, n: str, vid: int):

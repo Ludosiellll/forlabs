@@ -18,6 +18,7 @@ from forlabs.core.subjects import get_subject
 from forlabs.ingest.extract import SourceText, extract_many
 from forlabs.pipeline.chat import plan_edit, revise_answers, revise_section
 from forlabs.pipeline.events import EventBus
+from forlabs.pipeline.images import MAX_IMAGES, describe_images, prepare_image
 from forlabs.pipeline.repair import check_all, check_and_repair, report_text
 from forlabs.pipeline.write import refresh_derived, write_report
 from forlabs.render.docx_builder import build_lab, build_semester
@@ -168,8 +169,27 @@ class Pipeline:
         return (self.store.load_lab(profile_id, subject_id, number) is not None
                 or self.store.lab_dir(profile_id, subject_id, number).exists())
 
+    def _save_images(self, st: LabState, images: list[tuple[str, bytes]], prefix: str) -> list[str]:
+        """Проверяет и сохраняет фото в notes/; ошибка — PipelineError с понятным текстом, ничего не сохранено."""
+        if len(images) > MAX_IMAGES:
+            raise PipelineError(f"Не больше {MAX_IMAGES} фото за раз")
+        try:
+            prepared = [prepare_image(data) for _, data in images]
+        except ValueError as e:
+            raise PipelineError(str(e)) from e
+        rels = []
+        for k, data in enumerate(prepared, start=1):
+            rel = f"notes/{prefix}_{k}.jpg"
+            f = self.lab_dir(st) / rel
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_bytes(data)
+            rels.append(rel)
+        self._sync(st, rels)
+        return rels
+
     def create_lab(self, profile_id: str, subject_id: str, files: list[tuple[str, bytes]],
-                   number: str | None = None, pasted_text: str = "", wishes: str = "") -> LabState:
+                   number: str | None = None, pasted_text: str = "", wishes: str = "",
+                   wish_images: list[tuple[str, bytes]] | None = None) -> LabState:
         number = (number or "").strip()
         if number and self.store.load_lab(profile_id, subject_id, number) is not None:
             raise PipelineError(f"ЛР {number} уже есть. Открой её или удали, чтобы сделать заново.")
@@ -177,6 +197,8 @@ class Pipeline:
             number = f"{DRAFT_PREFIX}{uuid.uuid4().hex[:6]}"
         st = LabState(profile_id=profile_id, subject_id=subject_id, number=number, status="draft",
                       wishes=(wishes or "").strip()[:4000])
+        if wish_images:
+            st.wish_images = self._save_images(st, wish_images, "wish")
         src = self.lab_dir(st) / "source"
         src.mkdir(parents=True, exist_ok=True)
         for name, data in files:
@@ -206,7 +228,13 @@ class Pipeline:
             subject = get_subject(st.subject_id)
             enrollment = self._enrollment(profile, st.subject_id)
             self._emit(st, "Разбираю задания и вопросы", step="parse")
+            if st.wish_images and not st.wish_images_text:
+                self._emit(st, "Читаю фото к пожеланиям", step="parse")
+                st.wish_images_text = describe_images([self.lab_dir(st) / r for r in st.wish_images], self._llm(st))
+                self._save(st)
             wishes = st.wishes or (st.spec.wishes if st.spec else "") or ""
+            if st.wish_images_text and st.wish_images_text not in wishes:
+                wishes = f"{wishes}\nС фото:\n{st.wish_images_text}".strip()
             spec, findings = extract_spec(src, subject, enrollment, self._llm(st),
                                           None if is_draft(st.number) else st.number, date or today(), wishes=wishes)
             old_dir = self.lab_dir(st)
@@ -292,16 +320,21 @@ class Pipeline:
         return text
 
     # чат правок
-    def chat(self, st: LabState, message: str, remember: bool = False) -> LabState:
+    def chat(self, st: LabState, message: str, remember: bool = False,
+             images: list[tuple[str, bytes]] | None = None) -> LabState:
         """Сообщение студента о правке: план → точечная правка → проверка → вёрстка; сбой — всё как было."""
         message = (message or "").strip()
-        if not message:
-            raise PipelineError("Напиши, что поменять в отчёте")
+        images = images or []
+        if not message and not images:
+            raise PipelineError("Напиши, что поменять в отчёте, или приложи фото")
         if not st.report or not st.spec:
             raise PipelineError("Чат правок работает после выполнения лабы")
         with self.lock(st):
-            st.chat.append(ChatMessage(id=uuid.uuid4().hex[:8], role="user", text=message[:4000], at=_now(),
-                                       remember=remember))
+            msg_id = uuid.uuid4().hex[:8]
+            rels = self._save_images(st, images, f"chat_{msg_id}") if images else []
+            user_msg = ChatMessage(id=msg_id, role="user", text=message[:4000], at=_now(), remember=remember,
+                                   images=rels)
+            st.chat.append(user_msg)
             self._save(st)
             backup_spec, backup_report = st.spec.model_copy(deep=True), st.report.model_copy(deep=True)
             vid = None
@@ -309,6 +342,11 @@ class Pipeline:
                 profile = self._profile(st)
                 subject = get_subject(st.subject_id)
                 llm = self._llm(st)
+                if rels:
+                    self._emit(st, "Читаю приложенные фото", step="write")
+                    user_msg.image_text = describe_images([self.lab_dir(st) / r for r in rels], llm)
+                    self._save(st)
+                    message = f"{message}\n\nНа приложенных фото:\n{user_msg.image_text}".strip()
                 self._emit(st, "Разбираю правку", step="write")
                 plan = plan_edit(st, message, profile, subject, llm, self.rules, self._teacher_text(st))
                 remembered = None

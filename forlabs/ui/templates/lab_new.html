@@ -26,8 +26,12 @@
     <div class="field"><label for="text">Или вставь текст методички</label>
       <textarea id="text" name="text" rows="8" placeholder="Лабораторная работа №…&#10;Тема: …&#10;Цель: …"></textarea></div>
     <div class="field"><label for="wishes">Пожелания и отклонения от методички</label>
-      <textarea id="wishes" name="wishes" rows="3" maxlength="4000" placeholder="Например: вариант мне дали 7; код на C# вместо Java; в задании 3 без массива"></textarea>
-      <div class="hint">Необязательно. Учтётся при разборе и при написании всех заданий. Замечания после выполнения пиши в чат «Правки» на экране лабы.</div></div>
+      <textarea id="wishes" name="wishes" rows="3" maxlength="4000" placeholder="Например: вариант мне дали 7; код на C# вместо Java; в задании 3 без массива. Фото можно вставить через Ctrl+V" data-paste-images="wish-images"></textarea>
+      <div class="row attach-row">
+        <label class="btn link small">Прикрепить фото<input id="wish-images" class="visually-hidden" type="file" name="wish_images" accept="image/png,image/jpeg,image/webp" multiple data-images-input></label>
+        <span class="small muted" data-images-picked="wish-images"></span>
+      </div>
+      <div class="hint">Необязательно. Можно приложить фото записи преподавателя — приложение прочитает её. Учтётся при разборе и при написании всех заданий; замечания после выполнения — в чат «Правки» на экране лабы.</div></div>
     <div class="row"><button class="btn primary" type="submit">Разобрать методичку</button>
       <a class="btn link" href="/">Отмена</a></div>
   </form>
