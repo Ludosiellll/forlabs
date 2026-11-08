@@ -28,6 +28,7 @@ from forlabs.cloud.admin import (
 from forlabs.cloud.auth import CloudAuth, CloudError
 from forlabs.core import paths
 from forlabs.core.fs import atomic_write_text
+from forlabs.core.netcert import is_cert_error, offline_message
 from forlabs.core.models import LabState, LabSummary, Profile, summarize
 from forlabs.core.store import Store, _number_key, _read_model, safe_name
 
@@ -103,8 +104,8 @@ class CloudStore:
                 r = self.http.request(method, f"{self.cfg.url}/rest/v1/{table}", params=params, json=json,
                                       headers=self._h({"Prefer": prefer} if prefer else None))
             except httpx.TransportError as e:
-                if attempt == len(self.retry_delays):
-                    raise CloudError("Нет связи с облаком. Проверь интернет.", str(e)) from e
+                if attempt == len(self.retry_delays) or is_cert_error(e):
+                    raise CloudError(offline_message(e), str(e), offline=True) from e
                 time.sleep(self.retry_delays[attempt])
                 continue
             if r.status_code >= 500 and attempt < len(self.retry_delays):
@@ -139,7 +140,7 @@ class CloudStore:
         return sorted((p for p in found if p is not None), key=lambda p: p.full_name)
 
     def _offline_or_raise(self, e: CloudError) -> None:
-        if not (e.message_ru or "").startswith("Нет связи"):
+        if not e.offline:
             raise e
         self.offline = True
 
@@ -297,7 +298,7 @@ class CloudStore:
             r = self.http.post(f"{self.cfg.url}/storage/v1/object/{BUCKET}/{quote(key)}", content=Path(local).read_bytes(),
                                headers=self._h({"x-upsert": "true", "Content-Type": "application/octet-stream"}))
         except httpx.TransportError as e:
-            raise CloudError("Нет связи с облаком. Проверь интернет.", str(e)) from e
+            raise CloudError(offline_message(e), str(e), offline=True) from e
         self._check(r)
         return key
 
@@ -305,7 +306,7 @@ class CloudStore:
         try:
             r = self.http.get(f"{self.cfg.url}/storage/v1/object/{BUCKET}/{quote(key)}", headers=self._h())
         except httpx.TransportError as e:
-            raise CloudError("Нет связи с облаком. Проверь интернет.", str(e)) from e
+            raise CloudError(offline_message(e), str(e), offline=True) from e
         self._check(r)
         local = Path(local)
         local.parent.mkdir(parents=True, exist_ok=True)
@@ -318,7 +319,7 @@ class CloudStore:
         try:
             r = self.http.get(f"{self.cfg.url}/storage/v1/object/{BUCKET}/{quote(key)}", headers=self._h())
         except httpx.TransportError as e:
-            raise CloudError("Нет связи с облаком. Проверь интернет.", str(e)) from e
+            raise CloudError(offline_message(e), str(e), offline=True) from e
         if r.status_code == 404 or (r.status_code == 400 and "not_found" in r.text.replace(" ", "_").lower()):
             return False
         self._check(r)
@@ -476,7 +477,7 @@ class CloudStore:
         try:
             r = self.http.get(f"{self.cfg.url}/storage/v1/object/{BUCKET}/{quote(key)}", headers=self._h())
         except httpx.TransportError as e:
-            raise CloudError("Нет связи с облаком. Проверь интернет.", str(e)) from e
+            raise CloudError(offline_message(e), str(e), offline=True) from e
         if r.status_code in (400, 404):
             return False
         self._check(r)

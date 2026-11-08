@@ -12,6 +12,7 @@ from typing import Any, Callable, Literal, TypeVar
 import httpx
 from pydantic import BaseModel, ValidationError
 
+from forlabs.core.netcert import CERT_MESSAGE, is_cert_error
 from forlabs.core.settings import MODEL_FALLBACKS, Settings
 
 T = TypeVar("T", bound=BaseModel)
@@ -142,6 +143,8 @@ class LLM:
                                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json",
                                         **self.extra_headers})
         except (httpx.TransportError, httpx.TimeoutException) as e:
+            if is_cert_error(e):  # сам не пройдёт — повторять бессмысленно
+                raise LLMError("network", str(e), CERT_MESSAGE) from e
             raise LLMError("network", str(e), retryable=True) from e
         if r.status_code >= 400:
             detail = r.text[:300]

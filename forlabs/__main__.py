@@ -67,10 +67,12 @@ def _open_window(url: str, ctx=None) -> None:
 
 def main() -> None:
     from forlabs.core.logs import setup_logging
+    from forlabs.core.netcert import use_system_certificates
     from forlabs.core.paths import ensure_dirs
     from forlabs.ui.context import AppContext
 
     setup_logging()
+    use_system_certificates()  # сеть колледжа или антивирус с проверкой HTTPS
     ensure_dirs()
     preferred = int(os.environ.get("FORLABS_PORT", "8765"))
     no_window = "--browser" in sys.argv or os.environ.get("FORLABS_BROWSER_UI") == "1"

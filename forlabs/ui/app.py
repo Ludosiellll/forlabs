@@ -198,7 +198,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
             try:
                 member = ctx.store.member()
             except CloudError as e:
-                if not e.message_ru.startswith("Нет связи"):
+                if not e.offline:
                     raise
                 member = None  # без связи: главная из копии на этом компьютере
             if member and not member.approved:

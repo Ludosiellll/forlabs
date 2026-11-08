@@ -13,15 +13,17 @@ from pydantic import BaseModel
 from forlabs.cloud.config import DEFAULT, CloudConfig
 from forlabs.core import paths
 from forlabs.core.fs import atomic_write_text, quarantine
+from forlabs.core.netcert import offline_message
 
 KEYRING_SERVICE = "ForLabs"
 KEYRING_SESSION = "cloud_session"
 
 
 class CloudError(Exception):
-    def __init__(self, message_ru: str, detail: str = ""):
+    def __init__(self, message_ru: str, detail: str = "", offline: bool = False):
         self.message_ru = message_ru
         self.detail = detail
+        self.offline = offline  # нет связи (или сеть не пропускает) — можно показать копию с компьютера
         super().__init__(message_ru)
 
 
@@ -120,7 +122,7 @@ class CloudAuth:
             r = self.http.post(f"{self.config.url}/auth/v1/token", params={"grant_type": grant}, json=body,
                                headers=self._headers())
         except httpx.TransportError as e:
-            raise CloudError("Нет связи с облаком. Проверь интернет.", str(e)) from e
+            raise CloudError(offline_message(e), str(e), offline=True) from e
         if r.status_code >= 400:
             raise _error_from(r)
         d = r.json()
@@ -140,7 +142,7 @@ class CloudAuth:
             r = self.http.post(f"{self.config.url}/auth/v1/signup", headers=self._headers(),
                                json={"email": email.strip(), "password": password, "data": {"name": name.strip()}})
         except httpx.TransportError as e:
-            raise CloudError("Нет связи с облаком. Проверь интернет.", str(e)) from e
+            raise CloudError(offline_message(e), str(e), offline=True) from e
         if r.status_code >= 400:
             raise _error_from(r)
         d = r.json()
