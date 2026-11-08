@@ -72,7 +72,7 @@ end $$;
 -- Пробный лимит атомарно (trial_begin, миграция 0007) и защита переноса расхода (retag_my_usage).
 -- Ожидаемо: lab3=true lab4=trial labs limit: 3 old_lab=true chat5=true chat6=trial chat limit: 5 chat5_again=true
 --           calls_cap=trial lab calls limit no_tag=trial needs lab tag member_call=blocked admin=true
---           to_empty=0 p_s_1_kept=1 draft_moved=1
+--           to_empty=0 p_s_1_kept=2 (строка + бронь проверки) draft_moved=1
 do $$
 declare
   a uuid := '00000000-0000-4000-8000-0000000000a6';
