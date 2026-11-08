@@ -313,21 +313,37 @@ class CloudStore:
     def admin_clear_key(self, uid: str) -> None:
         self._rpc("admin_clear_key", {"target": uid})
 
-    def _balance_call(self, body: dict) -> dict:
+    def _balance_call(self, body: dict, ids: list[str]) -> dict[str, tuple[int | None, str]]:
+        """Остатки у провайдера: (токены, состояние), состояние — ok | no_key | offline."""
+        offline = {i: (None, "offline") for i in ids}
         try:
             r = self.http.post(f"{self.cfg.llm_base_url}/balance", json=body, headers=self._h(), timeout=30)
         except httpx.TransportError:
-            return {}
+            return offline
         if r.status_code >= 400:
-            return {}
-        return (r.json() or {}).get("balances") or {}
+            return offline
+        data = r.json() or {}
+        balances, errors = data.get("balances") or {}, data.get("errors") or {}
+        out: dict[str, tuple[int | None, str]] = {}
+        for i in ids:
+            value = balances.get(i)
+            if value is not None and i not in errors:
+                out[i] = (int(value), "ok")
+            elif errors.get(i) == "no key":
+                out[i] = (None, "no_key")
+            elif i == "shared" and i not in balances:
+                out[i] = (None, "no_key")  # общий ключ LLM_API_KEY не задан
+            else:
+                out[i] = (None, "offline")
+        return out
 
-    def balances(self, user_ids: list[str], shared: bool = False) -> dict[str, int | None]:
-        """Остаток токенов у провайдера по ключам участников (None — нет ключа или нет ответа)."""
-        return self._balance_call({"user_ids": list(user_ids), "shared": shared})
+    def balances(self, user_ids: list[str], shared: bool = False) -> dict[str, tuple[int | None, str]]:
+        """Остаток токенов у провайдера по ключам участников (и общему ключу)."""
+        ids = list(user_ids) + (["shared"] if shared else [])
+        return self._balance_call({"user_ids": list(user_ids), "shared": shared}, ids)
 
-    def my_balance(self) -> int | None:
-        return self._balance_call({}).get(self.auth.user_id)
+    def my_balance(self) -> tuple[int | None, str]:
+        return self._balance_call({}, [self.auth.user_id])[self.auth.user_id]
 
     def download_member_report(self, uid: str, profile_id: str, subject_id: str, number: str, local: Path) -> bool:
         key = storage_key(uid, profile_id, subject_id, number, "report.docx")

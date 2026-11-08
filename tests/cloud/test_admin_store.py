@@ -117,15 +117,23 @@ def test_admin_set_key_validates(store, fake):
 
 def test_admin_balances_partial(store, fake):
     fake.balance = {M: 92011485, "shared": 5000}
+    fake.balance_errors = {UID: "no key"}
     got = store.balances([M, UID], shared=True)
-    assert got == {M: 92011485, UID: None, "shared": 5000}
+    assert got == {M: (92011485, "ok"), UID: (None, "no_key"), "shared": (5000, "ok")}
+    fake.balance = {}
+    fake.balance_errors = {M: "provider 502"}
+    assert store.balances([M]) == {M: (None, "offline")}
     fake.functions_down = True
-    assert store.balances([M]) == {}
+    assert store.balances([M], shared=True) == {M: (None, "offline"), "shared": (None, "offline")}
 
 
 def test_my_balance(store, fake):
     fake.balance = {UID: 1500}
-    assert store.my_balance() == 1500
+    assert store.my_balance() == (1500, "ok")
+    fake.balance, fake.balance_errors = {}, {UID: "no key"}
+    assert store.my_balance() == (None, "no_key")
+    fake.functions_down = True
+    assert store.my_balance() == (None, "offline")
 
 
 def test_download_member_report(store, fake, tmp_path):

@@ -198,11 +198,11 @@ def register_admin(app: FastAPI, ctx, render, redirect) -> None:
         members = ctx.store.list_members()
         raw = ctx.store.balances([m.user_id for m in members], shared=True)
         out = {}
-        for uid, value in raw.items():
-            out[uid] = {"tokens": value, "text": fmt_tokens(value) if value is not None else "—",
-                        "labs": labs_estimate(value)}
-        for m in members:
-            out.setdefault(m.user_id, {"tokens": None, "text": "нет связи", "labs": ""})
+        for uid, (value, state) in raw.items():
+            text = fmt_tokens(value) if state == "ok" else ("нет связи" if state == "offline" else
+                                                            ("не задан" if uid == "shared" else "—"))
+            out[uid] = {"tokens": value, "state": state, "text": text,
+                        "labs": labs_estimate(value) if state == "ok" else ""}
         return JSONResponse(out)
 
     @app.get("/admin/u/{uid}")

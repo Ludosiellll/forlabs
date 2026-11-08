@@ -551,15 +551,15 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
     # настройки
     @app.get("/settings", response_class=HTMLResponse)
     def settings_page(request: Request):
-        my_balance, balance_known = None, False
+        my_balance, balance_state = None, "offline"
         if ctx.cloud and ctx.auth.session:
             try:
-                my_balance, balance_known = ctx.store.my_balance(), True
+                my_balance, balance_state = ctx.store.my_balance()
             except CloudError:
                 pass
         return render(request, "settings.html", s=ctx.settings, presets=API_PRESETS, has_key=bool(get_api_key()),
                       word=word_com.available(), soffice=libreoffice.find_soffice(ctx.settings.soffice_path),
-                      nav="settings", my_balance=my_balance, balance_known=balance_known)
+                      nav="settings", my_balance=my_balance, balance_state=balance_state)
 
     @app.post("/settings")
     async def settings_save(request: Request):

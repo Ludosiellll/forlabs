@@ -195,3 +195,28 @@ def test_pending_member_card_offers_approve_first(admin, fake):
     page = admin.get(f"/admin/u/{M}").text
     assert page.index("Одобрить аккаунт") < page.index("+7 дней")
     assert "ждёт одобрения" in admin.get("/admin").text
+
+
+def test_admin_balances_offline_vs_no_key(admin, fake):
+    fake.balance = {}
+    fake.balance_errors = {M: "provider 502", UID: "no key"}
+    data = admin.get("/admin/balances").json()
+    assert data[M]["text"] == "нет связи" and data[UID]["text"] == "—"
+    fake.functions_down = True
+    data = admin.get("/admin/balances").json()
+    assert data[M]["text"] == "нет связи" and data["shared"]["text"] == "нет связи"
+
+
+def test_member_settings_offline_is_not_no_key(fake, tmp_home):
+    client = make_client(fake, tmp_home, me="member")
+    fake.functions_down = True
+    page = client.get("/settings").text
+    assert "нет связи" in page and "ещё не выдан" not in page
+    fake.functions_down = False
+    fake.balance_errors = {UID: "no key"}
+    assert "ещё не выдан" in client.get("/settings").text
+
+
+def test_admin_cannot_change_own_access(admin, fake):
+    r = admin.post(f"/admin/u/{UID}/access", data={"action": "revoke"}, follow_redirects=False)
+    assert "err=" in r.headers["location"] and fake.tables["members"][0]["access_until"] is None

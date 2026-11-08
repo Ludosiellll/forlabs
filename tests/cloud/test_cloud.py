@@ -25,6 +25,7 @@ class FakeSupabase:
         self.by_lab = []  # строки admin_usage_by_lab
         self.rpc_calls = []
         self.functions_down = False
+        self.balance_errors = {}  # uid -> текст ошибки, как в ответе функции
 
     def session(self, expires_in=3600):
         return {"access_token": f"tok{len(self.requests)}", "refresh_token": "ref", "expires_in": expires_in,
@@ -69,9 +70,10 @@ class FakeSupabase:
             body = json.loads(req.content or b"{}")
             ids = body.get("user_ids") or [UID]
             out = {i: self.balance.get(i) for i in ids}
+            errors = {i: self.balance_errors[i] for i in ids if i in self.balance_errors}
             if body.get("shared"):
                 out["shared"] = self.balance.get("shared")
-            return httpx.Response(200, json={"balances": out, "errors": {}})
+            return httpx.Response(200, json={"balances": out, "errors": errors})
         if path.startswith("/rest/v1/"):
             table = path.split("/")[-1]
             rows = self.tables.setdefault(table, [])
