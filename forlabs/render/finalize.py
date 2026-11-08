@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import os
 import re
+import shutil
+import uuid
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -69,14 +72,21 @@ def finalize(docx: Path, author: str, workdir: Path, soffice: str | None = None,
     pdf = workdir / (docx.stem + ".pdf")
     warnings: list[str] = []
     if prefer_word and word_com.available():
-        backup = docx.read_bytes()
+        # Word работает с копией: зависший WINWORD.EXE не заблокирует report.docx, а неудача его не испортит
+        work = workdir / f"word_{uuid.uuid4().hex[:8]}.docx"
+        shutil.copyfile(docx, work)
         try:
-            rep = word_com.finalize_isolated(docx, pdf, author)
+            rep = word_com.finalize_isolated(work, pdf, author)
+            os.replace(work, docx)
             return FinalizeReport("word", pdf, pdf_to_pngs(pdf, workdir / "pages"), rep.continuations, rep.warnings)
-        except Exception as e:  # Word завис или упал — документ не теряем, доводим через LibreOffice
-            docx.write_bytes(backup)
+        except Exception as e:  # Word завис или упал — доводим исходный документ через LibreOffice
             warnings.append(f"Word не справился ({e}). Документ доведён через LibreOffice; "
                             f"«Продолжение листинга» не расставлено — нажми «Пересобрать документ» ещё раз.")
+        finally:
+            try:
+                work.unlink(missing_ok=True)
+            except OSError:
+                pass  # копию держит зависший Word — удалится при следующей доводке
     else:
         warnings.append(NO_WORD_WARNING)
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -222,7 +223,52 @@ def finalize(docx: Path, pdf_out: Path, author: str) -> WordReport:
     return report
 
 
+def _word_pids() -> set[int]:
+    """PID запущенных WINWORD.EXE (только Windows)."""
+    if sys.platform != "win32":
+        return set()
+    import subprocess
+
+    try:
+        out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq WINWORD.EXE", "/FO", "CSV", "/NH"],
+                             capture_output=True, text=True, timeout=15,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
+    except Exception:
+        return set()
+    pids = set()
+    for line in out.splitlines():
+        parts = [x.strip('"') for x in line.split('","')]
+        if len(parts) > 1 and parts[1].isdigit():
+            pids.add(int(parts[1]))
+    return pids
+
+
+def _kill_pids(pids) -> None:
+    """Завершить именно тот Word, который запустило приложение (не трогая Word студента)."""
+    if sys.platform != "win32":
+        return
+    import subprocess
+
+    for pid in pids:
+        try:
+            subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True, timeout=15,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except Exception:
+            pass
+
+
 def _child(docx: str, pdf_out: str, author: str, queue) -> None:
+    import win32com.client  # noqa: F401 — заранее, чтобы снимок PID был сразу перед запуском Word
+
+    before = _word_pids()
+    real_dispatch = win32com.client.DispatchEx
+
+    def dispatch_and_report(name):  # сообщаем родителю PID нашего Word, чтобы при зависании завершить его
+        app = real_dispatch(name)
+        queue.put(("pids", sorted(_word_pids() - before)))
+        return app
+
+    win32com.client.DispatchEx = dispatch_and_report
     try:
         rep = finalize(Path(docx), Path(pdf_out), author)
         queue.put(("ok", rep.continuations, rep.warnings))
@@ -230,21 +276,40 @@ def _child(docx: str, pdf_out: str, author: str, queue) -> None:
         queue.put(("error", 0, [f"{type(e).__name__}: {e}"]))
 
 
-def finalize_isolated(docx: Path, pdf_out: Path, author: str, timeout: float = 300.0) -> WordReport:
-    """Word в отдельном процессе с тайм-аутом: зависший диалог Word не вешает приложение."""
+def finalize_isolated(docx: Path, pdf_out: Path, author: str, timeout: float = 300.0, target=None) -> WordReport:
+    """Word в отдельном процессе с тайм-аутом: зависший диалог Word не вешает приложение, а сам зависший
+    WINWORD.EXE завершается (иначе он держит документ до перезагрузки)."""
     import multiprocessing as mp
+    import queue as queue_mod
 
     ctx = mp.get_context("spawn")
     q = ctx.Queue()
-    p = ctx.Process(target=_child, args=(str(docx), str(pdf_out), author, q), daemon=True)
+    p = ctx.Process(target=target or _child, args=(str(docx), str(pdf_out), author, q), daemon=True)
     p.start()
-    p.join(timeout)
-    if p.is_alive():
-        p.terminate()
-        raise TimeoutError("Word не ответил за отведённое время (возможно, открыто окно-предупреждение Word)")
-    if q.empty():
+    pids: list[int] = []
+    result = None
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline and result is None:
+        try:
+            msg = q.get(timeout=0.5)
+        except queue_mod.Empty:
+            if not p.is_alive():
+                break
+            continue
+        if msg[0] == "pids":
+            pids = list(msg[1])
+        else:
+            result = msg
+    if result is None:
+        if p.is_alive():
+            p.terminate()
+            _kill_pids(pids)
+            raise TimeoutError("Word не ответил за отведённое время (возможно, открыто окно-предупреждение Word)")
+        _kill_pids(pids)
         raise RuntimeError("Word завершился без результата")
-    status, cont, warnings = q.get()
+    p.join(10)
+    status, cont, warnings = result
     if status != "ok":
+        _kill_pids(pids)
         raise RuntimeError("; ".join(warnings))
     return WordReport(cont, warnings)
