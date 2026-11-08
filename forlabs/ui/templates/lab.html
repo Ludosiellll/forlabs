@@ -31,14 +31,42 @@
     {% endif %}
 
     {% if st.report %}
-    <h2 style="margin-top:18px">Переделать</h2>
-    <form method="post" data-redo class="row" style="margin-bottom:8px">
-      <select aria-label="Задание" data-redo-select style="flex:1">
-        {% for s in st.report.sections %}<option value="{{ s.n }}">Задание {{ s.n }}</option>{% endfor %}
-      </select>
-      <button class="btn small" type="submit" {{ 'disabled' if busy }}>Переписать</button>
-    </form>
-    <form method="post" action="{{ base_url }}/rerender"><button class="btn small" type="submit" {{ 'disabled' if busy }}>Пересобрать документ</button></form>
+    {% set version_ids = st.versions|map(attribute='id')|list %}
+    <section class="chat" aria-labelledby="chat-h">
+      <h2 id="chat-h">Правки</h2>
+      <div class="chat-log" data-chat-log>
+        {% for m in st.chat %}
+          <div class="msg msg-{{ m.role }} k-{{ m.kind }}">
+            <div class="who-said">{{ 'Ты' if m.role == 'user' else 'ForLabs' }}{% if m.role == 'user' and m.remember %} · запомнить{% endif %}</div>
+            <div class="txt">{{ m.text }}</div>
+            {% if m.role == 'assistant' and m.version in version_ids %}
+            <form method="post" action="{{ base_url }}/chat/revert/{{ m.version }}">
+              <button class="btn link small" type="submit" {{ 'disabled' if busy }}>{{ 'Отменить откат' if m.kind == 'revert' else 'Вернуть как было' }}</button></form>
+            {% endif %}
+          </div>
+        {% else %}
+          <p class="small muted">Напиши, что сказал преподаватель: «во втором задании добавить проверку ввода», «вывод подробнее», «вариант 7». Поменяю только нужное, проверю и пересоберу документ.</p>
+        {% endfor %}
+      </div>
+      <form method="post" action="{{ base_url }}/chat" class="chat-form" data-chat-form>
+        <label class="visually-hidden" for="chat-msg">Что сказал преподаватель</label>
+        <textarea id="chat-msg" name="message" rows="3" maxlength="4000" placeholder="Что сказал преподаватель…" required {{ 'disabled' if busy }}></textarea>
+        <label class="check small"><input type="checkbox" name="remember" value="1" {{ 'disabled' if busy }}> Запомнить для следующих лаб по предмету</label>
+        <div class="row"><button class="btn primary small" type="submit" {{ 'disabled' if busy }}>Отправить</button><span class="hint">Ctrl+Enter</span></div>
+      </form>
+      <details class="redo">
+        <summary class="small">Переписать задание целиком</summary>
+        <form method="post" data-redo class="row">
+          <select aria-label="Задание" data-redo-select style="flex:1">
+            {% for s in st.report.sections %}<option value="{{ s.n }}">Задание {{ s.n }}</option>{% endfor %}
+          </select>
+          <button class="btn small" type="submit" {{ 'disabled' if busy }}>Переписать</button>
+        </form>
+      </details>
+      <form method="post" action="{{ base_url }}/rerender" style="margin-top:8px"><button class="btn small" type="submit" {{ 'disabled' if busy }}>Пересобрать документ</button></form>
+    </section>
+    {% elif st.spec %}
+    <p class="small muted" style="margin-top:18px">Чат правок появится после выполнения: в нём можно передать замечания преподавателя.</p>
     {% endif %}
     <form method="post" action="{{ base_url }}/delete" style="margin-top:22px" onsubmit="return confirm('Удалить лабу со всеми файлами?')">
       <button class="btn danger small" type="submit" {{ 'disabled' if busy }}>Удалить лабу</button></form>

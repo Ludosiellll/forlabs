@@ -127,3 +127,19 @@
     tr.addEventListener("click", function (e) { if (!e.target.closest("a, button, input")) location.href = tr.getAttribute("data-href"); });
   });
 })();
+
+// чат правок: прокрутка к последнему сообщению, Ctrl+Enter — отправить
+(function () {
+  var log = document.querySelector("[data-chat-log]");
+  if (log) log.scrollTop = log.scrollHeight;
+  var form = document.querySelector("[data-chat-form]");
+  if (!form) return;
+  var area = form.querySelector("textarea");
+  area.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && area.value.trim()) { e.preventDefault(); form.submit(); }
+  });
+  form.addEventListener("submit", function () {
+    var b = form.querySelector("button[type=submit]");
+    if (b) { b.disabled = true; b.textContent = "Отправляю…"; }
+  });
+})();

@@ -137,7 +137,7 @@ table.t tr.click:hover td { background: var(--panel); }
 
 /* экран лабы: вариант «Документ» */
 .lab { display: flex; flex-wrap: wrap; min-height: calc(100vh - 57px); }
-.lab-left { flex: 1 1 250px; max-width: 300px; padding: 18px; border-right: 1px solid var(--line); }
+.lab-left { flex: 1 1 250px; max-width: 340px; padding: 18px; border-right: 1px solid var(--line); }
 .lab-center { flex: 999 1 520px; min-width: 0; background: var(--desk); padding: 22px 20px 40px;
   display: flex; flex-direction: column; align-items: center; gap: 14px; }
 .lab-right { flex: 1 1 280px; max-width: 340px; padding: 18px; border-left: 1px solid var(--line); }
@@ -263,3 +263,21 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   .figures > div + div { border-left: 0; padding-left: 0; }
   .figures dd { font-size: 22px; }
 }
+
+/* чат правок */
+.chat { margin-top: 18px; }
+.chat-log { max-height: 46vh; overflow-y: auto; margin: 0 -4px 10px; padding: 0 4px; }
+.msg { padding: 8px 10px; border-radius: var(--radius); margin-bottom: 8px; font-size: 13.5px; }
+.msg .txt { white-space: pre-line; overflow-wrap: anywhere; }
+.msg .who-said { font-size: 12px; color: var(--faint); margin-bottom: 2px; }
+.msg-user { background: var(--panel); }
+.msg-assistant { border-left: 2px solid var(--accent-line); border-radius: 0; padding-left: 10px; }
+.msg.k-failed { border-left-color: var(--err-line); }
+.msg.k-failed .txt { color: #5E150F; }
+.msg form { margin: 2px 0 0 -6px; }
+.chat-form textarea { width: 100%; resize: vertical; min-height: 64px; }
+.chat-form .check { display: flex; gap: 6px; align-items: center; margin: 6px 0 8px; color: var(--muted); }
+.chat-form .hint { margin: 0 0 0 4px; }
+.redo { margin-top: 12px; }
+.redo summary { cursor: pointer; color: var(--muted); }
+.redo form { margin-top: 8px; }

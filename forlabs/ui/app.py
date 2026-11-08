@@ -381,6 +381,28 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         ctx.run(ctx.pipeline.key(st), ctx.pipeline.redo_task, st, t)
         return redirect(lab_url(p, s, n))
 
+    @app.post("/labs/{p}/{s}/{n}/chat")
+    def lab_chat(p: str, s: str, n: str, message: str = Form(""), remember: str = Form("")):
+        if busy_lab(p, s, n):
+            return redirect(lab_url(p, s, n), err=BUSY)
+        st = load(p, s, n)
+        if not message.strip():
+            return redirect(lab_url(p, s, n), err="Напиши, что поменять в отчёте")
+        if not st.report:
+            return redirect(lab_url(p, s, n), err="Чат правок работает после выполнения лабы")
+        ctx.run(ctx.pipeline.key(st), ctx.pipeline.chat, st, message, remember == "1")
+        return redirect(lab_url(p, s, n) + "?tab=report")
+
+    @app.post("/labs/{p}/{s}/{n}/chat/revert/{vid}")
+    def lab_chat_revert(p: str, s: str, n: str, vid: int):
+        if busy_lab(p, s, n):
+            return redirect(lab_url(p, s, n), err=BUSY)
+        st = load(p, s, n)
+        if not any(v.id == vid for v in st.versions):
+            return redirect(lab_url(p, s, n), err="Этой версии уже нет: хранятся только 10 последних правок")
+        ctx.run(ctx.pipeline.key(st), ctx.pipeline.revert, st, vid)
+        return redirect(lab_url(p, s, n) + "?tab=report")
+
     @app.post("/labs/{p}/{s}/{n}/rerender")
     def lab_rerender(p: str, s: str, n: str):
         st = load(p, s, n)
