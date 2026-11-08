@@ -81,6 +81,11 @@
           {% elif st.status == 'draft' %}
             <h2>Методичка ещё не разобрана</h2>
             <form method="post" action="{{ base_url }}/reparse"><button class="btn primary" type="submit">Разобрать</button></form>
+          {% elif st.status == 'failed' %}
+            <h2>Работа остановилась</h2>
+            <p class="muted">Причина — в красной плашке выше. {{ 'Нажми «Продолжить»: уже написанное не потеряется.' if st.spec else 'Попробуй разобрать методичку ещё раз.' }}
+              Подробности — во вкладке «Журнал».</p>
+            {% if not st.spec %}<form method="post" action="{{ base_url }}/reparse"><button class="btn primary" type="submit">Разобрать ещё раз</button></form>{% endif %}
           {% else %}
             <h2>Документа пока нет</h2>
             <p class="muted">Посмотри журнал: там видно, на каком шаге остановилось.</p>
@@ -151,13 +156,13 @@
         {% if errors %}<div class="hint">Сначала разберись с замечаниями ниже.</div>{% endif %}
       </form>
       {% endif %}
-      {% if st.docx_path %}
+      {% if docx_here %}
       <a class="btn {{ 'primary' if st.status not in ('rendered', 'final') }} wide" href="{{ base_url }}/docx">Скачать .docx</a>
       <form method="post" action="{{ base_url }}/open"><input type="hidden" name="what" value="docx"><button class="btn" type="submit">Открыть в Word</button></form>
       {% endif %}
-      <form method="post" action="{{ base_url }}/open" class="{{ 'wide' if not st.docx_path }}"><input type="hidden" name="what" value="dir"><button class="btn" type="submit">Папка лабы</button></form>
+      <form method="post" action="{{ base_url }}/open" class="{{ 'wide' if not docx_here }}"><input type="hidden" name="what" value="dir"><button class="btn" type="submit">Папка лабы</button></form>
     </div>
-    {% for w in st.warnings %}<div class="notice warn small">{{ w }}</div>{% endfor %}
+    {% if preview_here or not st.pages %}{% for w in st.warnings %}<div class="notice warn small">{{ w }}</div>{% endfor %}{% endif %}
     <h2>Замечания</h2>
     {% set shown = st.findings|rejectattr('stage', 'equalto', 'spec')|list %}
     {% if not shown %}

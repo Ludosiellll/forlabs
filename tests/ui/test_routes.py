@@ -162,10 +162,13 @@ def test_preview_from_other_computer_offers_rerender(client, tmp_path):
     ctx = client.app.state.ctx
     st = ctx.store.load_lab("ivanov_ivan_petrovich", "psip", "7")
     st.pages = ["/другой/компьютер/page-1.png"]
+    st.docx_path = "/другой/компьютер/report.docx"
+    st.warnings = ["Word на том компьютере не найден"]
     st.status = "rendered"
     ctx.store.save_lab(st)
     page = client.get(lab + "?tab=report").text
     assert "на другом компьютере" in page and "/page/1" not in page
+    assert "Скачать .docx" not in page and "Word на том компьютере" not in page
 
 
 def test_failed_lab_offers_continue(client, tmp_path):
@@ -180,6 +183,7 @@ def test_failed_lab_offers_continue(client, tmp_path):
     ctx.store.save_lab(st)
     page = client.get(lab + "?tab=report").text
     assert "Продолжить" in page and lab + "/execute" in page
+    assert "Документа пока нет" not in page
 
 
 def _new_lab(client, tmp_path):
