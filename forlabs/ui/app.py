@@ -18,7 +18,7 @@ from fastapi.templating import Jinja2Templates
 from forlabs.cloud.auth import CloudError
 from forlabs.core.llm import LLMError
 from forlabs.core.models import Enrollment, LabSpec, Profile, Task, finding_key, is_accepted
-from forlabs.core.settings import API_PRESETS, Settings, get_api_key, save_settings, set_api_key
+from forlabs.core.settings import API_PRESETS, MODEL_CHOICES, Settings, get_api_key, save_settings, set_api_key
 from forlabs.core.subjects import Subject, all_subjects, get_subject
 from forlabs.pipeline.run import PipelineError, today
 from forlabs.render import libreoffice, word_com
@@ -583,7 +583,8 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
                 pass
         return render(request, "settings.html", s=ctx.settings, presets=API_PRESETS, has_key=bool(get_api_key()),
                       word=word_com.available(), soffice=libreoffice.find_soffice(ctx.settings.soffice_path),
-                      nav="settings", my_balance=my_balance, balance_state=balance_state)
+                      nav="settings", my_balance=my_balance, balance_state=balance_state,
+                      model_choices=MODEL_CHOICES)
 
     @app.post("/settings")
     async def settings_save(request: Request):

@@ -27,8 +27,8 @@
       <div class="grid2">
         <div class="field"><label for="model">Модель</label>
           <select id="model" name="model">
-            {% for m in ['deepseek-v4.1-flash', 'deepseek-v4-flash'] %}<option value="{{ m }}" {{ 'selected' if s.model == m }}>{{ m }}</option>{% endfor %}
-            {% if s.model not in ['deepseek-v4.1-flash', 'deepseek-v4-flash'] %}<option value="{{ s.model }}" selected>{{ s.model }}</option>{% endif %}
+            {% for m in model_choices %}<option value="{{ m }}" {{ 'selected' if s.model == m }}>{{ m }}{{ ' — по умолчанию' if loop.first }}</option>{% endfor %}
+            {% if s.model not in model_choices %}<option value="{{ s.model }}" selected>{{ s.model }}</option>{% endif %}
           </select></div>
         <div class="field"><label for="base_url">Адрес API (для локального режима)</label>
           <input id="base_url" name="base_url" type="text" value="{{ s.base_url }}" list="presets">

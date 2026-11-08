@@ -221,3 +221,23 @@ def test_own_key_problems_point_to_admin(message, needle):
     with pytest.raises(LLMError) as e:
         llm.chat([{"role": "user", "content": "x"}])
     assert e.value.kind == "access" and needle in e.value.message_ru and "администратор" in e.value.message_ru
+
+
+def test_model_falls_back_when_key_does_not_allow_it():
+    seen = []
+
+    def handler(req):
+        model = json.loads(req.content)["model"]
+        seen.append(model)
+        if model == "deepseek-v4.1-flash-1017":
+            return httpx.Response(403, json={"error": {"message": "This model is not enabled for the API key.",
+                                                       "code": "model_not_allowed"}})
+        return httpx.Response(200, json=_completion("ok"))
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    llm = LLM(Settings(base_url="https://example.test/v1", model="deepseek-v4.1-flash-1017"), api_key="k",
+              http_client=client, retry_delays=(0, 0))
+    assert llm.chat([{"role": "user", "content": "x"}]) == "ok"
+    assert llm.chat([{"role": "user", "content": "x"}]) == "ok"
+    assert seen == ["deepseek-v4.1-flash-1017", "deepseek-v4.1-flash", "deepseek-v4.1-flash"]
+    assert llm.model == "deepseek-v4.1-flash"

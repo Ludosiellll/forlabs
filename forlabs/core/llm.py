@@ -12,14 +12,14 @@ from typing import Any, Callable, Literal, TypeVar
 import httpx
 from pydantic import BaseModel, ValidationError
 
-from forlabs.core.settings import Settings
+from forlabs.core.settings import MODEL_FALLBACKS, Settings
 
 T = TypeVar("T", bound=BaseModel)
 Kind = Literal["auth", "model", "quota", "network", "bad_response", "access"]
 
 _MESSAGES = {
     "auth": "Ключ API не принят. Проверь ключ в настройках или войди в аккаунт заново.",
-    "model": "Эта модель не входит в ключ. Выбери в настройках deepseek-v4.1-flash или deepseek-v4-flash.",
+    "model": "Эта модель не входит в ключ. Выбери в настройках другую модель DeepSeek (по умолчанию deepseek-v4.1-flash-1017).",
     "quota": "Закончился лимит или баланс ключа, либо слишком много запросов подряд. Подожди или пополни ключ.",
     "network": "Нет связи с сервером модели. Проверь интернет и адрес API в настройках.",
     "bad_response": "Модель несколько раз ответила не в том формате. Попробуй ещё раз.",
@@ -107,6 +107,20 @@ class LLM:
         self.usage = UsageCounter()
 
     def _post(self, payload: dict) -> dict:
+        """Запрос; если ключ не пускает модель — следующая модель из MODEL_FALLBACKS (и запоминается)."""
+        tried: set[str] = set()
+        while True:
+            try:
+                return self._post_retrying(payload)
+            except LLMError as e:
+                current = payload.get("model", self.model)
+                tried.add(current)
+                nxt = next((m for m in MODEL_FALLBACKS.get(current, []) if m not in tried), None)
+                if e.kind != "model" or nxt is None:
+                    raise
+                payload["model"] = self.model = nxt
+
+    def _post_retrying(self, payload: dict) -> dict:
         """Запрос с повторами при временных сбоях; ключ, лимит и баланс не повторяются."""
         for attempt in range(len(self.retry_delays) + 1):
             try:

@@ -6,7 +6,9 @@ import { decideAccess, labTag, ownKeyError, parseBalance, pickKey } from "./logi
 
 const BASE = (Deno.env.get("LLM_BASE_URL") ?? "https://api.aikeysforyou.com/v1").replace(/\/$/, "");
 const KEY = Deno.env.get("LLM_API_KEY") ?? "";
-const MODELS = (Deno.env.get("LLM_MODELS") ?? "deepseek-v4.1-flash,deepseek-v4-flash").split(",").map((s) => s.trim());
+// первая — модель по умолчанию; остальные разрешены как запасные (клиент сам переходит, если ключ не пускает)
+const MODELS = (Deno.env.get("LLM_MODELS") ?? "deepseek-v4.1-flash-1017,deepseek-v4.1-flash,deepseek-v4-flash")
+  .split(",").map((s) => s.trim());
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, {
   auth: { persistSession: false },
 });

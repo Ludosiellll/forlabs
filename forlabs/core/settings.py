@@ -6,18 +6,25 @@ import json
 import os
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from forlabs.core import paths
 
 KEYRING_SERVICE = "ForLabs"
 KEYRING_USER = "api_key"
 
+DEFAULT_MODEL = "deepseek-v4.1-flash-1017"
+# если ключ не пускает модель — следующая по списку (ключ участника может отличаться от ключа администратора)
+MODEL_FALLBACKS = {"deepseek-v4.1-flash-1017": ["deepseek-v4.1-flash"]}
+MODEL_CHOICES = ["deepseek-v4.1-flash-1017", "deepseek-v4.1-flash", "deepseek-v4-flash"]
+_OLD_DEFAULTS = {"deepseek-v4.1-flash"}
+
+
 API_PRESETS: dict[str, dict[str, object]] = {
     "aikeys": {
         "title": "AI API Shop",
         "base_url": "https://api.aikeysforyou.com/v1",
-        "models": ["deepseek-v4.1-flash", "deepseek-v4-flash"],
+        "models": MODEL_CHOICES,
     },
     "deepseek": {
         "title": "DeepSeek напрямую",
@@ -30,13 +37,19 @@ API_PRESETS: dict[str, dict[str, object]] = {
 class Settings(BaseModel):
     mode: Literal["cloud", "local"] = "cloud"
     base_url: str = "https://api.aikeysforyou.com/v1"
-    model: str = "deepseek-v4.1-flash"
+    model: str = DEFAULT_MODEL
     api_key_source: Literal["keyring", "env"] = "keyring"
     word_path: str | None = None
     soffice_path: str | None = None
     tesseract_path: str | None = None
     temperature: float = 0.4
     browser_channel: str | None = None
+
+    @field_validator("model")
+    @classmethod
+    def _latest_by_default(cls, v: str) -> str:
+        """Старое значение по умолчанию поднимается до новейшей DeepSeek v4.1 flash."""
+        return DEFAULT_MODEL if (v or "").strip() in _OLD_DEFAULTS or not (v or "").strip() else v.strip()
 
 
 def _settings_file():

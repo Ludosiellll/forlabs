@@ -19,7 +19,7 @@ def test_settings_roundtrip(tmp_home):
 def test_defaults_point_to_aikeys(tmp_home):
     s = load_settings()
     assert s.base_url == "https://api.aikeysforyou.com/v1"
-    assert s.model == "deepseek-v4.1-flash"
+    assert s.model == "deepseek-v4.1-flash-1017"  # владелец: по умолчанию всегда 1017
 
 
 def test_api_key_env_fallback(tmp_home, monkeypatch):
@@ -29,3 +29,12 @@ def test_api_key_env_fallback(tmp_home, monkeypatch):
     save_settings(load_settings())
     assert "sk-test-123" not in (tmp_home / "settings.json").read_text(encoding="utf-8")
     assert "api_key" not in json.loads((tmp_home / "settings.json").read_text(encoding="utf-8"))
+
+
+def test_default_model_is_v41_flash_1017():
+    from forlabs.core.settings import Settings
+
+    assert Settings().model == "deepseek-v4.1-flash-1017"
+    # старое значение по умолчанию из прошлых версий поднимается до 1017
+    assert Settings.model_validate({"model": "deepseek-v4.1-flash"}).model == "deepseek-v4.1-flash-1017"
+    assert Settings.model_validate({"model": "deepseek-v4-flash"}).model == "deepseek-v4-flash"  # явный выбор
