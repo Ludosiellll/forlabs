@@ -71,6 +71,9 @@ jobs:
         shell: pwsh
         run: |
           $ver = python -c "from forlabs.version import __version__ as v; print(v)"
+          # pymupdf/mupdf.py — сгенерированная обёртка на 2,6 МБ: в C она не помещается в память компилятора
+          # (C1002), поэтому идёт в сборку как есть, а её бинарная часть _mupdf — как модуль
+          $mupdf = python -c "import pymupdf, os; print(os.path.join(os.path.dirname(pymupdf.__file__), 'mupdf.py'))"
           python tools/ci_run.py nuitka-app python -m nuitka run_forlabs.py --mode=standalone --assume-yes-for-downloads `
             --output-dir=build --output-filename=ForLabs.exe `
             --windows-console-mode=disable --windows-icon-from-ico=packaging/forlabs.ico `
@@ -78,12 +81,13 @@ jobs:
             --file-version="$ver.0" --product-version="$ver.0" `
             --include-package=forlabs --include-package-data=forlabs `
             --noinclude-data-files="forlabs/rules/*.md" --noinclude-data-files="forlabs/rules/*/*.md" `
-            --include-package=uvicorn --include-package=keyring.backends --include-package=win32ctypes `
-            --enable-plugin=pywebview `
+            --include-package=uvicorn --include-package=keyring.backends --nofollow-import-to=win32ctypes.tests `
             --include-package-data=pythonnet --include-package-data=clr_loader `
             --include-package-data=pymorphy3_dicts_ru --include-package-data=pymorphy3 `
             --include-package-data=docx `
             --include-module=win32timezone `
+            --nofollow-import-to=pymupdf.mupdf --include-module=pymupdf._mupdf `
+            --include-data-files="${mupdf}=pymupdf/mupdf.py" `
             --nofollow-import-to=pytest --nofollow-import-to=tests
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Get-ChildItem build -Directory | Select-Object Name
@@ -127,7 +131,6 @@ jobs:
             --include-package=forlabs.installer --include-package-data=forlabs.installer `
             --nofollow-import-to=forlabs.cloud --nofollow-import-to=forlabs.core.settings `
             --nofollow-import-to=forlabs.core.instance --nofollow-import-to=keyring `
-            --enable-plugin=pywebview `
             --include-package-data=pythonnet --include-package-data=clr_loader `
             --include-data-files=build/payload.zip=payload.zip `
             --include-data-files=build/MicrosoftEdgeWebview2Setup.exe=MicrosoftEdgeWebview2Setup.exe
