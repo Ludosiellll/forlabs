@@ -271,3 +271,26 @@ def test_semester_build_does_not_block_other_pages(client, tmp_path):
         release.set()
         t.join(5)
     assert r.status_code == 200 and elapsed < 2
+
+
+class _SubjectCloud:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def list_custom_subjects(self):
+        return list(self.rows)
+
+    def save_custom_subject(self, subject):
+        self.rows.append(subject)
+
+
+def test_custom_subjects_follow_the_account(tmp_home):
+    from forlabs.core.subjects import Subject, all_subjects
+
+    ctx = AppContext(settings=Settings(mode="local"), synchronous=True)
+    cloud = _SubjectCloud([Subject(id="oop", name="ООП", short_name="ООП")])
+    ctx._store = cloud
+    ctx.sync_subjects()
+    assert "oop" in all_subjects()  # добавлен на другом компьютере — есть и здесь
+    ctx.add_subject(Subject(id="bd", name="Базы данных", short_name="БД"))
+    assert "bd" in all_subjects() and [s.id for s in cloud.rows] == ["oop", "bd"]

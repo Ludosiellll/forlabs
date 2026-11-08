@@ -19,7 +19,7 @@ from forlabs.cloud.auth import CloudError
 from forlabs.core.llm import LLMError
 from forlabs.core.models import Enrollment, LabSpec, Profile, Task, finding_key, is_accepted
 from forlabs.core.settings import API_PRESETS, Settings, get_api_key, save_settings, set_api_key
-from forlabs.core.subjects import Subject, add_custom_subject, all_subjects, get_subject
+from forlabs.core.subjects import Subject, all_subjects, get_subject
 from forlabs.pipeline.run import PipelineError, today
 from forlabs.render import libreoffice, word_com
 from forlabs.report.derive import numbered_blocks
@@ -148,6 +148,10 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
             member = ctx.store.member()
             if member and not member.approved:
                 return render(request, "pending.html", member=member)
+            try:
+                ctx.sync_subjects()
+            except CloudError:
+                pass  # без связи работают уже известные предметы
         profiles = ctx.store.list_profiles()
         if not profiles:
             return render(request, "home.html", profiles=[], current=None, nav="home")
@@ -229,7 +233,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
     def subject_add(name: str = Form(...), short_name: str = Form(...), kind: str = Form("theory"),
                     header_style: str = Form("long"), variant: int = Form(14)):
         sid = slug(short_name)
-        add_custom_subject(Subject(id=sid, name=name.strip(), short_name=short_name.strip(),
+        ctx.add_subject(Subject(id=sid, name=name.strip(), short_name=short_name.strip(),
                                    kind=kind if kind in ("theory", "code", "1c", "network") else "theory",
                                    default_header_style="short" if header_style == "short" else "long",
                                    default_variant=variant))
@@ -422,7 +426,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         if not ctx.claim(key):
             return redirect(lab_url(p, s, n), err=BUSY)
         try:
-            st = ctx.pipeline.mark_final(load(p, s, n))
+            ctx.pipeline.mark_final(load(p, s, n))
         except PipelineError as e:
             return redirect(lab_url(p, s, n), err=str(e))
         finally:

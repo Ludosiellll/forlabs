@@ -112,6 +112,9 @@ def test_store_profiles_and_labs(auth, tmp_home):
     store.save_lab(st)
     assert store.load_lab("ivanov", "ssp", "5.2").status == "parsed"
     assert [s.number for s in store.list_labs("ivanov", "ssp")] == ["5.2"]
+    st.updated_at = "2000-01-01T00:00:00"
+    store.save_lab(st)
+    assert store.load_lab("ivanov", "ssp", "5.2").updated_at > "2026"  # время изменения обновляется
 
 
 def test_files_roundtrip(auth, tmp_home, tmp_path):
@@ -136,6 +139,16 @@ def test_fetch_by_lab_path(auth, tmp_home, tmp_path):
     assert store.fetch("ivanov", "ssp", "4", "assets/scheme_1_2.png", out) is True
     assert out.read_bytes() == b"PNG1"
     assert store.fetch("ivanov", "ssp", "4", "assets/нет.png", tmp_path / "x.png") is False
+
+
+def test_custom_subjects_roundtrip(auth, tmp_home):
+    from forlabs.core.subjects import Subject
+
+    auth.sign_in("a@b.c", "верный")
+    store = CloudStore(auth)
+    store.save_custom_subject(Subject(id="oop", name="Объектно-ориентированное программирование", short_name="ООП"))
+    got = store.list_custom_subjects()
+    assert [s.short_name for s in got] == ["ООП"]
 
 
 def test_storage_key_is_ascii():

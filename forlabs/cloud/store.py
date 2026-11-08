@@ -94,6 +94,9 @@ class CloudStore:
             safe_name(subject_id) / f"ЛР{safe_name(number)}"
 
     def save_lab(self, st: LabState) -> None:
+        from datetime import datetime
+
+        st.updated_at = datetime.now().isoformat(timespec="seconds")
         d = self.lab_dir(st.profile_id, st.subject_id, st.number)
         d.mkdir(parents=True, exist_ok=True)
         (d / "state.json").write_text(st.model_dump_json(indent=2), encoding="utf-8")
@@ -134,6 +137,16 @@ class CloudStore:
 
     def reset_rule_override(self, path: str) -> None:
         self._rest("DELETE", "rule_overrides", params={"path": f"eq.{path}"})
+
+    # свои предметы (общие для всех компьютеров аккаунта)
+    def list_custom_subjects(self) -> list:
+        from forlabs.core.subjects import Subject
+
+        rows = self._rest("GET", "custom_subjects", params={"select": "id,data"}).json()
+        return [Subject.model_validate(r["data"]) for r in rows]
+
+    def save_custom_subject(self, subject) -> None:
+        self._upsert("custom_subjects", {"id": subject.id, "data": subject.model_dump(mode="json")}, "owner,id")
 
     # файлы
     def upload(self, local: Path, profile_id: str, subject_id: str, number: str, rel: str) -> str:

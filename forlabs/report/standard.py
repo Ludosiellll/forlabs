@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from forlabs.core.models import QA, DashList, Finding, Gender, LabSpec, NumberedList, Paragraph, ReportDoc
+from forlabs.core.models import DashList, Finding, Gender, LabSpec, NumberedList, Paragraph, ReportDoc
 from forlabs.core.text import normalize_for_compare
 from forlabs.report.morph import goal_to_conclusion, wrong_gender_verbs
 

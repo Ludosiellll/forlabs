@@ -14,6 +14,7 @@ from forlabs.core.llm import LLM
 from forlabs.core.rules import RuleBook
 from forlabs.core.settings import Settings, get_api_key, load_settings
 from forlabs.core.store import Store
+from forlabs.core.subjects import Subject, add_custom_subject
 from forlabs.pipeline.events import EventBus
 from forlabs.pipeline.memory import SubjectMemory
 from forlabs.pipeline.run import Pipeline
@@ -62,6 +63,17 @@ class AppContext:
         if self._store is None:
             self._store = CloudStore(self.auth) if self.cloud else Store()
         return self._store
+
+    def sync_subjects(self) -> None:
+        """Свои предметы из облака кладутся в локальный список (добавлены на другом компьютере)."""
+        if hasattr(self.store, "list_custom_subjects"):
+            for subj in self.store.list_custom_subjects():
+                add_custom_subject(subj)
+
+    def add_subject(self, subject: Subject) -> None:
+        add_custom_subject(subject)
+        if hasattr(self.store, "save_custom_subject"):
+            self.store.save_custom_subject(subject)
 
     def rules(self) -> RuleBook:
         if self.cloud:

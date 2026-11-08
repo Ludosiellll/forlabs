@@ -9,7 +9,6 @@ from datetime import date as _date
 from pathlib import Path
 from typing import Callable
 
-from forlabs.core.llm import LLMError
 from forlabs.core.models import Figure, LabSpec, LabState, Profile, ReportDoc, is_accepted
 from forlabs.core.rules import RuleBook
 from forlabs.core.store import safe_name
