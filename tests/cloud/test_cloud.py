@@ -234,7 +234,7 @@ def test_rest_retries_a_dropped_connection(auth, fake):
     assert store.list_profiles() == []
     fake.drop_next = 5
     with pytest.raises(CloudError):
-        store.list_profiles()
+        store.list_members()  # у этого запроса нет копии «без связи» — после повторов ошибка
 
 
 def test_delete_lab_removes_cache_and_cloud_files(auth, fake, tmp_home, tmp_path):
@@ -256,3 +256,20 @@ def test_delete_lab_removes_cache_and_cloud_files(auth, fake, tmp_home, tmp_path
     assert not any("/lr5/" in k for k in fake.objects)  # файлы лабы в облаке удалены
     st = pipe.create_lab("ivanov", "ssp", [("новая.txt", b"new")], number="5")
     assert [f.name for f in (pipe.lab_dir(st) / "source").iterdir()] == ["новая.txt"]
+
+
+def test_offline_shows_local_copy(auth, fake, tmp_home):
+    auth.sign_in("a@b.c", "верный")
+    store = CloudStore(auth, retry_delays=(0, 0))
+    store.save_profile(Profile(id="ivanov", full_name="Иванов Иван", title_name="И.И. Иванов"))
+    store.save_lab(LabState(profile_id="ivanov", subject_id="ssp", number="4", status="rendered"))
+    assert [p.id for p in store.list_profiles()] == ["ivanov"]  # заодно кэш профилей
+    fake.drop_next = 10_000  # интернет пропал
+    assert store.load_lab("ivanov", "ssp", "4").status == "rendered"
+    assert [s.number for s in store.list_labs("ivanov", "ssp")] == ["4"]
+    assert store.get_profile("ivanov").full_name == "Иванов Иван"
+    assert [p.id for p in store.list_profiles()] == ["ivanov"]
+    assert store.offline is True
+    fake.drop_next = 0
+    store.list_profiles()
+    assert store.offline is False

@@ -277,16 +277,27 @@ class Pipeline:
             spec, findings = extract_spec(src, subject, enrollment, self._llm(st),
                                           None if is_draft(st.number) else st.number, date or today(), wishes=wishes)
             old_dir = self.lab_dir(st)
+            old_key = moved_from = None
             if st.number != spec.number:
-                old_key = self.key(st)
+                old_key, old_number = self.key(st), st.number
                 st = self._renumber(st, spec.number, old_dir)
+                spec.number = st.number
+                moved_from = old_number
+            st.spec, st.findings, st.status, st.error = spec, findings, "parsed", None
+            # сначала лаба сохраняется под новым номером, потом удаляется черновик, потом страница переходит:
+            # обрыв связи или выключение между шагами не теряют лабу
+            self._save(st)
+            if moved_from is not None:
+                try:
+                    if is_draft(moved_from):
+                        self.store.delete_lab(st.profile_id, st.subject_id, moved_from)
+                except Exception as e:
+                    logging.getLogger("forlabs").warning("Черновик %s не удалён: %s", moved_from, e)
                 if st.wish_images:
                     self._sync(st, st.wish_images)  # в облаке фото лежали под номером черновика
-                spec.number = st.number
                 for ev in self.bus.history(old_key):
                     self.bus.publish(self.key(st), ev.text, ev.kind, ev.step)
                 self.bus.publish(old_key, st.number, "moved")
-            st.spec, st.findings, st.status, st.error = spec, findings, "parsed", None
             self._emit(st, f"Разбор готов: {len(spec.tasks)} заданий, {len(spec.questions)} вопросов", "done",
                        step="parse")
             return self._save(st)
@@ -295,7 +306,7 @@ class Pipeline:
 
     def _renumber(self, st: LabState, number: str, old_dir: Path) -> LabState:
         """Переносит черновик под номер из методички. Чужие лабы не трогает: занятый номер → «N-2», «N-3»…"""
-        old_key, old_number = self.key(st), st.number
+        old_key = self.key(st)
         candidate, k = number, 2
         while self._taken(st.profile_id, st.subject_id, candidate):
             candidate, k = f"{number}-{k}", k + 1
@@ -313,12 +324,7 @@ class Pipeline:
                 shutil.rmtree(new_dir, ignore_errors=True)
             shutil.move(str(old_dir), str(new_dir))
             st.source_path = str(new_dir / "source")
-        try:
-            if is_draft(old_number):
-                self.store.delete_lab(st.profile_id, st.subject_id, old_number)
-        except Exception:
-            pass
-        return st
+        return st  # строку черновика удаляет parse — после сохранения под новым номером
 
     def confirm(self, st: LabState, spec: LabSpec | None) -> LabState:
         if spec is not None:

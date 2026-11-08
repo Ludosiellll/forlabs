@@ -111,3 +111,43 @@ def test_broken_image_file_becomes_a_slot_again(tmp_home, tmp_path):
     st = pipe.render(st)
     assert st.status == "needs_manual", st.error
     assert pipe.slots(st) and "вставь снимок ещё раз" in pipe.slots(st)[0][2].slot
+
+
+def test_renumber_saves_new_lab_before_deleting_draft(tmp_home, tmp_path):
+    pipe, fake = setup(tmp_home, tmp_path, [RAW])
+    calls = []
+    real_save, real_delete, real_publish = pipe.store.save_lab, pipe.store.delete_lab, pipe.bus.publish
+
+    def save(st):
+        calls.append(("save", st.number))
+        real_save(st)
+
+    def delete(p, s, n):
+        calls.append(("delete", n))
+        real_delete(p, s, n)
+
+    def publish(key, text, kind="info", step=None):
+        if kind == "moved":
+            calls.append(("moved", text))
+        real_publish(key, text, kind, step)
+
+    pipe.store.save_lab, pipe.store.delete_lab, pipe.bus.publish = save, delete, publish
+    st = pipe.create_lab("ivanov", "psip", [(FIXTURE.name, FIXTURE.read_bytes())])
+    draft = st.number
+    calls.clear()
+    pipe.parse(st, date="24.09.2026")
+    i_save = calls.index(("save", "7"))
+    assert i_save < calls.index(("delete", draft)) < calls.index(("moved", "7"))
+
+
+def test_delete_lab_while_running_is_refused_and_draft_rows_never_lost(tmp_home, tmp_path):
+    """Если удалить черновик в облаке не получилось — лаба под новым номером всё равно сохранена."""
+    pipe, fake = setup(tmp_home, tmp_path, [RAW])
+
+    def offline(*a, **k):
+        raise CloudError("Нет связи с облаком. Проверь интернет.")
+
+    st = pipe.create_lab("ivanov", "psip", [(FIXTURE.name, FIXTURE.read_bytes())])
+    pipe.store.delete_lab = offline
+    st = pipe.parse(st, date="24.09.2026")
+    assert st.status == "parsed" and pipe.store.load_lab("ivanov", "psip", "7") is not None

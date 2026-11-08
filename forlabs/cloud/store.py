@@ -27,8 +27,9 @@ from forlabs.cloud.admin import (
 )
 from forlabs.cloud.auth import CloudAuth, CloudError
 from forlabs.core import paths
+from forlabs.core.fs import atomic_write_text
 from forlabs.core.models import LabState, Profile
-from forlabs.core.store import Store, _number_key, safe_name
+from forlabs.core.store import Store, _number_key, _read_model, safe_name
 
 BUCKET = "labs"
 
@@ -79,6 +80,7 @@ class CloudStore:
         self.http = auth.http
         self.cfg = auth.config
         self.local = Store(cache_home or paths.data_home() / "cloud_cache")
+        self.offline = False
 
     # HTTP
     def _h(self, extra: dict | None = None) -> dict:
@@ -108,6 +110,7 @@ class CloudStore:
             if r.status_code >= 500 and attempt < len(self.retry_delays):
                 time.sleep(self.retry_delays[attempt])
                 continue
+            self.offline = False
             return self._check(r)
         raise AssertionError("недостижимо")
 
@@ -120,16 +123,52 @@ class CloudStore:
                    prefer="resolution=merge-duplicates,return=minimal")
 
     # профили
+    # без связи — копия с этого компьютера (только чтение); offline включает плашку в интерфейсе
+    def _profiles_cache(self) -> Path:
+        return self.local.home / "profiles" / safe_name(self.auth.user_id or "anon")
+
+    def _cache_profile(self, p: Profile) -> None:
+        try:
+            atomic_write_text(self._profiles_cache() / f"{safe_name(p.id)}.json", p.model_dump_json(indent=2))
+        except OSError:
+            pass
+
+    def _cached_profiles(self) -> list[Profile]:
+        d = self._profiles_cache()
+        found = [_read_model(Profile, f) for f in d.glob("*.json")] if d.exists() else []
+        return sorted((p for p in found if p is not None), key=lambda p: p.full_name)
+
+    def _offline_or_raise(self, e: CloudError) -> None:
+        if not (e.message_ru or "").startswith("Нет связи"):
+            raise e
+        self.offline = True
+
     def list_profiles(self) -> list[Profile]:
-        rows = self._rest("GET", "student_profiles", params={"select": "data", **self._mine()}).json()
-        return sorted((Profile.model_validate(r["data"]) for r in rows), key=lambda p: p.full_name)
+        try:
+            rows = self._rest("GET", "student_profiles", params={"select": "data", **self._mine()}).json()
+        except CloudError as e:
+            self._offline_or_raise(e)
+            return self._cached_profiles()
+        profiles = sorted((Profile.model_validate(r["data"]) for r in rows), key=lambda p: p.full_name)
+        for p in profiles:
+            self._cache_profile(p)
+        return profiles
 
     def get_profile(self, pid: str) -> Profile | None:
-        rows = self._rest("GET", "student_profiles", params={"select": "data", "id": f"eq.{pid}", **self._mine()}).json()
-        return Profile.model_validate(rows[0]["data"]) if rows else None
+        try:
+            rows = self._rest("GET", "student_profiles",
+                              params={"select": "data", "id": f"eq.{pid}", **self._mine()}).json()
+        except CloudError as e:
+            self._offline_or_raise(e)
+            return next((p for p in self._cached_profiles() if p.id == pid), None)
+        p = Profile.model_validate(rows[0]["data"]) if rows else None
+        if p:
+            self._cache_profile(p)
+        return p
 
     def save_profile(self, p: Profile) -> None:
         self._upsert("student_profiles", {"id": p.id, "data": p.model_dump(mode="json")}, "owner,id")
+        self._cache_profile(p)
 
     def delete_profile(self, pid: str) -> None:
         self._rest("DELETE", "student_profiles", params={"id": f"eq.{pid}"})
@@ -151,13 +190,25 @@ class CloudStore:
                      "owner,profile_id,subject_id,number")
 
     def load_lab(self, profile_id: str, subject_id: str, number: str) -> LabState | None:
-        rows = self._rest("GET", "labs", params={"select": "state", **self._mine(), "profile_id": f"eq.{profile_id}",
-                                                 "subject_id": f"eq.{subject_id}", "number": f"eq.{number}"}).json()
+        try:
+            rows = self._rest("GET", "labs", params={"select": "state", **self._mine(),
+                                                     "profile_id": f"eq.{profile_id}", "subject_id": f"eq.{subject_id}",
+                                                     "number": f"eq.{number}"}).json()
+        except CloudError as e:
+            self._offline_or_raise(e)
+            return _read_model(LabState, self.lab_dir(profile_id, subject_id, number) / "state.json")
         return LabState.model_validate(rows[0]["state"]) if rows else None
 
     def list_labs(self, profile_id: str, subject_id: str) -> list[LabState]:
-        rows = self._rest("GET", "labs", params={"select": "state", **self._mine(), "profile_id": f"eq.{profile_id}",
-                                                 "subject_id": f"eq.{subject_id}"}).json()
+        try:
+            rows = self._rest("GET", "labs", params={"select": "state", **self._mine(),
+                                                     "profile_id": f"eq.{profile_id}",
+                                                     "subject_id": f"eq.{subject_id}"}).json()
+        except CloudError as e:
+            self._offline_or_raise(e)
+            d = self.lab_dir(profile_id, subject_id, "x").parent
+            states = [_read_model(LabState, f / "state.json") for f in d.iterdir()] if d.exists() else []
+            return sorted((x for x in states if x is not None), key=lambda x: _number_key(x.number))
         return sorted((LabState.model_validate(r["state"]) for r in rows), key=lambda s: _number_key(s.number))
 
     def delete_lab(self, profile_id: str, subject_id: str, number: str) -> None:

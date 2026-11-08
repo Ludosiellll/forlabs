@@ -195,7 +195,12 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
     def home(request: Request, profile: str | None = None, subject: str | None = None):
         member = None
         if ctx.cloud:
-            member = ctx.store.member()
+            try:
+                member = ctx.store.member()
+            except CloudError as e:
+                if not e.message_ru.startswith("Нет связи"):
+                    raise
+                member = None  # без связи: главная из копии на этом компьютере
             if member and not member.approved:
                 return render(request, "pending.html", member=member)
             try:
