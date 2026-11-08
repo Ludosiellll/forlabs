@@ -19,6 +19,7 @@ from forlabs.pipeline.events import EventBus
 from forlabs.pipeline.repair import check_all, check_and_repair, report_text
 from forlabs.pipeline.write import refresh_derived, write_report
 from forlabs.render.docx_builder import build_lab, build_semester
+from forlabs.render.conformance import compare
 from forlabs.render.finalize import finalize, has_slots
 from forlabs.spec.extract import extract_spec, verify_verbatim
 
@@ -336,6 +337,15 @@ class Pipeline:
             self._emit(st, "Доводка документа и предпросмотр", step="finalize")
             rep = finalize(docx, profile.doc_author or profile.full_name, d / "render", self.soffice,
                            prefer_word=self.prefer_word)
+            # последний шлюз: готовый документ (после доводки) сверяется с эталоном абзац за абзацем
+            canon = compare(docx)
+            for f in canon:
+                if f.location == "continuation":
+                    f.severity = "warn"  # вставлено Word при доводке — показываем, но сдачу не держим
+            st.findings = [f for f in st.findings if f.rule_id != "render.canon_mismatch"] + canon
+            if canon:
+                self._emit(st, f"Оформление отличается от эталона в {len(canon)} местах — смотри замечания", "warn",
+                           step="render")
             st.docx_path, st.pdf_path = str(docx), str(rep.pdf)
             st.pages = [str(p) for p in rep.pages]
             st.engine, st.warnings = rep.engine, rep.warnings

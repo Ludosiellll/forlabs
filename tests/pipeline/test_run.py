@@ -303,3 +303,34 @@ def test_failure_mid_lab_resumes_from_unwritten_task(tmp_home, tmp_path):
     assert st.status == "needs_manual", st.error
     assert st.report.sections[0].model_dump() == first
     assert len(fake.calls) == 5  # задание 1 не переписывалось
+
+
+def test_render_checks_final_docx_against_canon(tmp_home, tmp_path, monkeypatch):
+    import pytest
+    from docx import Document
+    from docx.shared import Pt
+
+    import forlabs.pipeline.run as run_mod
+    from forlabs.pipeline.run import PipelineError
+
+    real = run_mod.finalize
+
+    def broken_finalize(docx, *a, **k):
+        rep = real(docx, *a, **k)
+        d = Document(str(docx))  # доводка испортила оформление абзаца
+        for par in d.paragraphs:
+            if par.text.startswith("Фон шапки"):
+                for r in par.runs:
+                    r.font.size = Pt(12)
+        d.save(str(docx))
+        return rep
+
+    monkeypatch.setattr(run_mod, "finalize", broken_finalize)
+    pipe, _ = setup(tmp_home, tmp_path, [RAW, SEC, SEC2, ANS])
+    st = pipe.create_lab("ivanov", "psip", [(FIXTURE.name, FIXTURE.read_bytes())], number="7")
+    st = pipe.execute(pipe.confirm(pipe.parse(st, date="24.09.2026"), None))
+    st = pipe.attach_screenshot(st, section=1, block=4, image=png_bytes())
+    bad = [f for f in st.findings if f.rule_id == "render.canon_mismatch"]
+    assert bad and "Фон шапки" in bad[0].text and bad[0].severity == "error"
+    with pytest.raises(PipelineError):
+        pipe.mark_final(st)
