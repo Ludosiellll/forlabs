@@ -10,6 +10,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, model_validator
 
 from forlabs.core.models import (
+    PROFILE_FIELDS,
     QA,
     DashList,
     Figure,
@@ -18,6 +19,7 @@ from forlabs.core.models import (
     Listing,
     NumberedList,
     Paragraph,
+    ProfileChange,
     Profile,
     Table,
     TaskSection,
@@ -53,14 +55,18 @@ class QuestionEdit(BaseModel):
 
 
 class EditPlan(BaseModel):
-    kind: Literal["edit", "answer", "question"] = "question"
+    kind: Literal["edit", "answer", "question", "offtopic"] = "question"
 
     @model_validator(mode="before")
     @classmethod
     def _type_alias(cls, v):  # модель иногда пишет type вместо kind
         if isinstance(v, dict) and "kind" not in v and "type" in v:
             v = {**v, "kind": v["type"]}
+        if isinstance(v, dict) and v.get("kind") not in ("edit", "answer", "question", "offtopic"):
+            v = {**v, "kind": "question"}
         return v
+
+    profile: list[dict] = Field(default_factory=list)  # [{"field": "teacher", "value": "…"}]
 
     reply: str = ""
     tasks: list[TaskEdit] = Field(default_factory=list)
@@ -146,8 +152,63 @@ def _outline(st: LabState, limit: int = 220) -> str:
     return "\n".join(out)
 
 
+ANSWER_LIMIT = 1200  # ответ на вопрос в чате правок — коротко, длинный текст из чата не вытянуть
+PLAN_MAX_TOKENS = 2000
+
+
+def _profile_now(profile: Profile, enrollment) -> str:
+    e = enrollment
+    return (f"ФИО: {profile.full_name}; на титуле: {profile.title_name}; пол: {_gender_ru(profile.gender)}; "
+            f"группа: {profile.group}; руководитель: {getattr(e, 'teacher', '') or '—'}; предмет на титуле: "
+            f"{getattr(e, 'title_subject', '') or '—'}; учебный год: {getattr(e, 'academic_year', '') or '—'}; "
+            f"вариант по умолчанию: {getattr(e, 'variant', None) or '—'}; рабочее место: {getattr(e, 'workplace', None) or '—'}")
+
+
+def _short(text: str, limit: int = ANSWER_LIMIT) -> str:
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    end = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "), cut.rfind("\n"))
+    return (cut[:end + 1] if end > limit // 2 else cut).rstrip() + " …"
+
+
+def profile_changes(raw: list[dict], profile: Profile, enrollment) -> list[ProfileChange]:
+    """Предложенные моделью изменения профиля: только известные поля, непустые и отличные от текущих."""
+    out: list[ProfileChange] = []
+    seen = set()
+    for item in raw or []:
+        if not isinstance(item, dict):
+            continue
+        field, value = str(item.get("field") or "").strip(), " ".join(str(item.get("value") or "").split())
+        if field not in PROFILE_FIELDS or not value or field in seen:
+            continue
+        if field == "gender":
+            low = value.lower()
+            value = "f" if low.startswith(("ж", "f")) else "m" if low.startswith(("м", "m")) else ""
+            if not value:
+                continue
+        if field in ("variant", "workplace"):
+            digits = "".join(ch for ch in value if ch.isdigit())
+            if not digits or not 1 <= int(digits) <= 999:
+                continue
+            value = str(int(digits))
+        holder = profile if field in ("full_name", "title_name", "gender", "group") else enrollment
+        old = getattr(holder, field, None) if holder is not None else None
+        old = "" if old is None else str(old)
+        if old == value:
+            continue
+        seen.add(field)
+        out.append(ProfileChange(field=field, value=value, old=old, label=PROFILE_FIELDS[field]))
+    return out
+
+
+def shown(change: ProfileChange, which: str = "value") -> str:
+    v = getattr(change, which)
+    return {"m": "мужской", "f": "женский"}.get(v, v) if change.field == "gender" else v
+
+
 def plan_edit(st: LabState, message: str, profile: Profile, subject: Subject, llm, rules: RuleBook,
-              teacher: str) -> EditPlan:
+              teacher: str, enrollment=None) -> EditPlan:
     spec, report = st.spec, st.report
     qa = "\n".join(f"{q.n}. {q.question}\n   Ответ: {q.answer}" for q in report.questions) or "нет"
     prior = st.chat[:-1] if st.chat and st.chat[-1].role == "user" else st.chat  # текущее сообщение — ниже
@@ -155,6 +216,7 @@ def plan_edit(st: LabState, message: str, profile: Profile, subject: Subject, ll
     # методичка нужна, только когда речь о варианте или заданиях из неё — иначе это лишние тысячи токенов
     source = (spec.source_text or "")[:SOURCE_LIMIT] if _NEEDS_SOURCE.search(message) else "не нужен для этого сообщения"
     user = (f"Предмет: {subject.name}. Пол студента: {_gender_ru(profile.gender)}.\n"
+            f"Данные профиля сейчас: {_profile_now(profile, enrollment)}\n"
             f"Тема: {spec.topic}\nЦель: {spec.goal}\n"
             f"Вариант по журналу: {spec.variant or '—'}. Номер рабочего места: {spec.workplace or '—'}.\n"
             f"Текст варианта в отчёте: {spec.variant_text or 'нет'}\n"
@@ -167,12 +229,14 @@ def plan_edit(st: LabState, message: str, profile: Profile, subject: Subject, ll
             f"Текст методички (для вариантов):\n{source}\n\n"
             f"Новое сообщение студента:\n{message}")
     plan = llm.json([{"role": "system", "content": CHAT_PLAN_SYSTEM.format(rules=rules.load("repair", subject.id))},
-                     {"role": "user", "content": user}], EditPlan)
+                     {"role": "user", "content": user}], EditPlan, max_tokens=PLAN_MAX_TOKENS)
     task_numbers = {t.n for t in spec.tasks}
     dropped = sorted({t.n for t in plan.tasks if t.n not in task_numbers})
     plan.tasks = [t for t in plan.tasks if t.n in task_numbers and t.instruction.strip()]
     plan.questions = [q for q in plan.questions if 1 <= q.n <= len(report.questions) and q.instruction.strip()]
     plan.reply = plan.reply.strip()
+    if plan.kind in ("answer", "offtopic", "question"):
+        plan.reply = _short(plan.reply)
     plan.remember = (plan.remember or "").strip() or None
     if plan.kind != "edit":
         plan.tasks, plan.questions = [], []

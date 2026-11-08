@@ -608,6 +608,23 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         ctx.run(ctx.pipeline.key(st), ctx.pipeline.revert, st, vid)
         return redirect(lab_url(p, s, n) + "?tab=report")
 
+    @app.post("/labs/{p}/{s}/{n}/chat/profile/{msg_id}")
+    def lab_chat_profile(p: str, s: str, n: str, msg_id: str, apply: str = Form("0")):
+        if busy_lab(p, s, n):
+            return redirect(lab_url(p, s, n), err=BUSY)
+        st = load(p, s, n)
+        msg = next((m for m in st.chat if m.id == msg_id and m.profile), None)
+        if msg is None or msg.profile_state:
+            return redirect(lab_url(p, s, n), err="Это предложение уже обработано")
+        try:
+            if apply == "1":
+                ctx.run(ctx.pipeline.key(st), ctx.pipeline.apply_profile_change, st, msg_id, True)
+                return redirect(lab_url(p, s, n), msg="Профиль обновлён — документ пересобирается")
+            ctx.pipeline.apply_profile_change(st, msg_id, False)
+        except PipelineError as e:
+            return redirect(lab_url(p, s, n), err=str(e))
+        return redirect(lab_url(p, s, n))
+
     @app.post("/labs/{p}/{s}/{n}/rerender")
     def lab_rerender(p: str, s: str, n: str):
         st = load(p, s, n)

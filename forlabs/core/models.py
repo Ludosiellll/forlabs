@@ -151,6 +151,21 @@ def is_accepted(f: "Finding", accepted: "list[str] | set[str]") -> bool:
 LabStatus = Literal["draft", "parsed", "confirmed", "executing", "needs_manual", "rendered", "final", "failed"]
 
 
+PROFILE_FIELDS: dict[str, str] = {  # что чат правок может предложить поменять в профиле (с подтверждением)
+    "full_name": "ФИО", "title_name": "ФИО на титуле", "gender": "пол", "group": "группа",
+    "teacher": "руководитель", "title_subject": "название предмета на титуле", "academic_year": "учебный год",
+    "variant": "вариант по умолчанию", "workplace": "номер рабочего места",
+}
+
+
+class ProfileChange(BaseModel):
+    """Предложение чата поменять данные профиля или предмета: применяется только по кнопке."""
+    field: str
+    value: str
+    old: str = ""
+    label: str = ""
+
+
 class ChatMessage(BaseModel):
     """Сообщение чата правок лабы."""
     id: str
@@ -158,12 +173,14 @@ class ChatMessage(BaseModel):
     text: str
     at: str
     remember: bool = False
-    kind: Literal["edit", "answer", "question", "failed", "revert", "note"] = "note"
+    kind: Literal["edit", "answer", "question", "offtopic", "failed", "revert", "note"] = "note"
     changed: list[str] = Field(default_factory=list)
     retake: list[str] = Field(default_factory=list)
     version: int | None = None  # версия «до этой правки» — для кнопки «Вернуть как было»
     images: list[str] = Field(default_factory=list)  # приложенные фото (пути внутри папки лабы)
     image_text: str = ""  # что модель прочитала с фото
+    profile: list[ProfileChange] = Field(default_factory=list)  # предложено поменять в профиле
+    profile_state: Literal["", "applied", "declined"] = ""
 
 
 class LabVersion(BaseModel):

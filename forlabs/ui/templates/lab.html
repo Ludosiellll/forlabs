@@ -43,6 +43,21 @@
             {% if m.text %}<div class="txt">{{ m.text }}</div>{% endif %}
             {% if m.images %}<div class="thumbs">{% for img in m.images %}<a href="{{ base_url }}/{{ img }}"><img src="{{ base_url }}/{{ img }}" alt="Фото к сообщению" loading="lazy"></a>{% endfor %}</div>{% endif %}
             {% if m.image_text %}<details class="read"><summary>Что прочитано с фото</summary><div class="txt">{{ m.image_text }}</div></details>{% endif %}
+            {% if m.profile %}
+            <div class="profile-offer">
+              <div class="small">Поменять в профиле:</div>
+              <ul class="small">{% for c in m.profile %}<li>{{ c.label }}: <span class="muted">{{ {'m': 'мужской', 'f': 'женский'}.get(c.old, c.old) or '—' }}</span> → <b>{{ {'m': 'мужской', 'f': 'женский'}.get(c.value, c.value) }}</b></li>{% endfor %}</ul>
+              {% if m.profile_state == 'applied' %}<div class="small muted">Поменяно в профиле.</div>
+              {% elif m.profile_state == 'declined' %}<div class="small muted">Оставлено как было.</div>
+              {% else %}
+              <form method="post" action="{{ base_url }}/chat/profile/{{ m.id }}" class="row">
+                <button class="btn small primary" type="submit" name="apply" value="1" {{ 'disabled' if busy }}>Поменять в профиле</button>
+                <button class="btn small link" type="submit" name="apply" value="0" {{ 'disabled' if busy }}>Не менять</button>
+              </form>
+              <div class="hint">Профиль общий для всех лаб: эта пересоберётся сразу, остальные — по кнопке «Пересобрать».{% if m.profile|selectattr('field', 'equalto', 'gender')|list %} Уже написанный текст не переписывается — окончания поправь сообщением в чате.{% endif %}</div>
+              {% endif %}
+            </div>
+            {% endif %}
             {% if m.role == 'assistant' and m.version in version_ids %}
             <form method="post" action="{{ base_url }}/chat/revert/{{ m.version }}" onsubmit="return confirm('Вернуть отчёт к состоянию до этого сообщения? Правки после него тоже откатятся.')">
               <button class="btn link small" type="submit" {{ 'disabled' if busy }}>{{ 'Отменить откат' if m.kind == 'revert' else 'Вернуть как было' }}</button></form>

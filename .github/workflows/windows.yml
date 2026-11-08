@@ -82,7 +82,7 @@ jobs:
             --enable-plugin=pywebview `
             --include-package-data=pythonnet --include-package-data=clr_loader `
             --include-package-data=pymorphy3_dicts_ru --include-package-data=pymorphy3 `
-            --include-package-data=docx --include-package-data=playwright `
+            --include-package-data=docx `
             --include-module=win32timezone `
             --nofollow-import-to=pytest --nofollow-import-to=tests
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

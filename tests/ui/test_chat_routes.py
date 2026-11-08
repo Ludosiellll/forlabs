@@ -210,3 +210,21 @@ def test_failed_render_offers_rebuild_not_continue(lab):
     page = client.get(url + "?tab=report").text
     notice = page[page.index("notice err"):page.index("notice err") + 800]
     assert "/rerender" in notice and "Продолжить" not in notice
+
+
+def test_profile_offer_buttons_apply_and_decline(lab):
+    client, ctx, url = lab
+    client.post(url + "/execute", follow_redirects=False)
+    ctx.llm().responses[:] = [{"kind": "answer", "reply": "Предлагаю поменять руководителя.",
+                               "profile": [{"field": "teacher", "value": "Петров П.П."}]}]
+    client.post(url + "/chat", data={"message": "руководитель теперь Петров П.П."}, follow_redirects=False)
+    page = client.get(url + "?tab=report").text
+    assert "Поменять в профиле" in page and "Петров П.П." in page
+    st = ctx.store.load_lab("ivanov_ivan_petrovich", "psip", "7")
+    msg_id = st.chat[-1].id
+    r = client.post(url + f"/chat/profile/{msg_id}", data={"apply": "1"}, follow_redirects=False)
+    assert r.status_code == 303 and "err=" not in r.headers["location"]
+    assert ctx.store.get_profile("ivanov_ivan_petrovich").enrollment("psip").teacher == "Петров П.П."
+    assert "Поменяно в профиле" in client.get(url + "?tab=report").text
+    r = client.post(url + f"/chat/profile/{msg_id}", data={"apply": "1"}, follow_redirects=False)
+    assert "err=" in r.headers["location"]
