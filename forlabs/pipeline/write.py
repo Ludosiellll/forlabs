@@ -20,7 +20,7 @@ from forlabs.report.morph import goal_to_conclusion
 
 
 class BlockDraft(BaseModel):
-    type: Literal["paragraph", "dash_list", "numbered_list", "listing", "figure", "table"]
+    type: Literal["paragraph", "dash_list", "numbered_list", "listing", "figure", "table"] | None = None
     text: str | None = None
     items: list[str] | None = None
     topic: str | None = None
@@ -30,6 +30,8 @@ class BlockDraft(BaseModel):
     instruction: str | None = None
     dot: str | None = None
     rows: list[list[str]] | None = None
+    keep: str | None = None  # правка: оставить исходный блок bN как есть
+    retake: bool = False  # правка: скриншот переснять
 
 
 class SectionDraft(BaseModel):
@@ -56,7 +58,8 @@ def section_text(sec: TaskSection) -> str:
     return "\n".join(out)
 
 
-def draft_to_blocks(draft: SectionDraft, assets_dir: Path, sec_n: int, render_diagrams: bool = True) -> list:
+def draft_to_blocks(draft: SectionDraft, assets_dir: Path, sec_n: int, render_diagrams: bool = True,
+                    name_suffix: str = "") -> list:
     blocks = []
     for i, b in enumerate(draft.blocks, start=1):
         if b.type == "paragraph" and (b.text or "").strip():
@@ -77,7 +80,7 @@ def draft_to_blocks(draft: SectionDraft, assets_dir: Path, sec_n: int, render_di
             if b.kind == "diagram" and b.dot:
                 png = None
                 if render_diagrams:
-                    png = render_dot(b.dot, assets_dir / f"scheme_{sec_n}_{i}.png")
+                    png = render_dot(b.dot, assets_dir / f"scheme_{sec_n}_{i}{name_suffix}.png")
                 if png:
                     blocks.append(Figure(topic=topic, image_path=str(png)))
                 else:
