@@ -1,19 +1,24 @@
 // ForLabs: прокси к модели. Ключи — только на сервере: свой ключ участника в Vault (выдаёт администратор)
-// или общий секрет LLM_API_KEY. Пускает только вошедших, одобренных и с действующей подпиской,
-// разрешает модели из списка, пишет расход по лабам. /balance — остаток на ключах у провайдера.
+// или общий секрет LLM_API_KEY. Пускает только вошедших, одобренных и с действующей подпиской (в пробном
+// доступе — в пределах лаб и сообщений чата правок), разрешает модели из списка, пишет расход по лабам. /balance — остаток на ключах у провайдера.
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
-import { decideAccess, labTag, ownKeyError, parseBalance, pickKey } from "./logic.ts";
+import { decideAccess, decideTrial, labTag, ownKeyError, parseBalance, pickKey, type TrialRow } from "./logic.ts";
 
 const BASE = (Deno.env.get("LLM_BASE_URL") ?? "https://api.aikeysforyou.com/v1").replace(/\/$/, "");
 const KEY = Deno.env.get("LLM_API_KEY") ?? "";
 // первая — модель по умолчанию; остальные разрешены как запасные (клиент сам переходит, если ключ не пускает)
 const MODELS = (Deno.env.get("LLM_MODELS") ?? "deepseek-v4.1-flash-1017,deepseek-v4.1-flash,deepseek-v4-flash")
   .split(",").map((s) => s.trim());
+// пробный доступ: потолок запросов на одну лабу (перезапуски), сверх лимита лаб и сообщений чата
+const TRIAL_CALLS_PER_LAB = Number(Deno.env.get("TRIAL_CALLS_PER_LAB") ?? "120") || 120;
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, {
   auth: { persistSession: false },
 });
 
-type Member = { approved: boolean; role: string; access_until: string | null; allow_shared_key: boolean | null };
+type Member = {
+  approved: boolean; role: string; access_until: string | null; allow_shared_key: boolean | null;
+  trial_labs: number | null; trial_chat: number | null;
+};
 
 function json(status: number, body: unknown) {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -86,7 +91,7 @@ Deno.serve(async (req: Request) => {
   if (userErr || !user) return err(401, "not signed in");
 
   const { data: member } = await admin.from("members")
-    .select("approved, role, access_until, allow_shared_key").eq("user_id", user.id).maybeSingle();
+    .select("approved, role, access_until, allow_shared_key, trial_labs, trial_chat").eq("user_id", user.id).maybeSingle();
   if (!member?.approved) return err(403, "account not approved");
 
   if (path.endsWith("/balance")) return balances(req, user.id, member as Member);
@@ -94,6 +99,18 @@ Deno.serve(async (req: Request) => {
 
   const decision = decideAccess(member as Member, new Date());
   if (!decision.ok) return err(decision.status, decision.message);
+
+  const lab = labTag(req.headers.get("x-forlabs-lab"));
+  const chat = labTag(req.headers.get("x-forlabs-chat"));
+  if (member.role !== "admin" && member.trial_labs !== null && member.trial_labs !== undefined) {
+    const { data: rows, error: usageErr } = await admin.rpc("trial_usage", { target: user.id, cur_chat: chat });
+    if (usageErr) return err(500, `trial_usage: ${usageErr.message}`);
+    const usage = (rows ?? []) as (TrialRow & { has_chat: boolean })[];
+    const cur = usage.find((r) => r.lab === lab);
+    const trial = decideTrial(member as Member, usage.map((r) => ({ lab: r.lab, calls: Number(r.calls), chats: Number(r.chats) })),
+      lab, chat, Boolean(cur?.has_chat), TRIAL_CALLS_PER_LAB);
+    if (!trial.ok) return err(trial.status, trial.message);
+  }
 
   let own: string | null;
   try {
@@ -137,14 +154,20 @@ Deno.serve(async (req: Request) => {
   if (upstream.ok) {
     try {
       const usage = JSON.parse(text).usage ?? {};
-      await admin.from("llm_usage").insert({
+      const row: Record<string, unknown> = {
         user_id: user.id,
         model,
         prompt_tokens: usage.prompt_tokens ?? 0,
         completion_tokens: usage.completion_tokens ?? 0,
-        lab: labTag(req.headers.get("x-forlabs-lab")),
+        lab,
+        chat,
         key_kind: picked.kind,
-      });
+      };
+      const { error: insertErr } = await admin.from("llm_usage").insert(row);
+      if (insertErr && chat !== null) {  // база ещё без столбца chat (миграция 0005 не применена) — без него
+        delete row.chat;
+        await admin.from("llm_usage").insert(row);
+      }
       await admin.from("members").update({ last_seen_at: new Date().toISOString() }).eq("user_id", user.id);
     } catch (_) {
       // учёт расхода не должен ломать ответ

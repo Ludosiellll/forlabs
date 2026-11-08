@@ -125,6 +125,9 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
                 base["member"] = ctx.store.member()
             except Exception:
                 base["member"] = None
+            m = base["member"]
+            if m is not None and m.on_trial and m.approved:
+                base["trial"] = ctx.store.trial_usage(m)
         base["show_tour"] = name == "home.html" and not ctx.settings.tour_done
         base.update(kw)
         return tpl.TemplateResponse(request, name, base)

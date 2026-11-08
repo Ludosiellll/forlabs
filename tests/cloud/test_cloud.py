@@ -48,6 +48,8 @@ class FakeSupabase:
         self.drop_next = 0  # сколько следующих запросов к REST оборвать (как пропавший Wi-Fi)
         self.drop_auth_next = 0  # то же для обновления входа
         self.expired = set()  # токены, которые сервер уже считает просроченными (часы ноутбука спешат)
+        self.trial = []  # строки trial_usage (расход пробного периода по лабам)
+        self.no_trial_columns = False  # база без миграции 0005
 
     def session(self, expires_in=3600):
         return {"access_token": f"tok{len(self.requests)}", "refresh_token": "ref", "expires_in": expires_in,
@@ -93,6 +95,8 @@ class FakeSupabase:
                 return httpx.Response(200, json=self.daily)
             if fn == "admin_usage_by_lab":
                 return httpx.Response(200, json=self.by_lab)
+            if fn == "trial_usage":
+                return httpx.Response(200, json=self.trial)
             if fn == "retag_my_usage":
                 return httpx.Response(204)
             return httpx.Response(404, json={"message": f"нет функции {fn}"})
@@ -124,6 +128,9 @@ class FakeSupabase:
             if req.method == "GET":
                 return httpx.Response(200, json=[r for r in rows if _match(r, req.url.params)])
             if req.method == "PATCH":
+                if self.no_trial_columns and any(k.startswith("trial") for k in json.loads(req.content)):
+                    return httpx.Response(400, json={"code": "PGRST204", "message":
+                                                     "Could not find the 'trial_chat' column of 'members' in the schema cache"})
                 hit = [r for r in rows if _match(r, req.url.params)]
                 for r in hit:
                     r.update(json.loads(req.content))

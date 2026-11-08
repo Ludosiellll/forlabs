@@ -22,7 +22,8 @@
   <div class="who">
     {% if member and member.role != 'admin' and member.approved %}
       {% set st = member.access_state %}
-      {% if st in ('active', 'expiring') %}<span class="sub sub-{{ st }}" title="Срок подписки">Подписка до {{ date_ru(member.access_until) }}</span>
+      {% if trial %}<span class="sub sub-{{ 'expiring' if st == 'expiring' or trial.labs_left == 0 else 'active' }}" title="Пробный доступ">Пробный доступ{% if member.access_until %} до {{ date_ru(member.access_until) }}{% endif %} · лаб: {{ trial.labs_used }} из {{ trial.labs_limit }}</span>
+      {% elif st in ('active', 'expiring') %}<span class="sub sub-{{ st }}" title="Срок подписки">Подписка до {{ date_ru(member.access_until) }}</span>
       {% elif st == 'unlimited' %}<span class="sub" title="Срок подписки">Подписка без срока</span>{% endif %}
     {% endif %}
     <span>{{ user_email }}</span>

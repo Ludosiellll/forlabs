@@ -99,6 +99,36 @@ def ago(value: str | None) -> str:
     return date_ru(value)
 
 
+MAX_DAYS = 3650
+TRIAL_NOT_READY = ("Сервер ещё не обновлён для пробного доступа: выполни supabase/migrations/0005_trial.sql в SQL Editor "
+                   "Supabase и выложи функцию llm заново (README, раздел «Пробный доступ»).")
+
+
+def _int_in(raw: str, lo: int, hi: int) -> int | None:
+    try:
+        n = int(str(raw).strip())
+    except ValueError:
+        return None
+    return n if lo <= n <= hi else None
+
+
+def plural_days(n: int) -> str:
+    if n % 10 == 1 and n % 100 != 11:
+        return "день"
+    if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+        return "дня"
+    return "дней"
+
+
+def trial_view(card_trial, member) -> dict | None:
+    """Пробный доступ на карточке участника: сколько лаб начато и правок по каждой."""
+    if card_trial is None:
+        return None
+    rows = [{"lab": "ЛР " + r.lab.rsplit("/", 1)[-1], "chats": r.chats, "calls": r.calls} for r in card_trial.labs]
+    return {"labs_used": card_trial.labs_used, "labs_limit": card_trial.labs_limit, "chat_limit": card_trial.chat_limit,
+            "rows": rows}
+
+
 def access_text(m) -> str:
     state = m.access_state
     if state == "pending":
@@ -130,6 +160,10 @@ def event_text(e) -> str:
         return f"Заметка: {d.get('note') or '(пусто)'}"
     if e.kind == "name":
         return f"Имя: {d.get('name') or '(пусто)'}"
+    if e.kind == "trial":
+        if d.get("labs") is None:
+            return "Пробные ограничения сняты"
+        return f"Пробный доступ: {d.get('labs')} лаб, по {d.get('chat')} правок"
     if e.kind == "shared_key":
         return "Общий ключ разрешён" if d.get("allowed") else "Общий ключ запрещён"
     if e.kind == "key_set":
@@ -252,25 +286,49 @@ def register_admin(app: FastAPI, ctx, render, redirect) -> None:
                       chart=bars([d.strftime("%d.%m") for d in days], values, color=color, name=m.name),
                       labs=labs, avg=avg, events=[(date_ru(e.created_at), event_text(e)) for e in card.events],
                       key_set=date_ru(card.key.set_at) if card.key else "", subjects=subjects,
+                      trial=trial_view(ctx.store.trial_usage(m), m),
                       until_value=(parse_ts(m.access_until).astimezone(MINSK).date().isoformat()
                                    if parse_ts(m.access_until) else ""))
 
     @app.post("/admin/u/{uid}/access")
-    def admin_access(uid: str, action: str = Form(...), until: str = Form("")):
+    def admin_access(uid: str, action: str = Form(...), until: str = Form(""), days: str = Form(""),
+                     labs: str = Form(""), chat: str = Form("")):
         me = current_admin()
         if me is None:
             return home()
         if uid == me.user_id:
             return redirect(card_url(uid), err="Свой доступ администратор не меняет")
-        messages = {"extend7": "Подписка продлена на 7 дней", "extend30": "Подписка продлена на 30 дней",
-                    "until": "Срок подписки изменён", "unlimited": "Подписка без срока",
+        messages = {"extend": "Подписка продлена", "trial": "Пробный доступ выдан",
+                    "full": "Пробные ограничения сняты — полный доступ", "until": "Срок подписки изменён", "unlimited": "Подписка без срока",
                     "revoke": "Подписка забрана", "approve": "Участник одобрен", "disable": "Участник отключён"}
         if action not in messages:
             return redirect(card_url(uid), err="Непонятное действие")
-        if action == "extend7":
-            ctx.store.admin_extend(uid, 7)
-        elif action == "extend30":
-            ctx.store.admin_extend(uid, 30)
+        if action == "extend":
+            n = _int_in(days, 1, MAX_DAYS)
+            if n is None:
+                return redirect(card_url(uid), err=f"Число дней — от 1 до {MAX_DAYS}")
+            ctx.store.admin_extend(uid, n)
+            return redirect(card_url(uid), msg=f"Подписка продлена на {n} {plural_days(n)}")
+        if action == "trial":
+            n_labs, n_chat, n_days = _int_in(labs, 1, 100), _int_in(chat, 0, 100), _int_in(days, 1, MAX_DAYS)
+            if n_labs is None or n_chat is None or n_days is None:
+                return redirect(card_url(uid), err=f"Пробный доступ: лаб — от 1 до 100, правок — от 0 до 100, "
+                                                   f"дней — от 1 до {MAX_DAYS}")
+            try:
+                ctx.store.admin_grant_trial(uid, n_labs, n_chat, n_days)
+            except CloudError as e:
+                if not e.offline and "trial" in (e.detail or ""):
+                    return redirect(card_url(uid), err=TRIAL_NOT_READY)
+                raise
+            return redirect(card_url(uid), msg=f"Пробный доступ: {n_labs} лаб, по {n_chat} правок на лабу, "
+                                               f"{n_days} {plural_days(n_days)}")
+        if action == "full":
+            try:
+                ctx.store.admin_full_access(uid)
+            except CloudError as e:
+                if not e.offline and "trial" in (e.detail or ""):
+                    return redirect(card_url(uid), err=TRIAL_NOT_READY)
+                raise
         elif action == "until":
             if not _DAY.match(until.strip()):
                 return redirect(card_url(uid), err="Выбери дату окончания")

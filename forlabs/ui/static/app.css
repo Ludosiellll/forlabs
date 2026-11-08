@@ -327,3 +327,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   .tour, .tour-hole { transition: none !important; }
   .tour-card.in { animation: none; opacity: 1; }
 }
+
+input.num { width: 72px; }
+.trial-form .row { gap: 8px; flex-wrap: wrap; align-items: center; }
+.warn-text { color: var(--warn); }

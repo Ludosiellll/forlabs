@@ -151,13 +151,17 @@ class Pipeline:
                 out.append(Event(seq=-i, text=text, kind=kind))
         return out[-300:]
 
-    def _llm(self, st: LabState):
-        """Клиент модели с меткой лабы: в облаке расход видно по каждой лабе."""
+    def _llm(self, st: LabState, chat: str | None = None):
+        """Клиент модели с меткой лабы (в облаке расход видно по каждой лабе) и, для чата правок, — сообщения
+        (пробный доступ на сервере считает сообщения правок на лабу)."""
         from urllib.parse import quote
 
         llm = self.llm_factory()
         if getattr(llm, "accepts_lab_tag", False):  # только прокси ForLabs; провайдеру напрямую имя не шлём
-            llm = llm.with_headers({"X-ForLabs-Lab": quote(self.key(st), safe="")})
+            tags = {"X-ForLabs-Lab": quote(self.key(st), safe="")}
+            if chat:
+                tags["X-ForLabs-Chat"] = chat
+            llm = llm.with_headers(tags)
         return llm
 
     def lab_dir(self, st: LabState) -> Path:
@@ -511,7 +515,7 @@ class Pipeline:
             try:
                 profile = self._profile(st)
                 subject = get_subject(st.subject_id)
-                llm = self._llm(st)
+                llm = self._llm(st, chat=msg_id)
                 if rels:
                     self._emit(st, "Читаю приложенные фото", step="write")
                     user_msg.image_text = describe_images([self.lab_dir(st) / r for r in rels], llm)

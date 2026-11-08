@@ -68,7 +68,9 @@
           <span class="small muted" data-images-picked="chat-images"></span>
         </div>
         <label class="check small"><input type="checkbox" name="remember" value="1" {{ 'disabled' if busy }}> Запомнить для следующих лаб по предмету</label>
-        <div class="row"><button class="btn primary small" type="submit" {{ 'disabled' if busy }}>Отправить</button><span class="hint">Ctrl+Enter</span></div>
+        <div class="row"><button class="btn primary small" type="submit" {{ 'disabled' if busy }}>Отправить</button><span class="hint">Ctrl+Enter</span>
+          {% if trial %}{% set used = trial.chats_used(st.profile_id ~ '/' ~ st.subject_id ~ '/' ~ st.number) %}
+          <span class="spacer"></span><span class="small {{ 'warn-text' if used >= trial.chat_limit else 'muted' }}">Пробный доступ: правок {{ [trial.chat_limit - used, 0]|max }} из {{ trial.chat_limit }}</span>{% endif %}</div>
       </form>
       <details class="redo">
         <summary class="small">Переписать задание целиком</summary>
