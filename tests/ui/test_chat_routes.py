@@ -75,3 +75,23 @@ def test_remember_checkbox_is_passed(lab):
     client.post(url + "/chat", data={"message": "всегда комментарии в коде", "remember": "1"})
     st = ctx.store.load_lab("ivanov_ivan_petrovich", "psip", "7")
     assert st.chat[0].remember is True
+
+
+def test_wishes_on_new_lab_and_spec_tab(tmp_home, tmp_path):
+    fake = FakeLLM([RAW])
+    ctx = AppContext(settings=Settings(mode="local"), llm_override=lambda: fake, prefer_word=False,
+                     render_diagrams=False, synchronous=True)
+    client = TestClient(create_app(ctx), base_url="http://127.0.0.1:8765")
+    make_profile(client, tmp_path)
+    assert 'name="wishes"' in client.get("/labs/new").text
+    r = client.post("/labs/new", data={"profile_id": "ivanov_ivan_petrovich", "subject_id": "psip", "number": "",
+                                       "text": "", "wishes": "Вариант дал преподаватель: 7"},
+                    files={"files": (FIXTURE.name, FIXTURE.read_bytes(), "text/plain")}, follow_redirects=False)
+    url = r.headers["location"]
+    page = client.get(url + "?tab=spec").text
+    assert 'name="wishes"' in page and "Вариант дал преподаватель: 7" in page
+    client.post(url + "/confirm", data={"topic": RAW["topic"], "goal": RAW["goal"], "date": "24.09.2026",
+                                        "tasks": "Создайте 2 простых анимации к выбранной тематике.",
+                                        "wishes": "Вариант 7, анимации на CSS"})
+    st = ctx.store.load_lab("ivanov_ivan_petrovich", "psip", "7")
+    assert st.spec.wishes == "Вариант 7, анимации на CSS"

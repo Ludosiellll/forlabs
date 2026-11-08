@@ -26,7 +26,7 @@ WRITE_USER = """Предмет: {subject}. Пол студента: {gender} (г
 Оснащение: {equipment}
 Все задания работы:
 {all_tasks}
-{variant_block}{memory_block}{previous_block}
+{variant_block}{wishes_block}{memory_block}{previous_block}
 Напиши содержимое задания {n}. Текст задания (его вставит программа, не повторяй):
 «{task}»"""
 

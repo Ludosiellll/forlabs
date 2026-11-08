@@ -62,6 +62,7 @@ class LabSpec(BaseModel):
     variant_text: str | None = None
     questions: list[str] = Field(default_factory=list)
     conclusion: str | None = None  # своя формулировка вывода, если цель не начинается с инфинитива
+    wishes: str | None = None  # пожелания и отклонения от методички (от студента или преподавателя)
     source_text: str = ""
 
 
@@ -193,6 +194,7 @@ class LabState(BaseModel):
     updated_at: str = Field(default_factory=lambda: datetime.now().isoformat(timespec="seconds"))
     chat: list[ChatMessage] = Field(default_factory=list)
     versions: list[LabVersion] = Field(default_factory=list)
+    wishes: str = ""  # пожелания, введённые при создании (до разбора)
 
 
 def push_version(st: "LabState", label: str) -> int:

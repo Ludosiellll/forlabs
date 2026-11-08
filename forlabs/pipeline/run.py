@@ -169,13 +169,14 @@ class Pipeline:
                 or self.store.lab_dir(profile_id, subject_id, number).exists())
 
     def create_lab(self, profile_id: str, subject_id: str, files: list[tuple[str, bytes]],
-                   number: str | None = None, pasted_text: str = "") -> LabState:
+                   number: str | None = None, pasted_text: str = "", wishes: str = "") -> LabState:
         number = (number or "").strip()
         if number and self.store.load_lab(profile_id, subject_id, number) is not None:
             raise PipelineError(f"ЛР {number} уже есть. Открой её или удали, чтобы сделать заново.")
         if not number:
             number = f"{DRAFT_PREFIX}{uuid.uuid4().hex[:6]}"
-        st = LabState(profile_id=profile_id, subject_id=subject_id, number=number, status="draft")
+        st = LabState(profile_id=profile_id, subject_id=subject_id, number=number, status="draft",
+                      wishes=(wishes or "").strip()[:4000])
         src = self.lab_dir(st) / "source"
         src.mkdir(parents=True, exist_ok=True)
         for name, data in files:
@@ -205,8 +206,9 @@ class Pipeline:
             subject = get_subject(st.subject_id)
             enrollment = self._enrollment(profile, st.subject_id)
             self._emit(st, "Разбираю задания и вопросы", step="parse")
+            wishes = st.wishes or (st.spec.wishes if st.spec else "") or ""
             spec, findings = extract_spec(src, subject, enrollment, self._llm(st),
-                                          None if is_draft(st.number) else st.number, date or today())
+                                          None if is_draft(st.number) else st.number, date or today(), wishes=wishes)
             old_dir = self.lab_dir(st)
             if st.number != spec.number:
                 old_key = self.key(st)

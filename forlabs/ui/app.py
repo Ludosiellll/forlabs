@@ -253,7 +253,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
 
     @app.post("/labs/new")
     async def lab_new(profile_id: str = Form(...), subject_id: str = Form(...), number: str = Form(""),
-                      text: str = Form(""), files: list[UploadFile] | None = File(None)):
+                      text: str = Form(""), wishes: str = Form(""), files: list[UploadFile] | None = File(None)):
         data = []
         for uf in files or []:
             if uf.filename:
@@ -263,7 +263,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
                             err="Добавь файл методички или вставь её текст")
         try:
             st = await asyncio.to_thread(ctx.pipeline.create_lab, profile_id, subject_id, data,
-                                         number=number.strip() or None, pasted_text=text)
+                                         number=number.strip() or None, pasted_text=text, wishes=wishes)
         except PipelineError as e:
             return redirect(f"/labs/new?profile={_q(profile_id)}&subject={_q(subject_id)}", err=str(e))
         key = ctx.pipeline.key(st)
@@ -351,6 +351,8 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
             "equipment": (f.get("equipment") or "").strip() or None, "assignment": (f.get("assignment") or "").strip(),
             "date": (f.get("date") or today()).strip(), "tasks": tasks,
             "variant_text": (f.get("variant_text") or "").strip() or None,
+            "wishes": ((f.get("wishes") or "").strip()[:4000] or None) if "wishes" in f
+            else (st.spec.wishes if st.spec else None),
             "questions": [ln.strip() for ln in (f.get("questions") or "").splitlines() if ln.strip()]})
         profile = ctx.store.get_profile(p)
         own = " ".join((f.get("conclusion") or "").split())

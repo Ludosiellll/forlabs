@@ -108,3 +108,18 @@ def test_revert_and_unknown_version(tmp_home, tmp_path):
     assert st.report.sections[1].model_dump() == before
     assert st.chat[-1].kind == "revert" and st.chat[-1].version == 2  # откат тоже можно отменить
     assert st.status == "rendered", st.error
+
+
+def test_wishes_reach_parse_write_and_chat(tmp_home, tmp_path):
+    from test_run import setup as base_setup
+
+    pipe, fake = base_setup(tmp_home, tmp_path, [RAW, SEC, SEC2, ANS, {"kind": "answer", "reply": "Ок."}])
+    wishes = "Тема сайта — Гомель, а не Бобруйск; анимации делать на чистом CSS"
+    st = pipe.create_lab("ivanov", "psip", [(FIXTURE.name, FIXTURE.read_bytes())], number="7", wishes=wishes)
+    st = pipe.parse(st, date="24.09.2026")
+    assert st.spec.wishes == wishes
+    assert wishes in fake.calls[0][-1]["content"]  # разбор
+    st = pipe.execute(pipe.confirm(st, None))
+    assert wishes in fake.calls[1][-1]["content"]  # написание задания
+    pipe.chat(st, "почему так?")
+    assert wishes in fake.calls[-1][-1]["content"]  # чат правок

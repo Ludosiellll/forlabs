@@ -15,7 +15,7 @@ from forlabs.core.models import (
 from forlabs.core.rules import RuleBook
 from forlabs.core.subjects import Subject
 from forlabs.pipeline.prompts import CHAT_ANSWERS_SYSTEM, CHAT_PLAN_SYSTEM, CHAT_REVISE_SYSTEM
-from forlabs.pipeline.write import SectionDraft, _gender_ru, draft_to_blocks
+from forlabs.pipeline.write import SectionDraft, _gender_ru, draft_to_blocks, wishes_text
 
 SOURCE_LIMIT = 30_000
 _NEEDS_SOURCE = re.compile(r"вариант|приложени|методичк|по заданию|из задания|дословно", re.IGNORECASE)
@@ -102,7 +102,8 @@ def plan_edit(st: LabState, message: str, profile: Profile, subject: Subject, ll
             f"Вариант по журналу: {spec.variant or '—'}. Номер рабочего места: {spec.workplace or '—'}.\n"
             f"Текст варианта в отчёте: {spec.variant_text or 'нет'}\n"
             f"Вывод сейчас: {report.conclusion}\n"
-            f"Требования преподавателя, которые уже действуют: {teacher or 'нет'}\n\n"
+            f"Требования преподавателя, которые уже действуют: {teacher or 'нет'}\n"
+            f"Пожелания и отклонения от методички для этой лабы: {spec.wishes or 'нет'}\n\n"
             f"Отчёт сейчас (блоки по заданиям):\n{_outline(st)}\n\n"
             f"Контрольные вопросы и ответы:\n{qa}\n\n"
             f"Последние сообщения чата:\n{history or 'нет'}\n\n"
@@ -134,7 +135,7 @@ def revise_section(spec: LabSpec, section: TaskSection, instruction: str, profil
     user = (f"Предмет: {subject.name}. Пол студента: {_gender_ru(profile.gender)}.\n"
             f"Тема работы: {spec.topic}\nВариант: {spec.variant or '—'}\n"
             f"Текст варианта: {spec.variant_text or 'нет'}\n"
-            f"{memory_block}"
+            f"{memory_block}{wishes_text(spec)}"
             f"Задание {section.n}: «{section.title}»\n\nБлоки сейчас:\n{blocks_text}\n\n"
             f"Что поменять по замечанию преподавателя:\n{instruction}")
     draft = llm.json([{"role": "system", "content": CHAT_REVISE_SYSTEM.format(rules=rules.load("write", subject.id))},

@@ -122,8 +122,15 @@ def verify_verbatim(spec: LabSpec, src: SourceText) -> list[Finding]:
     return out
 
 
+def _wishes_block(wishes: str) -> str:
+    if not wishes.strip():
+        return ""
+    return ("Пожелания студента и отклонения от методички (учти при выборе варианта; задания и вопросы всё равно "
+            f"переписывай из методички дословно):\n{wishes.strip()}\n")
+
+
 def extract_spec(src: SourceText, subject: Subject, enrollment: Enrollment, llm, lab_number: str | None,
-                 date: str) -> tuple[LabSpec, list[Finding]]:
+                 date: str, wishes: str = "") -> tuple[LabSpec, list[Finding]]:
     variant = enrollment.variant if enrollment.variant is not None else subject.default_variant
     workplace = enrollment.workplace if enrollment.workplace is not None else variant
     hint = f" Номер работы: {lab_number}." if lab_number else ""
@@ -131,6 +138,7 @@ def extract_spec(src: SourceText, subject: Subject, enrollment: Enrollment, llm,
         {"role": "system", "content": SPEC_SYSTEM.format(variant=variant, workplace=workplace)},
         {"role": "user", "content": SPEC_USER.format(subject=subject.name, variant=variant, number_hint=hint,
                                                      workplace=enrollment.workplace or "не указан",
+                                                     wishes_block=_wishes_block(wishes),
                                                      text=src.text[:MAX_SOURCE_CHARS])},
     ]
     raw: RawSpec = llm.json(messages, RawSpec, temperature=0.0)
@@ -155,6 +163,7 @@ def extract_spec(src: SourceText, subject: Subject, enrollment: Enrollment, llm,
         workplace=enrollment.workplace,
         variant_text=variant_block(raw.variants) or (one_line(raw.variant_text) if raw.variant_text else None),
         questions=[clean_item(q) for q in raw.questions if q.strip()],
+        wishes=wishes.strip() or None,
         source_text=src.text,
     )
     findings = verify_verbatim(spec, src)
