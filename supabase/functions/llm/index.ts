@@ -11,6 +11,9 @@ const MODELS = (Deno.env.get("LLM_MODELS") ?? "deepseek-v4.1-flash-1017,deepseek
   .split(",").map((s) => s.trim());
 // пробный доступ: потолок запросов на одну лабу (перезапуски), сверх лимита лаб и сообщений чата
 const TRIAL_CALLS_PER_LAB = Number(Deno.env.get("TRIAL_CALLS_PER_LAB") ?? "120") || 120;
+// для всех: токенов в день на человека (если в карточке не задан свой) и запросов на одну лабу
+const DAILY_TOKENS = Number(Deno.env.get("DAILY_TOKENS") ?? "1000000") || 1000000;
+const LAB_CALLS_LIMIT = Number(Deno.env.get("LAB_CALLS_LIMIT") ?? "300") || 300;
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, {
   auth: { persistSession: false },
 });
@@ -123,15 +126,16 @@ Deno.serve(async (req: Request) => {
   body.model = model;
   body.stream = false;
 
-  // пробный доступ: проверка лимитов и бронь запроса атомарно в базе (trial_begin, миграция 0007)
+  // лимиты (день, лаба, пробный доступ): проверка и бронь запроса атомарно в базе (usage_begin, миграция 0008)
   let reserved: number | null = null;
-  if (member.role !== "admin" && member.trial_labs !== null && member.trial_labs !== undefined) {
-    const { data: rows, error: trialErr } = await admin.rpc("trial_begin", {
-      target: user.id, cur_lab: lab, cur_chat: chat, max_calls: TRIAL_CALLS_PER_LAB, req_model: model,
+  if (member.role !== "admin") {
+    const { data: rows, error: limitErr } = await admin.rpc("usage_begin", {
+      target: user.id, cur_lab: lab, cur_chat: chat, req_model: model,
+      default_daily: DAILY_TOKENS, lab_calls: LAB_CALLS_LIMIT, trial_calls: TRIAL_CALLS_PER_LAB,
     });
-    if (trialErr) return err(500, `trial_begin: ${trialErr.message}`);
+    if (limitErr) return err(500, `usage_begin: ${limitErr.message}`);
     const t = ((rows ?? []) as { ok: boolean; message: string; usage_id: number | null }[])[0];
-    if (!t?.ok) return err(403, t?.message || "trial check failed");
+    if (!t?.ok) return err(403, t?.message || "limit check failed");  // 403, не 429: клиент не повторяет
     reserved = t.usage_id;
   }
   const release = async () => {  // запрос не удался — бронь не съедает пробный лимит

@@ -54,6 +54,7 @@ class Member(BaseModel):
     trial_labs: int | None = None  # пробный доступ: сколько лаб (None — обычный доступ)
     trial_chat: int | None = None  # сообщений чата правок на каждую лабу
     trial_since: str | None = None
+    daily_tokens: int | None = None  # свой лимит токенов в день (None — общий)
 
     @property
     def on_trial(self) -> bool:
@@ -501,7 +502,7 @@ class CloudStore:
 
     # админ-панель
     _MEMBER_FIELDS = {"display_name", "approved", "access_until", "allow_shared_key", "trial_labs", "trial_chat",
-                      "trial_since"}
+                      "trial_since", "daily_tokens"}
     _LAB_COLUMNS = "owner,profile_id,subject_id,number,status,created_at,updated_at"
 
     def _rpc(self, fn: str, args: dict | None = None):

@@ -46,6 +46,18 @@
       </section>
 
       {% if not is_me %}
+      <section class="box" aria-labelledby="b-daily">
+        <h2 id="b-daily">Лимит токенов в день</h2>
+        <p class="small">Сейчас: {{ daily_limit }}{% if not daily_own %} (общий){% endif %} · сегодня потрачено {{ today_tokens }}.</p>
+        <form method="post" action="/admin/u/{{ m.user_id }}/access" class="row until">
+          <input type="hidden" name="action" value="daily">
+          <label class="visually-hidden" for="daily">Свой лимит токенов в день</label>
+          <input id="daily" type="text" inputmode="numeric" name="daily" value="{{ m.daily_tokens or '' }}" placeholder="общий: 1 000 000">
+          <button class="btn small" type="submit">Сохранить</button>
+        </form>
+        <p class="hint">Пусто — общий лимит. Лаба с правками — обычно до ~100 000 токенов. Лимит проверяет сервер, день — по Минску.</p>
+      </section>
+
       <section class="box" aria-labelledby="b-trial">
         <h2 id="b-trial">Пробный доступ</h2>
         {% if trial %}

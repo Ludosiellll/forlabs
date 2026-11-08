@@ -100,6 +100,11 @@ def ago(value: str | None) -> str:
 
 
 MAX_DAYS = 3650
+DEFAULT_DAILY_TOKENS = 1_000_000  # как DAILY_TOKENS в функции llm
+
+
+def fmt_int(n: int) -> str:
+    return f"{n:,}".replace(",", " ")
 TRIAL_NOT_READY = ("Сервер ещё не обновлён для пробного доступа: выполни supabase/migrations/0005_trial.sql в SQL Editor "
                    "Supabase и выложи функцию llm заново (README, раздел «Пробный доступ»).")
 
@@ -118,6 +123,11 @@ def plural_days(n: int) -> str:
     if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
         return "дня"
     return "дней"
+
+
+def today_tokens(daily: list[tuple[str, int]]) -> int:
+    today = datetime.now(MINSK).date().isoformat()
+    return sum(t for d, t in daily if d == today)
 
 
 def trial_view(card_trial, member) -> dict | None:
@@ -160,6 +170,9 @@ def event_text(e) -> str:
         return f"Заметка: {d.get('note') or '(пусто)'}"
     if e.kind == "name":
         return f"Имя: {d.get('name') or '(пусто)'}"
+    if e.kind == "daily":
+        t = d.get("tokens")
+        return f"Дневной лимит: {fmt_int(int(t))} токенов" if t else "Дневной лимит: общий"
     if e.kind == "trial":
         if d.get("labs") is None:
             return "Пробные ограничения сняты"
@@ -287,18 +300,20 @@ def register_admin(app: FastAPI, ctx, render, redirect) -> None:
                       labs=labs, avg=avg, events=[(date_ru(e.created_at), event_text(e)) for e in card.events],
                       key_set=date_ru(card.key.set_at) if card.key else "", subjects=subjects,
                       trial=trial_view(ctx.store.trial_usage(m), m),
+                      daily_limit=fmt_int(m.daily_tokens or DEFAULT_DAILY_TOKENS), daily_own=m.daily_tokens is not None,
+                      today_tokens=fmt_int(today_tokens(card.daily)),
                       until_value=(parse_ts(m.access_until).astimezone(MINSK).date().isoformat()
                                    if parse_ts(m.access_until) else ""))
 
     @app.post("/admin/u/{uid}/access")
     def admin_access(uid: str, action: str = Form(...), until: str = Form(""), days: str = Form(""),
-                     labs: str = Form(""), chat: str = Form("")):
+                     labs: str = Form(""), chat: str = Form(""), daily: str = Form("")):
         me = current_admin()
         if me is None:
             return home()
         if uid == me.user_id:
             return redirect(card_url(uid), err="Свой доступ администратор не меняет")
-        messages = {"extend": "Подписка продлена", "trial": "Пробный доступ выдан",
+        messages = {"daily": "Дневной лимит изменён", "extend": "Подписка продлена", "trial": "Пробный доступ выдан",
                     "full": "Пробные ограничения сняты — полный доступ", "until": "Срок подписки изменён", "unlimited": "Подписка без срока",
                     "revoke": "Подписка забрана", "approve": "Участник одобрен", "disable": "Участник отключён"}
         if action not in messages:
@@ -322,6 +337,16 @@ def register_admin(app: FastAPI, ctx, render, redirect) -> None:
                 raise
             return redirect(card_url(uid), msg=f"Пробный доступ: {n_labs} лаб, по {n_chat} правок на лабу, "
                                                f"{n_days} {plural_days(n_days)}")
+        if action == "daily":
+            raw = daily.replace(" ", "").replace("\u00a0", "")
+            if not raw:
+                ctx.store.admin_update_member(uid, daily_tokens=None)
+                return redirect(card_url(uid), msg=f"Дневной лимит — общий ({fmt_int(DEFAULT_DAILY_TOKENS)} токенов)")
+            n = _int_in(raw, 1000, 1_000_000_000)
+            if n is None:
+                return redirect(card_url(uid), err="Лимит токенов в день — число от 1 000 до 1 000 000 000 (пусто — общий)")
+            ctx.store.admin_update_member(uid, daily_tokens=n)
+            return redirect(card_url(uid), msg=f"Дневной лимит: {fmt_int(n)} токенов")
         if action == "full":
             try:
                 ctx.store.admin_full_access(uid)

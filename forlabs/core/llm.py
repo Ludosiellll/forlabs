@@ -188,6 +188,15 @@ class LLM:
             if expired:
                 raise LLMError("access", detail, f"Подписка закончилась {_minsk_date(expired.group(1))} — напиши "
                                                  "администратору, чтобы он её продлил.")
+            daily = re.search(r"daily token limit:\s*(\d+)", detail)
+            if daily:
+                n = f"{int(daily.group(1)):,}".replace(",", " ")
+                raise LLMError("access", detail, f"Дневной лимит на сегодня исчерпан ({n} токенов). Продолжить можно "
+                                                 "завтра; если нужно срочно — напиши в поддержку.")
+            calls = re.search(r"lab calls limit:\s*(\d+)", detail)
+            if calls:
+                raise LLMError("access", detail, f"На эту лабу ушло очень много запросов ({calls.group(1)}) — похоже на "
+                                                 "лишние перезапуски. Если нужно ещё, напиши в поддержку.")
             trial = re.search(r"trial (labs|chat) limit:\s*(\d+)", detail)
             if trial:
                 n = trial.group(2)

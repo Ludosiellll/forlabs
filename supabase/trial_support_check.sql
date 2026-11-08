@@ -69,7 +69,7 @@ begin
     a_reads_b_msgs, a_reply, b_mark_read, a_status;
 end $$;
 
--- Пробный лимит атомарно (trial_begin, миграция 0007) и защита переноса расхода (retag_my_usage).
+-- Пробный лимит атомарно (usage_begin, миграция 0007) и защита переноса расхода (retag_my_usage).
 -- Ожидаемо: lab3=true lab4=trial labs limit: 3 old_lab=true chat5=true chat6=trial chat limit: 5 chat5_again=true
 --           calls_cap=trial lab calls limit no_tag=trial needs lab tag member_call=blocked admin=true
 --           to_empty=0 p_s_1_kept=2 (строка + бронь проверки) draft_moved=1
@@ -90,21 +90,21 @@ begin
     (b, 'm', 'p/s/1', null), (b, 'm', 'p/s/2', null), (b, 'm', 'p/s/2', 'c1'), (b, 'm', 'p/s/2', 'c2'),
     (b, 'm', 'p/s/2', 'c3'), (b, 'm', 'p/s/2', 'c4');
   perform set_config('request.jwt.claims', json_build_object('role', 'service_role')::text, true);
-  select * into r from public.trial_begin(b, 'p/s/3', null, 120, 'm'); lab3 := r.ok::text;
-  select * into r from public.trial_begin(b, 'p/s/4', null, 120, 'm'); lab4 := coalesce(nullif(r.message, ''), r.ok::text);
-  select * into r from public.trial_begin(b, 'p/s/1', null, 120, 'm'); old_lab := r.ok::text;
-  select * into r from public.trial_begin(b, 'p/s/2', 'c5', 120, 'm'); chat5 := r.ok::text;
-  select * into r from public.trial_begin(b, 'p/s/2', 'c6', 120, 'm'); chat6 := coalesce(nullif(r.message, ''), r.ok::text);
-  select * into r from public.trial_begin(b, 'p/s/2', 'c5', 120, 'm'); chat5_again := r.ok::text;
-  select * into r from public.trial_begin(b, 'p/s/2', null, 5, 'm'); calls_cap := coalesce(nullif(r.message, ''), r.ok::text);
-  select * into r from public.trial_begin(b, '', null, 120, 'm'); no_tag := coalesce(nullif(r.message, ''), r.ok::text);
-  select * into r from public.trial_begin(a, 'x/y/1', 'c', 120, 'm'); adm := r.ok::text;
+  select * into r from public.usage_begin(b, 'p/s/3', null, 'm', 1000000, 300, 120); lab3 := r.ok::text;
+  select * into r from public.usage_begin(b, 'p/s/4', null, 'm', 1000000, 300, 120); lab4 := coalesce(nullif(r.message, ''), r.ok::text);
+  select * into r from public.usage_begin(b, 'p/s/1', null, 'm', 1000000, 300, 120); old_lab := r.ok::text;
+  select * into r from public.usage_begin(b, 'p/s/2', 'c5', 'm', 1000000, 300, 120); chat5 := r.ok::text;
+  select * into r from public.usage_begin(b, 'p/s/2', 'c6', 'm', 1000000, 300, 120); chat6 := coalesce(nullif(r.message, ''), r.ok::text);
+  select * into r from public.usage_begin(b, 'p/s/2', 'c5', 'm', 1000000, 300, 120); chat5_again := r.ok::text;
+  select * into r from public.usage_begin(b, 'p/s/2', null, 'm', 1000000, 300, 5); calls_cap := coalesce(nullif(r.message, ''), r.ok::text);
+  select * into r from public.usage_begin(b, '', null, 'm', 1000000, 300, 120); no_tag := coalesce(nullif(r.message, ''), r.ok::text);
+  select * into r from public.usage_begin(a, 'x/y/1', 'c', 'm', 1000000, 300, 120); adm := r.ok::text;
   insert into public.llm_usage (user_id, model, lab) values (b, 'm', 'p/s/новая-1');
 
   perform set_config('request.jwt.claims', json_build_object('sub', b, 'role', 'authenticated')::text, true);
   execute 'set local role authenticated';
   begin
-    perform public.trial_begin(b, 'p/s/9', null, 120, 'm');
+    perform public.usage_begin(b, 'p/s/9', null, 'm', 1000000, 300, 120);
   exception when others then member_call := 'blocked';
   end;
   perform public.retag_my_usage('p/s/1', '');           -- обнулить лабу — нельзя
@@ -116,4 +116,47 @@ begin
   select count(*) into moved from public.llm_usage where user_id = b and lab = 'p/s/7';
   raise exception 'RESULT lab3=% lab4=% old_lab=% chat5=% chat6=% chat5_again=% calls_cap=% no_tag=% member_call=% admin=% to_empty=% p_s_1_kept=% draft_moved=%',
     lab3, lab4, old_lab, chat5, chat6, chat5_again, calls_cap, no_tag, member_call, adm, to_empty, kept, moved;
+end $$;
+
+
+-- Лимиты для всех (usage_begin, миграция 0008): токены в день, запросы на лабу, пробный — как раньше.
+-- Ожидаемо: day_ok=true day_over=daily token limit: 1000000 own_limit=true lab_cap=lab calls limit: 3 no_tag_full=true
+--           trial_lab4=trial labs limit: 1 member_call=blocked admin=true reserved=1
+do $$
+declare
+  a uuid := '00000000-0000-4000-8000-0000000000a7';
+  b uuid := '00000000-0000-4000-8000-0000000000b7';
+  c uuid := '00000000-0000-4000-8000-0000000000c7';
+  r record; day_ok text; day_over text; own_limit text; lab_cap text; no_tag_full text; trial_lab4 text;
+  member_call text := 'ALLOWED'; adm text; reserved int;
+begin
+  insert into auth.users (id, instance_id, aud, role, email) values
+    (a, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'ub-a@example.invalid'),
+    (b, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'ub-b@example.invalid'),
+    (c, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'ub-c@example.invalid');
+  update public.members set approved = true, role = 'admin' where user_id = a;
+  update public.members set approved = true, role = 'member' where user_id = b;
+  update public.members set approved = true, role = 'member', trial_labs = 1, trial_chat = 5, trial_since = now() where user_id = c;
+  perform set_config('request.jwt.claims', json_build_object('role', 'service_role')::text, true);
+  select * into r from public.usage_begin(b, 'p/s/1', null, 'm', 1000000, 300, 120); day_ok := r.ok::text;
+  select count(*) into reserved from public.llm_usage where id = r.usage_id and key_kind = 'reserved';
+  insert into public.llm_usage (user_id, model, lab, prompt_tokens, completion_tokens) values (b, 'm', 'p/s/1', 600000, 400000);
+  select * into r from public.usage_begin(b, 'p/s/1', null, 'm', 1000000, 300, 120); day_over := coalesce(nullif(r.message, ''), r.ok::text);
+  update public.members set daily_tokens = 5000000 where user_id = b;
+  select * into r from public.usage_begin(b, 'p/s/1', null, 'm', 1000000, 300, 120); own_limit := r.ok::text;
+  select * into r from public.usage_begin(b, 'p/s/1', null, 'm', 1000000, 3, 120); lab_cap := coalesce(nullif(r.message, ''), r.ok::text);
+  select * into r from public.usage_begin(b, null, null, 'm', 1000000, 300, 120); no_tag_full := r.ok::text;
+  select * into r from public.usage_begin(c, 'q/s/1', null, 'm', 1000000, 300, 120);
+  select * into r from public.usage_begin(c, 'q/s/2', null, 'm', 1000000, 300, 120); trial_lab4 := coalesce(nullif(r.message, ''), r.ok::text);
+  update public.llm_usage set prompt_tokens = 99999999 where user_id = a;
+  select * into r from public.usage_begin(a, 'x/y/1', null, 'm', 1, 1, 1); adm := r.ok::text;
+  perform set_config('request.jwt.claims', json_build_object('sub', b, 'role', 'authenticated')::text, true);
+  execute 'set local role authenticated';
+  begin
+    perform public.usage_begin(b, 'p/s/9', null, 'm', 999999999, 300, 120);
+  exception when others then member_call := 'blocked';
+  end;
+  execute 'reset role';
+  raise exception 'RESULT day_ok=% day_over=% own_limit=% lab_cap=% no_tag_full=% trial_lab4=% member_call=% admin=% reserved=%',
+    day_ok, day_over, own_limit, lab_cap, no_tag_full, trial_lab4, member_call, adm, reserved;
 end $$;
