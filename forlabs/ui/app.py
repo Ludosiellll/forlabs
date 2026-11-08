@@ -103,10 +103,14 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
     # Последним добавлен — значит, срабатывает первым: чужое имя хоста (DNS rebinding) отсекается сразу.
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts or LOCAL_HOSTS)
 
+    @app.get("/health")
+    def health():
+        return {"app": "forlabs"}
+
     @app.middleware("http")
     async def require_login(request: Request, call_next):
         path = request.url.path
-        open_paths = ("/login", "/register", "/static", "/settings")
+        open_paths = ("/login", "/register", "/static", "/settings", "/health")
         if ctx.cloud and not ctx.auth.session and not path.startswith(open_paths):
             return RedirectResponse("/login", status_code=303)
         return await call_next(request)
