@@ -311,7 +311,9 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
                       (conclusion_res.text if conclusion_res else ""))
         conclusion_note = conclusion_res.note if conclusion_res and conclusion_res.needs_confirm and not (
             st.spec and st.spec.conclusion) else None
+        preview_here = bool(st.pages) and all(Path(x).exists() for x in st.pages)
         return render(request, "lab.html", st=st, profile=profile, subject=get_subject(s), busy=busy,
+                      preview_here=preview_here,
                       events=events, journal=journal, slot_items=slot_items, errors=errors, tab=tab, steps=STEPS,
                       step_state=step_state, conclusion=conclusion, conclusion_note=conclusion_note,
                       base_url=lab_url(p, s, n), last_seq=max([e.seq for e in events] + [0]), nav="home")

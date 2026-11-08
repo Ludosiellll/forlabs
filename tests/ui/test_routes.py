@@ -151,3 +151,18 @@ def test_same_origin_post_allowed(client):
 def test_unknown_rule_path_is_a_message_not_a_crash(client):
     r = client.post("/rules/save", data={"path": "../pyproject.toml", "text": "x"}, follow_redirects=False)
     assert r.status_code == 303 and "err=" in r.headers["location"]
+
+
+def test_preview_from_other_computer_offers_rerender(client, tmp_path):
+    make_profile(client, tmp_path)
+    r = client.post("/labs/new", data={"profile_id": "ivanov_ivan_petrovich", "subject_id": "psip", "number": "",
+                                       "text": ""},
+                    files={"files": (FIXTURE.name, FIXTURE.read_bytes(), "text/plain")}, follow_redirects=False)
+    lab = r.headers["location"]
+    ctx = client.app.state.ctx
+    st = ctx.store.load_lab("ivanov_ivan_petrovich", "psip", "7")
+    st.pages = ["/другой/компьютер/page-1.png"]
+    st.status = "rendered"
+    ctx.store.save_lab(st)
+    page = client.get(lab + "?tab=report").text
+    assert "на другом компьютере" in page and "/page/1" not in page

@@ -158,3 +158,112 @@ def test_unexpected_error_in_parse_marks_failed(tmp_home, tmp_path):
     pipe, fake = setup(tmp_home, tmp_path, [RuntimeError("нет ключа")])
     st = pipe.parse(pipe.create_lab("ivanov", "psip", [(FIXTURE.name, FIXTURE.read_bytes())], number="7"))
     assert st.status == "failed" and "нет ключа" in st.error
+
+
+class SharedStore(Store):
+    """Два компьютера с общим облаком: состояние лаб и файлы общие, папки лаб у каждого свои."""
+
+    def __init__(self, device_root: Path, shared: dict):
+        super().__init__()
+        self.device_root, self.shared = device_root, shared
+        shared.setdefault("labs", {})
+        shared.setdefault("files", {})
+
+    def lab_dir(self, profile_id, subject_id, number):
+        return self.device_root / profile_id / subject_id / number
+
+    def save_lab(self, st):
+        self.lab_dir(st.profile_id, st.subject_id, st.number).mkdir(parents=True, exist_ok=True)
+        self.shared["labs"][(st.profile_id, st.subject_id, st.number)] = st.model_dump_json()
+
+    def load_lab(self, profile_id, subject_id, number):
+        from forlabs.core.models import LabState
+
+        raw = self.shared["labs"].get((profile_id, subject_id, number))
+        return LabState.model_validate_json(raw) if raw else None
+
+    def delete_lab(self, profile_id, subject_id, number):
+        self.shared["labs"].pop((profile_id, subject_id, number), None)
+
+    def upload(self, local, profile_id, subject_id, number, rel):
+        self.shared["files"][(profile_id, subject_id, number, rel)] = Path(local).read_bytes()
+        return rel
+
+    def fetch(self, profile_id, subject_id, number, rel, local) -> bool:
+        data = self.shared["files"].get((profile_id, subject_id, number, rel))
+        if data is None:
+            return False
+        Path(local).parent.mkdir(parents=True, exist_ok=True)
+        Path(local).write_bytes(data)
+        return True
+
+
+SEC_DIAGRAM = {"blocks": [
+    {"type": "paragraph", "text": "Схема показывает связь страниц сайта о Бобруйске."},
+    {"type": "figure", "kind": "diagram", "topic": "Схема страниц сайта", "dot": "digraph { a -> b }"},
+    {"type": "figure", "kind": "screenshot", "topic": "Анимация заголовка в окне браузера",
+     "instruction": "Открой index.html в браузере"},
+]}
+
+
+def test_lab_files_follow_to_another_computer(tmp_home, tmp_path, monkeypatch):
+    import forlabs.pipeline.write as write_mod
+
+    def fake_dot(dot, out):
+        Path(out).parent.mkdir(parents=True, exist_ok=True)
+        Path(out).write_bytes(png_bytes())
+        return Path(out)
+
+    monkeypatch.setattr(write_mod, "render_dot", fake_dot)
+    shared: dict = {}
+    pipe_a, _ = setup(tmp_home, tmp_path, [RAW, SEC_DIAGRAM, SEC2, ANS])
+    pipe_a.store = SharedStore(tmp_path / "A", shared)
+    pipe_a.render_diagrams = True
+    st = pipe_a.create_lab("ivanov", "psip", [(FIXTURE.name, FIXTURE.read_bytes())])
+    st = pipe_a.execute(pipe_a.confirm(pipe_a.parse(st, date="24.09.2026"), None))
+    assert st.status == "needs_manual", st.error
+    st = pipe_a.attach_screenshot(st, section=1, block=3, image=png_bytes())
+    assert st.status == "rendered", st.error
+    assert ("ivanov", "psip", "7", "assets/scheme_1_2.png") in shared["files"]
+
+    # второй компьютер: те же данные в облаке, пустая папка лабы
+    pipe_b, _ = setup(tmp_home, tmp_path, [])
+    pipe_b.store = SharedStore(tmp_path / "B", shared)
+    st_b = pipe_b.store.load_lab("ivanov", "psip", "7")
+    st_b = pipe_b.render(st_b)
+    assert st_b.status == "rendered", st_b.error
+    st_b = pipe_b.mark_final(st_b)
+    assert st_b.status == "final"
+    out = tmp_path / "сдача" / "ПССИП" / "ЛР7" / "ЛР7_ПССИП.docx"
+    xml = zipfile.ZipFile(out).read("word/document.xml").decode()
+    assert xml.count("<pic:pic") == 2 and "Вставить скриншот" not in xml
+
+
+def test_reparse_on_another_computer_uses_saved_text(tmp_home, tmp_path):
+    shared: dict = {}
+    pipe_a, _ = setup(tmp_home, tmp_path, [RAW])
+    pipe_a.store = SharedStore(tmp_path / "A", shared)
+    st = pipe_a.parse(pipe_a.create_lab("ivanov", "psip", [(FIXTURE.name, FIXTURE.read_bytes())]),
+                      date="24.09.2026")
+    assert st.status == "parsed"
+    import shutil
+
+    shutil.rmtree(tmp_path / "A")  # методичка осталась на первом компьютере
+    pipe_b, _ = setup(tmp_home, tmp_path, [RAW])
+    pipe_b.store = SharedStore(tmp_path / "B", shared)
+    st_b = pipe_b.parse(pipe_b.store.load_lab("ivanov", "psip", "7"), date="24.09.2026")
+    assert st_b.status == "parsed", st_b.error
+
+
+def test_final_rerenders_stale_docx_with_screenshot_slot(tmp_home, tmp_path):
+    from forlabs.render.docx_builder import build_lab
+
+    pipe, _ = setup(tmp_home, tmp_path, [RAW, SEC, SEC2, ANS])
+    st = pipe.create_lab("ivanov", "psip", [(FIXTURE.name, FIXTURE.read_bytes())])
+    st = pipe.execute(pipe.confirm(pipe.parse(st, date="24.09.2026"), None))
+    stale = st.model_copy(deep=True)  # docx свёрстан до вставки скриншота
+    st = pipe.attach_screenshot(st, section=1, block=4, image=png_bytes())
+    build_lab(stale.report, Path(st.docx_path), author="x")
+    st = pipe.mark_final(st)
+    out = tmp_path / "сдача" / "ПССИП" / "ЛР7" / "ЛР7_ПССИП.docx"
+    assert "Вставить скриншот" not in zipfile.ZipFile(out).read("word/document.xml").decode()

@@ -157,6 +157,21 @@ class CloudStore:
         local.write_bytes(r.content)
         return local
 
+    def fetch(self, profile_id: str, subject_id: str, number: str, rel: str, local: Path) -> bool:
+        """Скачивает файл лабы по её пути (assets/…). False — такого файла в облаке нет."""
+        key = storage_key(self.auth.user_id, profile_id, subject_id, number, rel)
+        try:
+            r = self.http.get(f"{self.cfg.url}/storage/v1/object/{BUCKET}/{quote(key)}", headers=self._h())
+        except httpx.TransportError as e:
+            raise CloudError("Нет связи с облаком. Проверь интернет.", str(e)) from e
+        if r.status_code == 404 or (r.status_code == 400 and "not_found" in r.text.replace(" ", "_").lower()):
+            return False
+        self._check(r)
+        local = Path(local)
+        local.parent.mkdir(parents=True, exist_ok=True)
+        local.write_bytes(r.content)
+        return True
+
     # участники (для администратора)
     def member(self) -> Member | None:
         rows = self._rest("GET", "members", params={"select": "*", "user_id": f"eq.{self.auth.user_id}"}).json()

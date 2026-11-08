@@ -126,6 +126,18 @@ def test_files_roundtrip(auth, tmp_home, tmp_path):
     assert out.read_bytes() == b"PNG..."
 
 
+def test_fetch_by_lab_path(auth, tmp_home, tmp_path):
+    auth.sign_in("a@b.c", "верный")
+    store = CloudStore(auth)
+    f = tmp_path / "схема.png"
+    f.write_bytes(b"PNG1")
+    store.upload(f, "ivanov", "ssp", "4", "assets/scheme_1_2.png")
+    out = tmp_path / "other" / "assets" / "scheme_1_2.png"
+    assert store.fetch("ivanov", "ssp", "4", "assets/scheme_1_2.png", out) is True
+    assert out.read_bytes() == b"PNG1"
+    assert store.fetch("ivanov", "ssp", "4", "assets/нет.png", tmp_path / "x.png") is False
+
+
 def test_storage_key_is_ascii():
     assert storage_key(UID, "иванов", "ssp", "5.2", "assets/Рисунок 1.png").isascii()
 

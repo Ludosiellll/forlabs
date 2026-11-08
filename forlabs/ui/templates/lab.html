@@ -56,7 +56,13 @@
       <div class="sheet-meta" data-live>{{ events[-1].text if events else 'Работаю…' }}</div>{% endif %}
 
     {% if tab == 'report' %}
-      {% if st.pages %}
+      {% if st.pages and not preview_here and not busy %}
+        <div class="pane">
+          <h2>Предпросмотр сделан на другом компьютере</h2>
+          <p class="muted">Текст отчёта сохранён в облаке. Нажми «Пересобрать документ» — я скачаю рисунки и сверстаю отчёт здесь.</p>
+          <form method="post" action="{{ base_url }}/rerender"><button class="btn primary" type="submit">Пересобрать документ</button></form>
+        </div>
+      {% elif st.pages and preview_here %}
         {% for page in st.pages %}
           <div class="sheet"><img src="{{ base_url }}/page/{{ loop.index }}?v={{ st.updated_at }}" alt="Страница {{ loop.index }} отчёта" loading="lazy"></div>
           <div class="sheet-meta">Страница {{ loop.index }} из {{ st.pages|length }}</div>

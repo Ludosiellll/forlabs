@@ -14,12 +14,12 @@ from forlabs.core.models import Figure, LabSpec, LabState, Profile, ReportDoc
 from forlabs.core.rules import RuleBook
 from forlabs.core.store import safe_name
 from forlabs.core.subjects import get_subject
-from forlabs.ingest.extract import extract_many
+from forlabs.ingest.extract import SourceText, extract_many
 from forlabs.pipeline.events import EventBus
 from forlabs.pipeline.repair import check_and_repair, report_text
 from forlabs.pipeline.write import write_report
 from forlabs.render.docx_builder import build_lab, build_semester
-from forlabs.render.finalize import finalize
+from forlabs.render.finalize import finalize, has_slots
 from forlabs.spec.extract import extract_spec, verify_verbatim
 
 
@@ -115,6 +115,30 @@ class Pipeline:
                     except Exception as e:  # облако не должно ломать локальную работу
                         self._emit(st, f"Не удалось отправить файл в облако: {e}", "warn")
 
+    def _sync_assets(self, st: LabState) -> None:
+        d = self.lab_dir(st)
+        if (d / "assets").exists():
+            self._sync(st, [f.relative_to(d).as_posix() for f in sorted((d / "assets").rglob("*")) if f.is_file()])
+
+    def _fetch_missing(self, st: LabState) -> None:
+        """Рисунки, которых нет на этом компьютере (лаба делалась на другом), докачиваются из облака."""
+        if not st.report:
+            return
+        d = self.lab_dir(st)
+        for sec in st.report.sections:
+            for b in sec.blocks:
+                if not (isinstance(b, Figure) and b.image_path) or Path(b.image_path).is_absolute():
+                    continue
+                local = d / b.image_path
+                if local.exists():
+                    continue
+                if hasattr(self.store, "fetch"):
+                    self._emit(st, f"Скачиваю из облака {b.image_path}")
+                    if self.store.fetch(st.profile_id, st.subject_id, st.number, b.image_path, local):
+                        continue
+                raise PipelineError(f"Нет файла рисунка «{b.topic}» ({b.image_path}) ни здесь, ни в облаке. "
+                                    "Вставь его заново.")
+
     def _fail(self, st: LabState, e: Exception) -> LabState:
         st.status = "failed"
         st.error = getattr(e, "message_ru", None) or str(e) or type(e).__name__
@@ -146,8 +170,15 @@ class Pipeline:
     def parse(self, st: LabState, date: str | None = None) -> LabState:
         try:
             self._emit(st, "Читаю методичку", step="parse")
-            files = sorted(Path(st.source_path).iterdir()) if st.source_path else []
-            src = extract_many(files)
+            src_dir = self.lab_dir(st) / "source"
+            files = sorted(f for f in src_dir.iterdir() if f.is_file()) if src_dir.exists() else []
+            if files:
+                src = extract_many(files)
+            elif st.spec and st.spec.source_text.strip():
+                # методичка осталась на другом компьютере — её текст сохранён в разборе
+                src = SourceText(st.spec.source_text)
+            else:
+                raise PipelineError("Файлы методички не найдены. Создай лабу заново.")
             for w in src.warnings:
                 self._emit(st, w, "warn")
             if not src.text.strip():
@@ -243,6 +274,7 @@ class Pipeline:
                                                     on_event=lambda t: self._emit(st, t, step="check"))
                 st.report = _relative_images(report, self.lab_dir(st))
                 st.findings = findings
+                self._sync_assets(st)
                 left = [f for f in findings if f.severity == "error"]
                 self._emit(st, "Проверка: замечаний нет" if not left else f"Осталось замечаний: {len(left)}",
                            "done" if not left else "warn", step="check")
@@ -281,6 +313,7 @@ class Pipeline:
             profile = self._profile(st)
             self._emit(st, "Вёрстка по канону", step="render")
             d = self.lab_dir(st)
+            self._fetch_missing(st)
             docx = d / "report.docx"
             build_lab(_absolute_images(st.report, d), docx, author=profile.doc_author or profile.full_name)
             self._emit(st, "Доводка документа и предпросмотр", step="finalize")
@@ -304,13 +337,19 @@ class Pipeline:
         left = [f for f in st.findings if f.severity == "error" and f.rule_id not in accepted]
         if left:
             raise PipelineError(f"Остались замечания проверок ({len(left)}). Исправь или прими их явно.")
+        docx = self.lab_dir(st) / "report.docx"
+        if not docx.exists() or has_slots(docx):
+            # документ свёрстан на другом компьютере или до вставки скриншотов — свёрстать заново
+            st = self.render(st)
+            if st.status == "failed" or not docx.exists() or has_slots(docx):
+                raise PipelineError(st.error or "Не удалось свёрстать отчёт без мест для скриншотов")
         profile = self._profile(st)
         subject = get_subject(st.subject_id)
         root = Path(profile.output_root) if profile.output_root else Path.home() / "Лабораторные"
         out_dir = root / subject.short_name / f"ЛР{safe_name(st.number)}"
         out_dir.mkdir(parents=True, exist_ok=True)
         target = out_dir / f"ЛР{safe_name(st.number)}_{subject.short_name}.docx"
-        shutil.copyfile(st.docx_path, target)
+        shutil.copyfile(docx, target)
         st.accepted_rules = sorted(accepted)
         st.status = "final"
         self._emit(st, f"Готово: {target}", "done")
@@ -328,6 +367,7 @@ class Pipeline:
         for n in numbers:
             st = self.store.load_lab(profile_id, subject_id, n)
             if st and st.report:
+                self._fetch_missing(st)
                 docs.append(_absolute_images(st.report, self.store.lab_dir(profile_id, subject_id, n)))
         if not docs:
             raise PipelineError("Нет готовых лаб для отчёта за семестр")
