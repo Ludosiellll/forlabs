@@ -13,6 +13,16 @@ SECRETS_MISSING = ("В Supabase не заданы секреты бота: TELEG
                    "(любая длинная случайная строка). Добавь их в Supabase → Edge Functions → Secrets и нажми ещё раз.")
 
 
+NOT_READY = ("Поддержка ещё не включена на сервере — администратору нужно выполнить supabase/migrations/0006_support.sql "
+             "и выложить функцию support (README, «Обновление сервера»).")
+UNREAD_TTL = 20.0  # секунд: значок нового ответа не делает запрос на каждой странице
+
+
+def _not_ready(e: CloudError) -> bool:
+    d = (e.detail or "").lower()
+    return not e.offline and ("support_messages" in d or "42p01" in d or "404" in e.message_ru or "not found" in d)
+
+
 class SupportMessage(BaseModel):
     id: int
     user_id: str
@@ -34,15 +44,24 @@ class Support:
 
     def _fn(self, name: str, body: dict) -> httpx.Response:
         try:
-            return self.s.http.post(f"{self.s.cfg.url}/functions/v1/support/{name}", json=body, headers=self.s._h(),
-                                    timeout=30)
+            r = self.s.http.post(f"{self.s.cfg.url}/functions/v1/support/{name}", json=body, headers=self.s._h(),
+                                 timeout=30)
         except httpx.TransportError as e:
             raise CloudError(offline_message(e), str(e), offline=True) from e
+        if r.status_code == 404:
+            raise CloudError(NOT_READY, r.text[:200])
+        return r
 
     # студент
     def messages(self, uid: str | None = None) -> list[SupportMessage]:
-        rows = self.s._rest("GET", "support_messages", params={
-            "select": "*", "user_id": f"eq.{uid or self.s.auth.user_id}", "order": "created_at.asc", "limit": "500"}).json()
+        try:
+            rows = self.s._rest("GET", "support_messages", params={
+                "select": "*", "user_id": f"eq.{uid or self.s.auth.user_id}", "order": "created_at.asc",
+                "limit": "500"}).json()
+        except CloudError as e:
+            if _not_ready(e):
+                raise CloudError(NOT_READY, e.detail) from e
+            raise
         return [SupportMessage.model_validate(r) for r in rows]
 
     def send(self, text: str) -> bool:
@@ -54,12 +73,23 @@ class Support:
         return bool(r.json().get("telegram"))
 
     def unread(self) -> int:
-        rows = self.s._read("support_messages", {"select": "id", "user_id": f"eq.{self.s.auth.user_id}",
-                                                 "from_admin": "eq.true", "read_at": "is.null", "limit": "20"})
-        return len(rows or [])
+        import time
+
+        cached = getattr(self.s, "_support_unread", None)
+        if cached and time.monotonic() - cached[0] < UNREAD_TTL:
+            return cached[1]
+        try:
+            rows = self.s._read("support_messages", {"select": "id", "user_id": f"eq.{self.s.auth.user_id}",
+                                                     "from_admin": "eq.true", "read_at": "is.null", "limit": "20"})
+        except CloudError:
+            rows = []
+        n = len(rows or [])
+        self.s._support_unread = (time.monotonic(), n)
+        return n
 
     def mark_read(self) -> None:
         self.s._rpc("support_mark_read")
+        self.s._support_unread = None
 
     # администратор
     def threads(self) -> list[Thread]:

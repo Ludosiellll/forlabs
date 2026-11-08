@@ -45,7 +45,7 @@ async function signedIn(req: Request) {
   const { data } = await admin.auth.getUser(token);
   if (!data?.user) return null;
   const { data: member } = await admin.from("members")
-    .select("user_id, email, display_name, role, approved, trial_labs").eq("user_id", data.user.id).maybeSingle();
+    .select("*").eq("user_id", data.user.id).maybeSingle();
   return member ? { user: data.user, member } : null;
 }
 

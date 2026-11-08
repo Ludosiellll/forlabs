@@ -54,6 +54,7 @@ class FakeSupabase:
         self.no_trial_columns = False  # база без миграции 0005
         self.support_bound = False  # владелец привязал Telegram
         self.support_secrets = True  # секреты бота заданы в Supabase
+        self.no_support = False  # сервер без миграции 0006 и функции support
 
     def session(self, expires_in=3600):
         return {"access_token": f"tok{len(self.requests)}", "refresh_token": "ref", "expires_in": expires_in,
@@ -121,6 +122,8 @@ class FakeSupabase:
             if body.get("shared"):
                 out["shared"] = self.balance.get("shared")
             return httpx.Response(200, json={"balances": out, "errors": errors})
+        if self.no_support and ("support" in path):
+            return httpx.Response(404, json={"code": "42P01", "message": 'relation "public.support_messages" does not exist'})
         if path == "/functions/v1/support/send":
             text = (json.loads(req.content or b"{}").get("text") or "").strip()
             if not text:

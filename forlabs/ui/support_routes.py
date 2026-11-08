@@ -27,6 +27,7 @@ def register_support(app: FastAPI, ctx, render, redirect) -> None:
             return render(request, "support.html", nav="support", messages=[], cloud=False)
         try:
             messages = sup.messages()
+            ctx.store._support_unread = None  # открыл переписку — значок пересчитать
             if any(m.from_admin and not m.read_at for m in messages):
                 sup.mark_read()
         except CloudError as e:

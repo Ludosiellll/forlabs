@@ -14,7 +14,10 @@ def member_client(fake, tmp_home):
     return make_client(fake, tmp_home, me="member")
 
 
-def test_member_writes_and_sees_thread(fake, tmp_home):
+def test_member_writes_and_sees_thread(fake, tmp_home, monkeypatch):
+    import forlabs.cloud.support as support_mod
+
+    monkeypatch.setattr(support_mod, "UNREAD_TTL", 0)  # значок без задержки кэша
     c = member_client(fake, tmp_home)
     page = c.get("/support").text
     assert 'action="/support"' in page and "Поддержка" in page
@@ -98,3 +101,23 @@ def test_member_cannot_open_admin_support(fake, tmp_home):
 
 def test_admin_page_links_to_support(admin):
     assert 'href="/admin/support"' in admin.get("/admin").text
+
+
+def test_support_before_server_update_explains(fake, tmp_home):
+    from urllib.parse import unquote
+
+    c = member_client(fake, tmp_home)
+    fake.no_support = True
+    assert "не включена на сервере" in c.get("/support").text
+    r = c.post("/support", data={"text": "привет"}, follow_redirects=False)
+    assert "не включена на сервере" in unquote(r.headers["location"])
+    assert c.get("/settings").status_code == 200  # остальное работает
+
+
+def test_unread_badge_is_cached_between_pages(fake, tmp_home):
+    c = member_client(fake, tmp_home)
+    c.get("/settings")
+    before = sum(1 for r in fake.requests if r.url.path.endswith("/support_messages"))
+    c.get("/settings")
+    c.get("/profiles")
+    assert sum(1 for r in fake.requests if r.url.path.endswith("/support_messages")) == before
