@@ -150,6 +150,30 @@ def is_accepted(f: "Finding", accepted: "list[str] | set[str]") -> bool:
 LabStatus = Literal["draft", "parsed", "confirmed", "executing", "needs_manual", "rendered", "final", "failed"]
 
 
+class ChatMessage(BaseModel):
+    """Сообщение чата правок лабы."""
+    id: str
+    role: Literal["user", "assistant"]
+    text: str
+    at: str
+    remember: bool = False
+    kind: Literal["edit", "answer", "question", "failed", "revert", "note"] = "note"
+    changed: list[str] = Field(default_factory=list)
+    retake: list[str] = Field(default_factory=list)
+    version: int | None = None  # версия «до этой правки» — для кнопки «Вернуть как было»
+
+
+class LabVersion(BaseModel):
+    id: int
+    at: str
+    label: str
+    spec: LabSpec
+    report: ReportDoc
+
+
+MAX_VERSIONS = 10
+
+
 class LabState(BaseModel):
     profile_id: str
     subject_id: str
@@ -167,3 +191,14 @@ class LabState(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     error: str | None = None
     updated_at: str = Field(default_factory=lambda: datetime.now().isoformat(timespec="seconds"))
+    chat: list[ChatMessage] = Field(default_factory=list)
+    versions: list[LabVersion] = Field(default_factory=list)
+
+
+def push_version(st: "LabState", label: str) -> int:
+    """Снимок разбора и отчёта перед правкой; хранится не больше MAX_VERSIONS последних."""
+    vid = (st.versions[-1].id if st.versions else 0) + 1
+    st.versions.append(LabVersion(id=vid, at=datetime.now().isoformat(timespec="seconds"), label=label[:120],
+                                  spec=st.spec.model_copy(deep=True), report=st.report.model_copy(deep=True)))
+    del st.versions[:-MAX_VERSIONS]
+    return vid
