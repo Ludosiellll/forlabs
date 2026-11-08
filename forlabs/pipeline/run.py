@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import shutil
 import threading
 import uuid
@@ -162,7 +163,13 @@ class Pipeline:
         st.status = "failed"
         st.error = getattr(e, "message_ru", None) or str(e) or type(e).__name__
         self._emit(st, st.error, "error")
-        return self._save(st)
+        logging.getLogger("forlabs").warning("Лаба %s: %s", self.key(st), st.error, exc_info=e)
+        try:
+            return self._save(st)
+        except Exception as save_error:  # нет связи с облаком: локальная копия и журнал всё равно есть
+            self._emit(st, f"Не получилось сохранить состояние: {getattr(save_error, 'message_ru', save_error)}",
+                       "error")
+            return st
 
     # шаги
     def _taken(self, profile_id: str, subject_id: str, number: str) -> bool:
@@ -497,6 +504,7 @@ class Pipeline:
                 left = [f for f in findings if f.severity == "error"]
                 self._emit(st, "Проверка: замечаний нет" if not left else f"Осталось замечаний: {len(left)}",
                            "done" if not left else "warn", step="check")
+                self._save(st)  # отчёт целиком — до вёрстки (Word может работать минуты)
                 return self.render(st)
             except Exception as e:  # любая ошибка — в статус лабы, а не в никуда
                 return self._fail(st, e)
@@ -525,10 +533,13 @@ class Pipeline:
         b.image_path = rel
         self._sync(st, [rel])
         self._emit(st, f"Скриншот для задания {section} добавлен")
+        self._save(st)  # скриншот сохранён до вёрстки
         return self.render(st)
 
     def render(self, st: LabState) -> LabState:
         try:
+            if st.spec is not None and not lab_complete(st):
+                raise PipelineError("Отчёт дописан не до конца — нажми «Продолжить», чтобы дописать задания и ответы.")
             profile = self._profile(st)
             if st.spec is not None:
                 # профиль или разбор могли поменяться после выполнения: шапка, вывод и проверки — по текущим

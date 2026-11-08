@@ -90,11 +90,20 @@
 
   <section class="lab-center" aria-label="Документ">
     {% include "_flash.html" %}
-    {% if st.status == 'failed' and st.error %}<div class="notice err" style="width:100%;max-width:760px">{{ st.error }}
-      {% if st.spec and not busy %}<form method="post" action="{{ base_url }}/execute" style="margin-top:8px">
-        <button class="btn small" type="submit">Продолжить</button>
-        <span class="small">{{ 'Написанные задания сохранены — допишу остальные.' if st.report else 'Начну выполнение заново.' }}</span>
-      </form>{% endif %}</div>{% endif %}
+    {% set interrupted = st.status == 'executing' and not busy %}
+    {% if (st.status == 'failed' and st.error) or interrupted %}<div class="notice err" style="width:100%;max-width:760px">
+      {{ st.error if st.status == 'failed' else 'Работа прервалась: приложение закрывали или пропала связь. Написанное сохранено.' }}
+      {% if st.spec and not busy %}
+        {% if complete %}
+        <form method="post" action="{{ base_url }}/rerender" style="margin-top:8px">
+          <button class="btn small" type="submit">Пересобрать документ</button>
+          <span class="small">Текст отчёта на месте — осталось собрать документ.</span></form>
+        {% else %}
+        <form method="post" action="{{ base_url }}/execute" style="margin-top:8px">
+          <button class="btn small" type="submit">Продолжить</button>
+          <span class="small">{{ 'Написанное сохранено — допишу остальное.' if st.report else 'Начну выполнение заново.' }}</span></form>
+        {% endif %}
+      {% endif %}</div>{% endif %}
     <nav class="tabs" aria-label="Вид">
       <a href="{{ base_url }}?tab=report" class="{{ 'on' if tab == 'report' }}">Отчёт</a>
       <a href="{{ base_url }}?tab=spec" class="{{ 'on' if tab == 'spec' }}">Разбор методички</a>
@@ -180,7 +189,7 @@
         </form>
         <form method="post" action="{{ base_url }}/execute" style="margin-top:10px">
           <button class="btn primary" type="submit" {{ 'disabled' if busy }}>{{ 'Выполнить заново' if st.report else 'Выполнить' }}</button>
-          {% if st.report %}<span class="small muted">Текст всех заданий будет написан заново.</span>{% endif %}
+          {% if st.report %}<span class="small muted">{{ 'Допишу недостающие задания и ответы.' if st.status in ('failed', 'executing') and not complete else 'Текст всех заданий будет написан заново.' }}</span>{% endif %}
         </form>
         {% else %}
         <p class="muted">Разбор ещё не готов.</p>

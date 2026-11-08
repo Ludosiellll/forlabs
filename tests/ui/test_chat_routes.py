@@ -182,3 +182,28 @@ def test_teacher_requirements_listed_and_removable(lab):
     assert "Комментарии к каждому методу" in page and url + "/teacher/remove/0" in page
     client.post(url + "/teacher/remove/0", follow_redirects=False)
     assert ctx.memory().teacher_list("ivanov_ivan_petrovich", "psip") == []
+
+
+def test_interrupted_executing_lab_offers_continue(lab):
+    client, ctx, url = lab
+    client.post(url + "/execute", follow_redirects=False)
+    st = ctx.store.load_lab("ivanov_ivan_petrovich", "psip", "7")
+    st.status = "executing"  # приложение закрыли посреди выполнения, задачи уже нет
+    ctx.store.save_lab(st)
+    page = client.get(url + "?tab=report").text
+    assert "прервалась" in page and url + "/rerender" in page  # всё написано — осталось собрать
+    st.spec.tasks.append(st.spec.tasks[0].model_copy(update={"n": 2, "text": "Ещё задание."}))
+    ctx.store.save_lab(st)
+    page = client.get(url + "?tab=report").text
+    assert "прервалась" in page and url + "/execute" in page  # недописано — «Продолжить»
+
+
+def test_failed_render_offers_rebuild_not_continue(lab):
+    client, ctx, url = lab
+    client.post(url + "/execute", follow_redirects=False)
+    st = ctx.store.load_lab("ivanov_ivan_petrovich", "psip", "7")
+    st.status, st.error = "failed", "report.docx открыт в Word — закрой его и нажми «Пересобрать документ»."
+    ctx.store.save_lab(st)
+    page = client.get(url + "?tab=report").text
+    notice = page[page.index("notice err"):page.index("notice err") + 800]
+    assert "/rerender" in notice and "Продолжить" not in notice

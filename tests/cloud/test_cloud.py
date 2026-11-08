@@ -26,6 +26,7 @@ class FakeSupabase:
         self.rpc_calls = []
         self.functions_down = False
         self.balance_errors = {}  # uid -> текст ошибки, как в ответе функции
+        self.drop_next = 0  # сколько следующих запросов к REST оборвать (как пропавший Wi-Fi)
 
     def session(self, expires_in=3600):
         return {"access_token": f"tok{len(self.requests)}", "refresh_token": "ref", "expires_in": expires_in,
@@ -43,6 +44,9 @@ class FakeSupabase:
         if path == "/auth/v1/signup":
             return httpx.Response(200, json={"id": UID, "email": "a@b.c", "confirmation_sent_at": "now"})
         assert req.headers["authorization"].startswith("Bearer tok")
+        if self.drop_next and path.startswith("/rest/v1/"):
+            self.drop_next -= 1
+            raise httpx.ConnectError("Wi-Fi пропал")
         if path.startswith("/rest/v1/rpc/"):
             fn = path.rsplit("/", 1)[-1]
             args = json.loads(req.content or b"{}")
@@ -205,3 +209,13 @@ def test_members_admin(auth):
     assert me.role == "admin" and me.approved
     store.set_approved(UID, False)
     assert store.list_members()[0].approved is False
+
+
+def test_rest_retries_a_dropped_connection(auth, fake):
+    auth.sign_in("a@b.c", "верный")
+    store = CloudStore(auth, retry_delays=(0, 0))
+    fake.drop_next = 2  # два обрыва подряд — третий запрос проходит
+    assert store.list_profiles() == []
+    fake.drop_next = 5
+    with pytest.raises(CloudError):
+        store.list_profiles()

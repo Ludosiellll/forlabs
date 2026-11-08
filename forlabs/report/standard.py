@@ -94,6 +94,9 @@ def check_standard(doc: ReportDoc, spec: LabSpec, gender: Gender) -> list[Findin
                         out.append(_f("list.punctuation", "Промежуточный пункт списка заканчивается «;»", loc, item))
 
     spec_q = {normalize_for_compare(q) for q in spec.questions}
+    if len(doc.questions) < len(spec.questions):
+        out.append(_f("qa.missing", f"Нет ответов на контрольные вопросы: в методичке {len(spec.questions)}, "
+                                    f"в отчёте {len(doc.questions)}. Нажми «Продолжить».", "Контрольные вопросы"))
     for qa in doc.questions:
         if normalize_for_compare(qa.question) not in spec_q:
             out.append(_f("qa.not_in_spec", "Такого вопроса нет в методичке", f"Вопрос {qa.n}", qa.question))

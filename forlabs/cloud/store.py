@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import time
 from datetime import timedelta
 from pathlib import Path
 from urllib.parse import quote
@@ -71,8 +72,10 @@ def storage_key(uid: str, profile_id: str, subject_id: str, number: str, rel: st
 
 
 class CloudStore:
-    def __init__(self, auth: CloudAuth, cache_home: Path | None = None):
+    def __init__(self, auth: CloudAuth, cache_home: Path | None = None,
+                 retry_delays: tuple[float, ...] = (1.0, 3.0)):
         self.auth = auth
+        self.retry_delays = retry_delays
         self.http = auth.http
         self.cfg = auth.config
         self.local = Store(cache_home or paths.data_home() / "cloud_cache")
@@ -91,12 +94,22 @@ class CloudStore:
         return r
 
     def _rest(self, method: str, table: str, params: dict | None = None, json=None, prefer: str | None = None):
-        try:
-            r = self.http.request(method, f"{self.cfg.url}/rest/v1/{table}", params=params, json=json,
-                                  headers=self._h({"Prefer": prefer} if prefer else None))
-        except httpx.TransportError as e:
-            raise CloudError("Нет связи с облаком. Проверь интернет.", str(e)) from e
-        return self._check(r)
+        """Запрос к базе; обрыв связи и 5xx повторяются (все наши записи — upsert/patch/delete по ключу,
+        повтор безопасен)."""
+        for attempt in range(len(self.retry_delays) + 1):
+            try:
+                r = self.http.request(method, f"{self.cfg.url}/rest/v1/{table}", params=params, json=json,
+                                      headers=self._h({"Prefer": prefer} if prefer else None))
+            except httpx.TransportError as e:
+                if attempt == len(self.retry_delays):
+                    raise CloudError("Нет связи с облаком. Проверь интернет.", str(e)) from e
+                time.sleep(self.retry_delays[attempt])
+                continue
+            if r.status_code >= 500 and attempt < len(self.retry_delays):
+                time.sleep(self.retry_delays[attempt])
+                continue
+            return self._check(r)
+        raise AssertionError("недостижимо")
 
     def _mine(self) -> dict:
         """Только свои строки: администратор по политикам видит и чужие, но работает со своими."""

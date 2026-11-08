@@ -20,7 +20,7 @@ from forlabs.report.standard import check_standard
 
 # замечания, которые модель исправить не может (их делает код или пользователь)
 STRUCTURAL = {"header.missing", "header.date_format", "task.sequence", "task.title_mismatch", "qa.not_in_spec",
-              "conclusion.formula"}
+              "conclusion.formula", "qa.missing"}
 _LOC = re.compile(r"Задание (\d+), блок (\d+)")
 
 
