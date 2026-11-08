@@ -134,7 +134,7 @@
     <div class="actions">
       {% if st.status in ('rendered', 'final') %}
       <form method="post" action="{{ base_url }}/final" class="wide">
-        <button class="btn primary" type="submit" {{ 'disabled' if errors }}>{{ 'Положить в папку сдачи ещё раз' if st.status == 'final' else 'Сдать в папку сдачи' }}</button>
+        <button class="btn primary" type="submit" {{ 'disabled' if errors or busy }}>{{ 'Положить в папку сдачи ещё раз' if st.status == 'final' else 'Сдать в папку сдачи' }}</button>
         {% if errors %}<div class="hint">Сначала разберись с замечаниями ниже.</div>{% endif %}
       </form>
       {% endif %}
