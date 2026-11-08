@@ -61,6 +61,7 @@ class LabSpec(BaseModel):
     workplace: int | None = None
     variant_text: str | None = None
     questions: list[str] = Field(default_factory=list)
+    conclusion: str | None = None  # своя формулировка вывода, если цель не начинается с инфинитива
     source_text: str = ""
 
 

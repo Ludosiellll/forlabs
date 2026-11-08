@@ -107,3 +107,11 @@ def test_prompt_says_no_variants_when_none():
                  assets_dir=Path("/tmp"), render_diagrams=False)
     prompt = "\n".join(m["content"] for m in fake.calls[0])
     assert "В этой работе нет вариантов" in prompt
+
+
+def test_conclusion_override_used():
+    fake = FakeLLM([SECTION1, SECTION2, ANSWERS])
+    spec = SPEC.model_copy(update={"conclusion": "Сформировала навыки работы со срезами."})
+    doc = write_report(spec, PROFILE, PROFILE.enrollment("ssp"), SUBJECTS["ssp"], fake, RuleBook(),
+                       assets_dir=Path("/tmp"), render_diagrams=False)
+    assert doc.conclusion == "Сформировала навыки работы со срезами."

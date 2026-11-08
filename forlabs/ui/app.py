@@ -285,10 +285,14 @@ def create_app(ctx: AppContext | None = None) -> FastAPI:
                 step_state[k] = "fail"
             else:
                 step_state[k] = ""
-        conclusion = goal_to_conclusion(st.spec.goal, profile.gender).text if st.spec and profile else ""
+        conclusion_res = goal_to_conclusion(st.spec.goal, profile.gender) if st.spec and profile else None
+        conclusion = (st.spec.conclusion if st.spec and st.spec.conclusion else
+                      (conclusion_res.text if conclusion_res else ""))
+        conclusion_note = conclusion_res.note if conclusion_res and conclusion_res.needs_confirm and not (
+            st.spec and st.spec.conclusion) else None
         return render(request, "lab.html", st=st, profile=profile, subject=get_subject(s), busy=busy,
                       events=events, journal=journal, slot_items=slot_items, errors=errors, tab=tab, steps=STEPS,
-                      step_state=step_state, conclusion=conclusion,
+                      step_state=step_state, conclusion=conclusion, conclusion_note=conclusion_note,
                       base_url=lab_url(p, s, n), last_seq=max([e.seq for e in events] + [0]), nav="home")
 
     @app.post("/labs/{p}/{s}/{n}/confirm")
@@ -306,6 +310,12 @@ def create_app(ctx: AppContext | None = None) -> FastAPI:
             "date": (f.get("date") or today()).strip(), "tasks": tasks,
             "variant_text": (f.get("variant_text") or "").strip() or None,
             "questions": [ln.strip() for ln in (f.get("questions") or "").splitlines() if ln.strip()]})
+        profile = ctx.store.get_profile(p)
+        own = " ".join((f.get("conclusion") or "").split())
+        formula = goal_to_conclusion(spec.goal, profile.gender if profile else "m").text
+        if own and not own.endswith("."):
+            own += "."
+        spec.conclusion = own if own and own != formula else None
         ctx.pipeline.confirm(st, spec)
         return redirect(lab_url(p, s, n), msg="Разбор сохранён")
 

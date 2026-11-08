@@ -144,4 +144,4 @@ def write_report(spec: LabSpec, profile: Profile, enrollment: Enrollment, subjec
         questions = answer_questions(spec, profile, subject, llm, rules)
     return ReportDoc(lab_number=spec.number, header=build_header(spec, enrollment.header_style, profile.group),
                      sections=sections, questions=questions,
-                     conclusion=goal_to_conclusion(spec.goal, profile.gender).text)
+                     conclusion=spec.conclusion or goal_to_conclusion(spec.goal, profile.gender).text)

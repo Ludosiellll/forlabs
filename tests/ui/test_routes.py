@@ -104,3 +104,24 @@ def test_rules_have_human_titles(client):
     page = client.get("/rules").text
     assert "Стандарт отчёта" in page and "Анти-ИИ: текст" in page
     assert page.index("Стандарт отчёта") < page.index("Анти-ИИ: текст")
+
+
+def test_non_infinitive_goal_warns_and_accepts_own_conclusion(client, tmp_path):
+    make_profile(client, tmp_path)
+    r = client.post("/labs/new", data={"profile_id": "ivanov_ivan_petrovich", "subject_id": "psip", "number": "",
+                                       "text": ""},
+                    files={"files": (FIXTURE.name, FIXTURE.read_bytes(), "text/plain")}, follow_redirects=False)
+    lab_url = r.headers["location"]
+    client.post(lab_url + "/confirm", data={"topic": RAW["topic"], "goal": "Формирование навыков анимации",
+                                            "equipment": "", "assignment": "", "date": "24.09.2026",
+                                            "tasks": "Создайте 2 простых анимации к выбранной тематике.",
+                                            "extra_from": "", "questions": "", "conclusion": ""})
+    page = client.get(lab_url + "?tab=spec").text
+    assert "не начинается с инфинитива" in page
+    client.post(lab_url + "/confirm", data={"topic": RAW["topic"], "goal": "Формирование навыков анимации",
+                                            "equipment": "", "assignment": "", "date": "24.09.2026",
+                                            "tasks": "Создайте 2 простых анимации к выбранной тематике.",
+                                            "extra_from": "", "questions": "",
+                                            "conclusion": "Сформировал навыки анимации."})
+    page = client.get(lab_url + "?tab=spec").text
+    assert "Сформировал навыки анимации." in page

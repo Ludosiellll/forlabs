@@ -101,7 +101,7 @@ def check_standard(doc: ReportDoc, spec: LabSpec, gender: Gender) -> list[Findin
             out.append(_f("qa.answer_too_long", "Ответ должен быть коротким: до 22 слов, одно предложение",
                           f"Вопрос {qa.n}", ans))
 
-    expected_conclusion = goal_to_conclusion(spec.goal, gender).text
+    expected_conclusion = spec.conclusion or goal_to_conclusion(spec.goal, gender).text
     if normalize_for_compare(doc.conclusion) != normalize_for_compare(expected_conclusion):
         out.append(_f("conclusion.formula", f"Вывод должен быть: «{expected_conclusion}»", "Вывод", doc.conclusion))
 

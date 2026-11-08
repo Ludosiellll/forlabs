@@ -67,13 +67,21 @@ def finalize(docx: Path, author: str, workdir: Path, soffice: str | None = None,
     docx, workdir = Path(docx), Path(workdir)
     workdir.mkdir(parents=True, exist_ok=True)
     pdf = workdir / (docx.stem + ".pdf")
+    warnings: list[str] = []
     if prefer_word and word_com.available():
-        rep = word_com.finalize(docx, pdf, author)
-        return FinalizeReport("word", pdf, pdf_to_pngs(pdf, workdir / "pages"), rep.continuations, rep.warnings)
+        backup = docx.read_bytes()
+        try:
+            rep = word_com.finalize_isolated(docx, pdf, author)
+            return FinalizeReport("word", pdf, pdf_to_pngs(pdf, workdir / "pages"), rep.continuations, rep.warnings)
+        except Exception as e:  # Word завис или упал — документ не теряем, доводим через LibreOffice
+            docx.write_bytes(backup)
+            warnings.append(f"Word не справился ({e}). Документ доведён через LibreOffice; "
+                            f"«Продолжение листинга» не расставлено — нажми «Пересобрать документ» ещё раз.")
+    else:
+        warnings.append(NO_WORD_WARNING)
 
     pdf = libreoffice.to_pdf(docx, workdir, soffice)
     marks = toc_bookmarks(docx)
-    warnings = [NO_WORD_WARNING]
     if marks:
         hp = heading_pages(pdf, list(marks.values()))
         patch_toc_pages(docx, {name: hp[text] for name, text in marks.items() if text in hp})

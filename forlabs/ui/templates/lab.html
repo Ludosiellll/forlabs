@@ -87,8 +87,11 @@
           {% for f in spec_findings %}<div class="small">· {{ f.location }}: {{ f.text }}</div>{% endfor %}</div>{% endif %}
         <form method="post" action="{{ base_url }}/confirm">
           <div class="field"><label for="topic">Тема</label><input id="topic" name="topic" type="text" value="{{ st.spec.topic }}"></div>
-          <div class="field"><label for="goal">Цель</label><textarea id="goal" name="goal" rows="2">{{ st.spec.goal }}</textarea>
-            <div class="hint">Из цели строится вывод: «{{ conclusion }}»</div></div>
+          <div class="field"><label for="goal">Цель</label><textarea id="goal" name="goal" rows="2">{{ st.spec.goal }}</textarea></div>
+          <div class="field"><label for="conclusion">Вывод</label>
+            {% if conclusion_note %}<div class="notice warn small" style="margin-bottom:6px">{{ conclusion_note }}</div>{% endif %}
+            <input id="conclusion" name="conclusion" type="text" value="{{ conclusion }}">
+            <div class="hint">Строится из цели: инфинитив → прошедшее время в роде профиля. Можно исправить вручную.</div></div>
           <div class="grid2">
             <div class="field"><label for="equipment">Оснащение</label><input id="equipment" name="equipment" type="text" value="{{ st.spec.equipment or '' }}"></div>
             <div class="field"><label for="date">Дата выполнения</label><input id="date" name="date" type="text" value="{{ st.spec.date }}" placeholder="ДД.ММ.ГГГГ"></div>

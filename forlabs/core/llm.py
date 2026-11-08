@@ -87,6 +87,10 @@ class LLM:
     def _post(self, payload: dict) -> dict:
         try:
             key = self.api_key() if callable(self.api_key) else self.api_key
+        except Exception as e:  # обновление токена облака не удалось
+            raise LLMError("access", str(e), getattr(e, "message_ru", None) or
+                           "Не удалось получить доступ к модели. Войди в аккаунт заново.") from e
+        try:
             r = self.http.post(f"{self.base_url}/chat/completions", json=payload,
                                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
         except (httpx.TransportError, httpx.TimeoutException) as e:

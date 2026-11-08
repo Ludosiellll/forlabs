@@ -49,3 +49,17 @@ def test_finalize_libreoffice_semester(sample_doc, profile_f, tmp_path, monkeypa
     nums = [int(n) for _, n in re.findall(r"PAGEREF (_Toc\d+) \\h .*?<w:t>(\d+)</w:t>", xml)]
     assert nums == [pages["Лабораторная работа №8"], pages["Лабораторная работа №9"]]
     assert nums[0] == 3
+
+
+@needs_lo
+def test_word_failure_falls_back_to_libreoffice(sample_doc, tmp_path, monkeypatch):
+    monkeypatch.setattr(word_com, "available", lambda: True)
+
+    def boom(*a, **k):
+        raise TimeoutError("Word не ответил")
+
+    monkeypatch.setattr(word_com, "finalize_isolated", boom)
+    out = build_lab(sample_doc, tmp_path / "lab.docx", author="x")
+    rep = finalize(out, author="x", workdir=tmp_path / "fin")
+    assert rep.engine == "libreoffice" and rep.pdf.exists()
+    assert any("Word не ответил" in w for w in rep.warnings)

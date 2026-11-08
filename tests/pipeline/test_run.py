@@ -110,3 +110,51 @@ def test_memory_updated_on_final(tmp_home, tmp_path):
     pipe.mark_final(st)
     mem = pipe.memory.read("ivanov", "psip")
     assert mem.startswith("ЛР №7: Сайт о Бобруйске")
+
+
+def test_renumber_collision_never_deletes_existing(tmp_home, tmp_path):
+    pipe, fake = setup(tmp_home, tmp_path, [RAW, RAW, RAW])
+    a = pipe.parse(pipe.create_lab("ivanov", "psip", [(FIXTURE.name, FIXTURE.read_bytes())]), date="24.09.2026")
+    b = pipe.parse(pipe.create_lab("ivanov", "psip", [(FIXTURE.name, FIXTURE.read_bytes())]), date="24.09.2026")
+    assert (a.number, b.number) == ("7", "7-2")
+    marker = pipe.lab_dir(b) / "assets" / "shot.png"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_bytes(b"precious")
+    pipe.renamed.clear()  # перезапуск приложения / ctx.reset()
+    c = pipe.parse(pipe.create_lab("ivanov", "psip", [(FIXTURE.name, FIXTURE.read_bytes())]), date="24.09.2026")
+    assert c.number == "7-3"
+    assert marker.exists() and marker.read_bytes() == b"precious"
+    assert pipe.store.load_lab("ivanov", "psip", "7-2") is not None
+
+
+def test_create_lab_with_existing_number_refuses(tmp_home, tmp_path):
+    import pytest
+    from forlabs.pipeline.run import PipelineError
+    pipe, fake = setup(tmp_home, tmp_path, [RAW])
+    st = pipe.parse(pipe.create_lab("ivanov", "psip", [(FIXTURE.name, FIXTURE.read_bytes())], number="7"),
+                    date="24.09.2026")
+    with pytest.raises(PipelineError):
+        pipe.create_lab("ivanov", "psip", [("x.txt", b"other")], number="7")
+    assert pipe.store.load_lab("ivanov", "psip", "7").spec is not None
+
+
+def test_drafts_do_not_share_source(tmp_home, tmp_path):
+    pipe, fake = setup(tmp_home, tmp_path, [])
+    a = pipe.create_lab("ivanov", "psip", [("first.txt", b"a")])
+    b = pipe.create_lab("ivanov", "psip", [("second.txt", b"b")])
+    assert a.number != b.number
+    assert sorted(p.name for p in Path(b.source_path).iterdir()) == ["second.txt"]
+
+
+def test_unexpected_error_marks_failed(tmp_home, tmp_path):
+    pipe, fake = setup(tmp_home, tmp_path, [RAW, RuntimeError("что-то сломалось")])
+    st = pipe.create_lab("ivanov", "psip", [(FIXTURE.name, FIXTURE.read_bytes())], number="7")
+    st = pipe.execute(pipe.confirm(pipe.parse(st, date="24.09.2026"), None))
+    saved = pipe.store.load_lab("ivanov", "psip", "7")
+    assert saved.status == "failed" and "сломалось" in saved.error
+
+
+def test_unexpected_error_in_parse_marks_failed(tmp_home, tmp_path):
+    pipe, fake = setup(tmp_home, tmp_path, [RuntimeError("нет ключа")])
+    st = pipe.parse(pipe.create_lab("ivanov", "psip", [(FIXTURE.name, FIXTURE.read_bytes())], number="7"))
+    assert st.status == "failed" and "нет ключа" in st.error

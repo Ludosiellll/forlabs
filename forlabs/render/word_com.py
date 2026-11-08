@@ -1,5 +1,11 @@
 """Доводка через Microsoft Word (только Windows): содержание, «Продолжение листинга/таблицы N»,
-свойства документа, PDF для предпросмотра. Работает с реальной разбивкой Word на страницы."""
+свойства документа, PDF для предпросмотра. Работает с реальной разбивкой Word на страницы.
+
+Важно про объектную модель Word:
+- закладки с именем на «_» скрыты: их видно в коллекции только при Bookmarks.ShowHidden = True;
+- Range абзаца включает знак абзаца: присваивание Range.Text склеит абзац со следующим,
+  поэтому текст вставляется в пустой новый абзац через InsertBefore.
+"""
 
 from __future__ import annotations
 
@@ -10,7 +16,12 @@ from pathlib import Path
 
 WD_EXPORT_PDF = 17
 WD_ACTIVE_END_PAGE = 3
-MAX_PASSES = 200
+WD_CHARACTER = 1
+MAX_ROUNDS = 10
+MAX_INSERTS = 300
+LISTING_PREFIX = "_ForLabsL"
+CONT_LISTING = "Продолжение листинга"
+CONT_TABLE = "Продолжение таблицы"
 
 
 @dataclass
@@ -32,19 +43,20 @@ def available() -> bool:
         return False
 
 
-def _page(rng) -> int:
-    return int(rng.Information(WD_ACTIVE_END_PAGE))
+def _start_page(rng_owner) -> int:
+    """Страница начала абзаца/строки (по первому символу)."""
+    r = rng_owner.Range
+    first = r.Document.Range(r.Start, r.Start)
+    return int(first.Information(WD_ACTIVE_END_PAGE))
 
 
-def _start_page(paragraph) -> int:
-    return _page(paragraph.Range.Characters(1))
+def _text(par) -> str:
+    return (par.Range.Text or "").replace("\r", "").replace("\x07", "")
 
 
-def _style_continuation(par, text: str) -> None:
-    rng = par.Range
-    rng.Text = text
-    fmt = par.Format
+def _style_continuation(par) -> None:
     par.Borders.Enable = False
+    fmt = par.Format
     fmt.LeftIndent = 0
     fmt.RightIndent = 0
     fmt.FirstLineIndent = 0
@@ -53,86 +65,123 @@ def _style_continuation(par, text: str) -> None:
     fmt.LineSpacingRule = 0  # одинарный
     fmt.Alignment = 3  # по ширине
     fmt.KeepWithNext = True
-    rng = par.Range
-    rng.Font.Name = "Times New Roman"
-    rng.Font.Size = 14
-    rng.Font.Bold = False
+    font = par.Range.Font
+    font.Name = "Times New Roman"
+    font.Size = 14
+    font.Bold = False
 
 
-def _insert_listing_continuations(doc) -> int:
-    added = 0
-    for _ in range(MAX_PASSES):
+def _insert_paragraph_before(doc, par, text: str):
+    """Новый абзац перед par с текстом; знак абзаца par не трогаем."""
+    start = par.Range.Start
+    doc.Range(start, start).InsertParagraphBefore()
+    new_par = doc.Range(start, start).Paragraphs(1)
+    r = new_par.Range
+    r.MoveEnd(WD_CHARACTER, -1)  # без знака абзаца
+    r.InsertBefore(text)
+    _style_continuation(new_par)
+    return new_par
+
+
+def listing_bookmarks(doc) -> list[str]:
+    doc.Bookmarks.ShowHidden = True
+    names = [doc.Bookmarks(i).Name for i in range(1, doc.Bookmarks.Count + 1)]
+    return [n for n in names if n.startswith(LISTING_PREFIX)]
+
+
+def _fix_listing_once(doc, name: str) -> bool:
+    """Одна правка в листинге: вставить недостающее или убрать лишнее «Продолжение». True — была правка."""
+    m = re.match(rf"{LISTING_PREFIX}.+_(\d+)$", name)
+    n = m.group(1) if m else "?"
+    pars = doc.Bookmarks(name).Range.Paragraphs
+    prev_page = None
+    for i in range(1, pars.Count + 1):
+        par = pars(i)
+        page = _start_page(par)
+        if _text(par).startswith(CONT_LISTING):
+            if prev_page is not None and page == prev_page:
+                par.Range.Delete()  # уже не вверху страницы — лишнее
+                return True
+            prev_page = page
+            continue
+        if prev_page is not None and page != prev_page:
+            _insert_paragraph_before(doc, par, f"{CONT_LISTING} {n}")
+            return True
+        prev_page = page
+    return False
+
+
+def insert_listing_continuations(doc) -> int:
+    count = 0
+    for _ in range(MAX_INSERTS):
         changed = False
-        names = [b.Name for b in doc.Bookmarks if b.Name.startswith("_ForLabsL")]
-        for name in names:
-            m = re.match(r"_ForLabsL(.+)_(\d+)$", name)
-            n = m.group(2) if m else "?"
-            rng = doc.Bookmarks(name).Range
-            pars = list(rng.Paragraphs)
-            prev_page = None
-            for par in pars:
-                if par.Range.Text.strip().startswith("Продолжение листинга"):
-                    prev_page = _start_page(par)
-                    continue
-                page = _start_page(par)
-                if prev_page is not None and page != prev_page:
-                    par.Range.InsertParagraphBefore()
-                    new_par = par.Previous()
-                    _style_continuation(new_par, f"Продолжение листинга {n}")
-                    doc.Repaginate()
-                    added += 1
-                    changed = True
-                    break
-                prev_page = page
-            if changed:
+        for name in listing_bookmarks(doc):
+            if _fix_listing_once(doc, name):
+                doc.Repaginate()
+                count += 1
+                changed = True
                 break
         if not changed:
-            return added
-    return added
+            break
+    return count
 
 
-def _insert_table_continuations(doc) -> int:
-    added = 0
-    for _ in range(MAX_PASSES):
+def _table_number(tbl) -> str:
+    par = tbl.Range.Paragraphs(1).Previous()
+    for _ in range(4):
+        if par is None:
+            break
+        m = re.match(rf"\s*(?:Таблица|{CONT_TABLE})\s+(\d+)", _text(par))
+        if m:
+            return m.group(1)
+        par = par.Previous()
+    return "?"
+
+
+def insert_table_continuations(doc) -> int:
+    count = 0
+    for _ in range(MAX_INSERTS):
         changed = False
         for ti in range(1, doc.Tables.Count + 1):
             tbl = doc.Tables(ti)
             prev = None
             for ri in range(1, tbl.Rows.Count + 1):
-                row = tbl.Rows(ri)
-                page = _page(row.Range.Cells(1).Range.Characters(1))
+                page = _start_page(tbl.Rows(ri).Range.Cells(1))
                 if prev is not None and page != prev and ri > 1:
-                    header_texts = [c.Range.Text[:-2] for c in tbl.Rows(1).Cells]
-                    caption_n = _table_number(doc, tbl)
+                    header = [c.Range.Text[:-2] for c in tbl.Rows(1).Range.Cells]
+                    number = _table_number(tbl)
                     new_tbl = tbl.Split(ri)
                     gap = new_tbl.Range.Paragraphs(1).Previous()
-                    _style_continuation(gap, f"Продолжение таблицы {caption_n}")
+                    r = gap.Range
+                    r.MoveEnd(WD_CHARACTER, -1)
+                    r.InsertBefore(f"{CONT_TABLE} {number}")
+                    _style_continuation(gap)
                     new_tbl.Rows.Add(new_tbl.Rows(1))
-                    for ci, text in enumerate(header_texts, start=1):
+                    for ci, text in enumerate(header, start=1):
                         new_tbl.Rows(1).Cells(ci).Range.Text = text
                     new_tbl.Rows(1).HeadingFormat = True
+                    new_tbl.Rows(1).Range.ParagraphFormat.KeepWithNext = True
                     doc.Repaginate()
-                    added += 1
+                    count += 1
                     changed = True
                     break
                 prev = page
             if changed:
                 break
         if not changed:
-            return added
-    return added
-
-
-def _table_number(doc, tbl) -> str:
-    par = tbl.Range.Paragraphs(1).Previous()
-    for _ in range(4):
-        if par is None:
             break
-        m = re.match(r"\s*(?:Таблица|Продолжение таблицы)\s+(\d+)", par.Range.Text)
-        if m:
-            return m.group(1)
-        par = par.Previous()
-    return "?"
+    return count
+
+
+def place_continuations(doc) -> int:
+    """Листинги и таблицы влияют друг на друга — повторяем до стабилизации."""
+    total = 0
+    for _ in range(MAX_ROUNDS):
+        added = insert_listing_continuations(doc) + insert_table_continuations(doc)
+        total += added
+        if not added:
+            break
+    return total
 
 
 def finalize(docx: Path, pdf_out: Path, author: str) -> WordReport:
@@ -141,17 +190,16 @@ def finalize(docx: Path, pdf_out: Path, author: str) -> WordReport:
 
     report = WordReport()
     pythoncom.CoInitialize()
-    word = win32com.client.DispatchEx("Word.Application")
-    word.Visible = False
-    word.DisplayAlerts = 0
-    doc = None
+    word = doc = None
     try:
+        word = win32com.client.DispatchEx("Word.Application")
+        word.Visible = False
+        word.DisplayAlerts = 0
         doc = word.Documents.Open(str(Path(docx).resolve()), False, False, False)
         doc.Repaginate()
         for toc in doc.TablesOfContents:
             toc.Update()
-        report.continuations += _insert_listing_continuations(doc)
-        report.continuations += _insert_table_continuations(doc)
+        report.continuations = place_continuations(doc)
         for toc in doc.TablesOfContents:
             toc.UpdatePageNumbers()
         try:
@@ -162,8 +210,41 @@ def finalize(docx: Path, pdf_out: Path, author: str) -> WordReport:
         doc.Save()
         doc.ExportAsFixedFormat(str(Path(pdf_out).resolve()), WD_EXPORT_PDF)
     finally:
-        if doc is not None:
-            doc.Close(False)
-        word.Quit()
-        pythoncom.CoUninitialize()
+        try:
+            if doc is not None:
+                doc.Close(False)
+        finally:
+            try:
+                if word is not None:
+                    word.Quit()
+            finally:
+                pythoncom.CoUninitialize()
     return report
+
+
+def _child(docx: str, pdf_out: str, author: str, queue) -> None:
+    try:
+        rep = finalize(Path(docx), Path(pdf_out), author)
+        queue.put(("ok", rep.continuations, rep.warnings))
+    except Exception as e:  # отдаём текст ошибки родителю
+        queue.put(("error", 0, [f"{type(e).__name__}: {e}"]))
+
+
+def finalize_isolated(docx: Path, pdf_out: Path, author: str, timeout: float = 300.0) -> WordReport:
+    """Word в отдельном процессе с тайм-аутом: зависший диалог Word не вешает приложение."""
+    import multiprocessing as mp
+
+    ctx = mp.get_context("spawn")
+    q = ctx.Queue()
+    p = ctx.Process(target=_child, args=(str(docx), str(pdf_out), author, q), daemon=True)
+    p.start()
+    p.join(timeout)
+    if p.is_alive():
+        p.terminate()
+        raise TimeoutError("Word не ответил за отведённое время (возможно, открыто окно-предупреждение Word)")
+    if q.empty():
+        raise RuntimeError("Word завершился без результата")
+    status, cont, warnings = q.get()
+    if status != "ok":
+        raise RuntimeError("; ".join(warnings))
+    return WordReport(cont, warnings)

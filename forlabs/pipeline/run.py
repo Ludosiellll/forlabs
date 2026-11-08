@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import threading
+import uuid
 from datetime import date as _date
 from pathlib import Path
 from typing import Callable
@@ -24,6 +25,13 @@ from forlabs.spec.extract import extract_spec, verify_verbatim
 
 class PipelineError(Exception):
     pass
+
+
+DRAFT_PREFIX = "новая-"
+
+
+def is_draft(number: str) -> bool:
+    return number.startswith("новая")
 
 
 def today() -> str:
@@ -109,14 +117,23 @@ class Pipeline:
 
     def _fail(self, st: LabState, e: Exception) -> LabState:
         st.status = "failed"
-        st.error = getattr(e, "message_ru", None) or str(e)
+        st.error = getattr(e, "message_ru", None) or str(e) or type(e).__name__
         self._emit(st, st.error, "error")
         return self._save(st)
 
     # шаги
+    def _taken(self, profile_id: str, subject_id: str, number: str) -> bool:
+        return (self.store.load_lab(profile_id, subject_id, number) is not None
+                or self.store.lab_dir(profile_id, subject_id, number).exists())
+
     def create_lab(self, profile_id: str, subject_id: str, files: list[tuple[str, bytes]],
                    number: str | None = None, pasted_text: str = "") -> LabState:
-        st = LabState(profile_id=profile_id, subject_id=subject_id, number=number or "новая", status="draft")
+        number = (number or "").strip()
+        if number and self.store.load_lab(profile_id, subject_id, number) is not None:
+            raise PipelineError(f"ЛР {number} уже есть. Открой её или удали, чтобы сделать заново.")
+        if not number:
+            number = f"{DRAFT_PREFIX}{uuid.uuid4().hex[:6]}"
+        st = LabState(profile_id=profile_id, subject_id=subject_id, number=number, status="draft")
         src = self.lab_dir(st) / "source"
         src.mkdir(parents=True, exist_ok=True)
         for name, data in files:
@@ -140,7 +157,7 @@ class Pipeline:
             enrollment = self._enrollment(profile, st.subject_id)
             self._emit(st, "Разбираю задания и вопросы", step="parse")
             spec, findings = extract_spec(src, subject, enrollment, self.llm_factory(),
-                                          None if st.number == "новая" else st.number, date or today())
+                                          None if is_draft(st.number) else st.number, date or today())
             old_dir = self.lab_dir(st)
             if st.number != spec.number:
                 old_key = self.key(st)
@@ -153,27 +170,27 @@ class Pipeline:
             self._emit(st, f"Разбор готов: {len(spec.tasks)} заданий, {len(spec.questions)} вопросов", "done",
                        step="parse")
             return self._save(st)
-        except (LLMError, PipelineError, ValueError) as e:
+        except Exception as e:  # любая ошибка — в статус лабы, а не в никуда
             return self._fail(st, e)
 
     def _renumber(self, st: LabState, number: str, old_dir: Path) -> LabState:
-        old_key = self.key(st)
-        if self.store.load_lab(st.profile_id, st.subject_id, number) is not None:
-            number = f"{number}-{len(self.renamed) + 2}"
-        st = st.model_copy(update={"number": number})
-        self.renamed[old_key] = number
+        """Переносит черновик под номер из методички. Чужие лабы не трогает: занятый номер → «N-2», «N-3»…"""
+        old_key, old_number = self.key(st), st.number
+        candidate, k = number, 2
+        while self._taken(st.profile_id, st.subject_id, candidate):
+            candidate, k = f"{number}-{k}", k + 1
+        st = st.model_copy(update={"number": candidate})
+        self.renamed[old_key] = candidate
         new_dir = self.lab_dir(st)
-        if old_dir.exists() and old_dir != new_dir:
-            if new_dir.exists():
-                shutil.rmtree(new_dir)
+        if old_dir.exists():
             new_dir.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(old_dir), str(new_dir))
             st.source_path = str(new_dir / "source")
-            try:
-                if hasattr(self.store, "delete_lab"):
-                    self.store.delete_lab(st.profile_id, st.subject_id, "новая")
-            except Exception:
-                pass
+        try:
+            if is_draft(old_number):
+                self.store.delete_lab(st.profile_id, st.subject_id, old_number)
+        except Exception:
+            pass
         return st
 
     def confirm(self, st: LabState, spec: LabSpec | None) -> LabState:
@@ -230,7 +247,7 @@ class Pipeline:
                 self._emit(st, "Проверка: замечаний нет" if not left else f"Осталось замечаний: {len(left)}",
                            "done" if not left else "warn", step="check")
                 return self.render(st)
-            except (LLMError, PipelineError, ValueError) as e:
+            except Exception as e:  # любая ошибка — в статус лабы, а не в никуда
                 return self._fail(st, e)
 
     def redo_task(self, st: LabState, n: int) -> LabState:

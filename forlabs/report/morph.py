@@ -59,7 +59,7 @@ def goal_to_conclusion(goal: str, gender: Gender) -> ConclusionResult:
     words = list(_WORD.finditer(text))
     if not words or _infn_parse(words[0].group()) is None:
         return ConclusionResult(text=f"{text}.", needs_confirm=True,
-                                note="Цель начинается не с инфинитива — проверь вывод вручную.")
+                                note="Цель не начинается с инфинитива — проверь вывод ниже и исправь его, если нужно.")
     replacements: list[tuple[int, int, str]] = []
     first = words[0].group()
     main = _TEACHER_VERBS.get(first.lower(), first)

@@ -112,3 +112,17 @@ def test_api_key_callable_is_called_per_request():
               http_client=httpx.Client(transport=httpx.MockTransport(handler)))
     llm.chat([{"role": "user", "content": "a"}]); llm.chat([{"role": "user", "content": "b"}])
     assert seen == ["Bearer t1", "Bearer t2"]
+
+
+def test_api_key_provider_failure_becomes_llm_error():
+    class Expired(Exception):
+        message_ru = "Сессия истекла — войди снова."
+
+    def provider():
+        raise Expired("refresh failed")
+
+    llm = LLM(Settings(base_url="https://x/v1"), api_key=provider,
+              http_client=httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200))))
+    with pytest.raises(LLMError) as e:
+        llm.chat([{"role": "user", "content": "x"}])
+    assert e.value.kind == "access" and "войди" in e.value.message_ru

@@ -136,3 +136,11 @@ def test_phantom_variant_when_spec_has_none():
     assert ids(check_standard(d, s, "m")) == ["text.phantom_variant"]
     s.variant_text = "Приложение А (по журналу, вариант 14): Организация"
     assert check_standard(d, s, "m") == []
+
+
+def test_user_conclusion_override_is_accepted():
+    s = spec()
+    s.goal = "Формирование навыков работы со ссылочными типами"
+    s.conclusion = "Сформировал навыки работы со ссылочными типами."
+    d = clean_doc(); d.conclusion = s.conclusion
+    assert check_standard(d, s, "m") == []
