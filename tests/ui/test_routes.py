@@ -166,3 +166,17 @@ def test_preview_from_other_computer_offers_rerender(client, tmp_path):
     ctx.store.save_lab(st)
     page = client.get(lab + "?tab=report").text
     assert "на другом компьютере" in page and "/page/1" not in page
+
+
+def test_failed_lab_offers_continue(client, tmp_path):
+    make_profile(client, tmp_path)
+    r = client.post("/labs/new", data={"profile_id": "ivanov_ivan_petrovich", "subject_id": "psip", "number": "",
+                                       "text": ""},
+                    files={"files": (FIXTURE.name, FIXTURE.read_bytes(), "text/plain")}, follow_redirects=False)
+    lab = r.headers["location"]
+    ctx = client.app.state.ctx
+    st = ctx.store.load_lab("ivanov_ivan_petrovich", "psip", "7")
+    st.status, st.error = "failed", "Нет связи с моделью"
+    ctx.store.save_lab(st)
+    page = client.get(lab + "?tab=report").text
+    assert "Продолжить" in page and lab + "/execute" in page

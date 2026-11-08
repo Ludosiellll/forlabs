@@ -46,7 +46,11 @@
 
   <section class="lab-center" aria-label="Документ">
     {% include "_flash.html" %}
-    {% if st.status == 'failed' and st.error %}<div class="notice err" style="width:100%;max-width:760px">{{ st.error }}</div>{% endif %}
+    {% if st.status == 'failed' and st.error %}<div class="notice err" style="width:100%;max-width:760px">{{ st.error }}
+      {% if st.spec and not busy %}<form method="post" action="{{ base_url }}/execute" style="margin-top:8px">
+        <button class="btn small" type="submit">Продолжить</button>
+        <span class="small">{{ 'Написанные задания сохранены — допишу остальные.' if st.report else 'Начну выполнение заново.' }}</span>
+      </form>{% endif %}</div>{% endif %}
     <nav class="tabs" aria-label="Вид">
       <a href="{{ base_url }}?tab=report" class="{{ 'on' if tab == 'report' }}">Отчёт</a>
       <a href="{{ base_url }}?tab=spec" class="{{ 'on' if tab == 'spec' }}">Разбор методички</a>

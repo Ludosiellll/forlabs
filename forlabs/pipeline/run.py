@@ -260,15 +260,28 @@ class Pipeline:
                 profile = self._profile(st)
                 subject = get_subject(st.subject_id)
                 enrollment = self._enrollment(profile, st.subject_id)
+                if only is None and st.status in ("failed", "executing") and st.report is not None:
+                    # прошлый запуск оборвался: дописываем только то, чего ещё нет
+                    done = {s.n for s in st.report.sections}
+                    only = [t.n for t in st.spec.tasks if t.n not in done]
+                    if done:
+                        self._emit(st, f"Продолжаю: уже написаны задания {', '.join(map(str, sorted(done)))}",
+                                   step="write")
                 st.status, st.error = "executing", None
                 self._save(st)
                 llm = self.llm_factory()
                 assets = self.lab_dir(st) / "assets"
                 assets.mkdir(parents=True, exist_ok=True)
+
+                def progress(doc: ReportDoc) -> None:
+                    st.report = _relative_images(doc, self.lab_dir(st))
+                    self._save(st)
+
                 report = write_report(st.spec, profile, enrollment, subject, llm, self.rules, assets,
                                       memory=self._memory_text(st),
                                       on_event=lambda t: self._emit(st, t, step="write"),
-                                      render_diagrams=self.render_diagrams, existing=st.report, only=only)
+                                      render_diagrams=self.render_diagrams, existing=st.report, only=only,
+                                      on_progress=progress)
                 self._emit(st, "Проверяю по стандарту и на признаки ИИ", step="check")
                 report, findings = check_and_repair(report, st.spec, profile, llm, self.rules, self._others(st),
                                                     on_event=lambda t: self._emit(st, t, step="check"))

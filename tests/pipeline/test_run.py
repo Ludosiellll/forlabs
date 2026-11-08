@@ -288,3 +288,18 @@ def test_render_uses_current_profile_and_spec(tmp_home, tmp_path):
     assert not [f for f in st.findings if f.rule_id == "conclusion.formula"]
     xml = zipfile.ZipFile(st.docx_path).read("word/document.xml").decode()
     assert "Сформировала" in xml and "01.10.2026" in xml
+
+
+def test_failure_mid_lab_resumes_from_unwritten_task(tmp_home, tmp_path):
+    pipe, fake = setup(tmp_home, tmp_path, [RAW, SEC, LLMError("network", "нет сети")])
+    st = pipe.create_lab("ivanov", "psip", [(FIXTURE.name, FIXTURE.read_bytes())], number="7")
+    st = pipe.execute(pipe.confirm(pipe.parse(st, date="24.09.2026"), None))
+    assert st.status == "failed"
+    saved = pipe.store.load_lab("ivanov", "psip", "7")
+    assert saved.report is not None and [s.n for s in saved.report.sections] == [1]
+    first = saved.report.sections[0].model_dump()
+    fake.responses += [SEC2, ANS]
+    st = pipe.execute(saved)
+    assert st.status == "needs_manual", st.error
+    assert st.report.sections[0].model_dump() == first
+    assert len(fake.calls) == 5  # задание 1 не переписывалось

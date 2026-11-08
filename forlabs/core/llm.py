@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Literal, TypeVar
 
@@ -32,9 +33,10 @@ _ACCESS = {
 
 
 class LLMError(Exception):
-    def __init__(self, kind: Kind, detail: str = "", message_ru: str | None = None):
+    def __init__(self, kind: Kind, detail: str = "", message_ru: str | None = None, retryable: bool = False):
         self.kind = kind
         self.detail = detail
+        self.retryable = retryable  # временный сбой: сеть, перегрузка сервера, частые запросы
         self.message_ru = message_ru or _MESSAGES[kind]
         super().__init__(f"{self.message_ru} ({detail})" if detail else self.message_ru)
 
@@ -76,8 +78,10 @@ def _extract_json(text: str) -> Any:
 
 class LLM:
     def __init__(self, settings: Settings, api_key: "str | Callable[[], str]", http_client: httpx.Client | None = None,
-                 base_url: str | None = None, timeout: float = 240.0):
+                 base_url: str | None = None, timeout: float = 240.0,
+                 retry_delays: tuple[float, ...] = (3.0, 10.0)):
         self.settings = settings
+        self.retry_delays = retry_delays
         self.model = settings.model
         self.base_url = (base_url or settings.base_url).rstrip("/")
         self.api_key = api_key
@@ -85,6 +89,17 @@ class LLM:
         self.usage = UsageCounter()
 
     def _post(self, payload: dict) -> dict:
+        """Запрос с повторами при временных сбоях; ключ, лимит и баланс не повторяются."""
+        for attempt in range(len(self.retry_delays) + 1):
+            try:
+                return self._post_once(payload)
+            except LLMError as e:
+                if not e.retryable or attempt == len(self.retry_delays):
+                    raise
+                time.sleep(self.retry_delays[attempt])
+        raise AssertionError("недостижимо")
+
+    def _post_once(self, payload: dict) -> dict:
         try:
             key = self.api_key() if callable(self.api_key) else self.api_key
         except Exception as e:  # обновление токена облака не удалось
@@ -94,7 +109,7 @@ class LLM:
             r = self.http.post(f"{self.base_url}/chat/completions", json=payload,
                                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
         except (httpx.TransportError, httpx.TimeoutException) as e:
-            raise LLMError("network", str(e)) from e
+            raise LLMError("network", str(e), retryable=True) from e
         if r.status_code >= 400:
             detail = r.text[:300]
             low = detail.lower()
@@ -106,9 +121,10 @@ class LLM:
             if r.status_code == 403:
                 raise LLMError("model" if "model" in low else "auth", detail)
             if r.status_code in (402, 429) or "balance" in low or "quota" in low:
-                raise LLMError("quota", detail)
+                rate_limited = r.status_code == 429 and not ("balance" in low or "quota" in low)
+                raise LLMError("quota", detail, retryable=rate_limited)
             if r.status_code >= 500:
-                raise LLMError("network", f"сервер ответил {r.status_code}: {detail}")
+                raise LLMError("network", f"сервер ответил {r.status_code}: {detail}", retryable=True)
             raise LLMError("bad_response", f"{r.status_code}: {detail}")
         try:
             data = r.json()

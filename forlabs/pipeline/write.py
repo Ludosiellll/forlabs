@@ -125,17 +125,26 @@ def answer_questions(spec: LabSpec, profile: Profile, subject: Subject, llm, rul
 def write_report(spec: LabSpec, profile: Profile, enrollment: Enrollment, subject: Subject, llm, rules: RuleBook,
                  assets_dir: Path, memory: str = "", on_event: Callable[[str], None] | None = None,
                  render_diagrams: bool = True, existing: ReportDoc | None = None,
-                 only: list[int] | None = None) -> ReportDoc:
+                 only: list[int] | None = None,
+                 on_progress: Callable[[ReportDoc], None] | None = None) -> ReportDoc:
+    """only — какие задания писать заново (остальные берутся из existing); on_progress — сохранить
+    написанное после каждого задания, чтобы после сбоя продолжить с недописанного."""
     emit = on_event or (lambda s: None)
     sections: list[TaskSection] = []
     old = {s.n: s for s in (existing.sections if existing else [])}
-    for t in spec.tasks:
-        if only is not None and t.n not in only and t.n in old:
+    keep_old = only is not None
+    for i, t in enumerate(spec.tasks):
+        if keep_old and t.n not in only and t.n in old:
             sections.append(old[t.n])
             continue
         emit(f"Задание {t.n} из {len(spec.tasks)}: пишу текст")
         sections.append(write_section(spec, t.n, profile, subject, llm, rules, assets_dir, memory, sections,
                                       render_diagrams))
+        if on_progress:
+            rest = [old[x.n] for x in spec.tasks[i + 1:] if keep_old and x.n in old]
+            on_progress(refresh_derived(ReportDoc(lab_number=spec.number, sections=sections + rest,
+                                                  questions=existing.questions if existing and keep_old else []),
+                                        spec, profile, enrollment))
     if existing and only is not None and existing.questions:
         questions = existing.questions
     else:

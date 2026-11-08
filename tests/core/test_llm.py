@@ -22,7 +22,7 @@ def _completion(content: str) -> dict:
 
 def make_llm(handler) -> LLM:
     client = httpx.Client(transport=httpx.MockTransport(handler))
-    return LLM(Settings(base_url="https://example.test/v1"), api_key="k", http_client=client)
+    return LLM(Settings(base_url="https://example.test/v1"), api_key="k", http_client=client, retry_delays=(0, 0))
 
 
 def test_json_repair_loop():
@@ -126,3 +126,44 @@ def test_api_key_provider_failure_becomes_llm_error():
     with pytest.raises(LLMError) as e:
         llm.chat([{"role": "user", "content": "x"}])
     assert e.value.kind == "access" and "войди" in e.value.message_ru
+
+
+def test_transient_errors_are_retried():
+    replies = iter([httpx.Response(503, text="overloaded"),
+                    httpx.Response(429, json={"error": {"message": "rate limit reached"}}),
+                    httpx.Response(200, json=_completion("ok"))])
+    calls = []
+
+    def handler(req):
+        calls.append(req)
+        return next(replies)
+
+    assert make_llm(handler).chat([{"role": "user", "content": "x"}]) == "ok"
+    assert len(calls) == 3
+
+
+def test_network_error_retried_then_reported():
+    calls = []
+
+    def handler(req):
+        calls.append(req)
+        raise httpx.ConnectError("нет сети")
+
+    with pytest.raises(LLMError) as e:
+        make_llm(handler).chat([{"role": "user", "content": "x"}])
+    assert e.value.kind == "network" and len(calls) == 3
+
+
+@pytest.mark.parametrize("status,body", [(402, {"error": {"message": "insufficient balance"}}),
+                                         (401, {"error": {"message": "invalid key"}}),
+                                         (429, {"error": {"message": "You exceeded your current quota"}})])
+def test_permanent_errors_not_retried(status, body):
+    calls = []
+
+    def handler(req):
+        calls.append(req)
+        return httpx.Response(status, json=body)
+
+    with pytest.raises(LLMError):
+        make_llm(handler).chat([{"role": "user", "content": "x"}])
+    assert len(calls) == 1
