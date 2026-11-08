@@ -93,6 +93,18 @@ class AppContext:
                                       soffice=self.settings.soffice_path, memory=self.memory())
         return self._pipeline
 
+    def claim(self, key: str) -> bool:
+        """Занять лабу под короткое действие в запросе (сдача). False — по ней уже идёт работа."""
+        with self._lock:
+            if key in self.running:
+                return False
+            self.running.add(key)
+            return True
+
+    def release(self, key: str) -> None:
+        with self._lock:
+            self.running.discard(key)
+
     def run(self, key: str, fn: Callable, *args, **kwargs) -> None:
         """Длинная операция: в фоне (в тестах — синхронно). Одна операция на лабу одновременно."""
         with self._lock:

@@ -83,6 +83,11 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
     def lab_url(p: str, s: str, n: str) -> str:
         return f"/labs/{_q(p)}/{_q(s)}/{_q(n)}"
 
+    BUSY = "По этой лабе сейчас идёт работа — дождись, пока она закончится."
+
+    def busy_lab(p: str, s: str, n: str) -> bool:
+        return f"{p}/{s}/{n}" in ctx.running
+
     @app.middleware("http")
     async def same_origin_only(request: Request, call_next):
         if request.method not in ("GET", "HEAD", "OPTIONS") and not _same_origin(request):
@@ -249,7 +254,8 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         if not data and not text.strip():
             return redirect(f"/labs/new?profile={_q(profile_id)}&subject={_q(subject_id)}",
                             err="Добавь файл методички или вставь её текст")
-        st = ctx.pipeline.create_lab(profile_id, subject_id, data, number=number.strip() or None, pasted_text=text)
+        st = await asyncio.to_thread(ctx.pipeline.create_lab, profile_id, subject_id, data,
+                                     number=number.strip() or None, pasted_text=text)
         key = ctx.pipeline.key(st)
         result = {}
 
@@ -320,7 +326,9 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
 
     @app.post("/labs/{p}/{s}/{n}/confirm")
     async def lab_confirm(request: Request, p: str, s: str, n: str):
-        st = load(p, s, n)
+        if busy_lab(p, s, n):
+            return redirect(lab_url(p, s, n), err=BUSY)
+        st = await asyncio.to_thread(load, p, s, n)
         f = await request.form()
         tasks_lines = [ln.strip() for ln in (f.get("tasks") or "").splitlines() if ln.strip()]
         extra_from = (f.get("extra_from") or "").strip()
@@ -339,7 +347,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         if own and not own.endswith("."):
             own += "."
         spec.conclusion = own if own and own != formula else None
-        ctx.pipeline.confirm(st, spec)
+        await asyncio.to_thread(ctx.pipeline.confirm, st, spec)
         return redirect(lab_url(p, s, n), msg="Разбор сохранён")
 
     @app.post("/labs/{p}/{s}/{n}/execute")
@@ -370,7 +378,9 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
 
     @app.post("/labs/{p}/{s}/{n}/screenshot/{sec}/{blk}")
     async def lab_screenshot(request: Request, p: str, s: str, n: str, sec: int, blk: int):
-        st = load(p, s, n)
+        if busy_lab(p, s, n):
+            return JSONResponse({"error": BUSY}, status_code=409)
+        st = await asyncio.to_thread(load, p, s, n)
         ctype = request.headers.get("content-type", "")
         if ctype.startswith("multipart/"):
             form = await request.form()
@@ -383,14 +393,20 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         if not data:
             return JSONResponse({"error": "Пустая картинка"}, status_code=400)
         suffix = ".jpg" if (name.lower().endswith((".jpg", ".jpeg")) or "jpeg" in ctype) else ".png"
-        try:
-            st = ctx.pipeline.attach_screenshot(st, sec, blk, data, suffix)
-        except (PipelineError, StopIteration, IndexError) as e:
-            return JSONResponse({"error": str(e) or "Не найден рисунок"}, status_code=400)
+        if not any(sn == sec and bi == blk for sn, bi, _ in ctx.pipeline.slots(st)):
+            return JSONResponse({"error": "Этого места для скриншота уже нет — обнови страницу"}, status_code=400)
+        key = ctx.pipeline.key(st)
+        # вставка пересобирает документ (Word или LibreOffice) — это в фоне, сервер не замирает
+        ctx.run(key, ctx.pipeline.attach_screenshot, st, sec, blk, data, suffix)
+        if key in ctx.running:
+            return {"status": "working", "error": None}
+        st = await asyncio.to_thread(load, p, s, n)
         return {"status": st.status, "error": st.error}
 
     @app.post("/labs/{p}/{s}/{n}/accept")
     def lab_accept(p: str, s: str, n: str, rule: str = Form(...)):
+        if busy_lab(p, s, n):
+            return redirect(lab_url(p, s, n), err=BUSY)
         st = load(p, s, n)
         st.accepted_rules = sorted(set(st.accepted_rules) | {rule})
         ctx.store.save_lab(st)
@@ -398,15 +414,21 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
 
     @app.post("/labs/{p}/{s}/{n}/final")
     def lab_final(p: str, s: str, n: str):
-        st = load(p, s, n)
+        key = f"{p}/{s}/{n}"
+        if not ctx.claim(key):
+            return redirect(lab_url(p, s, n), err=BUSY)
         try:
-            st = ctx.pipeline.mark_final(st)
+            st = ctx.pipeline.mark_final(load(p, s, n))
         except PipelineError as e:
             return redirect(lab_url(p, s, n), err=str(e))
+        finally:
+            ctx.release(key)
         return redirect(lab_url(p, s, n), msg="Лаба сдана: файл лежит в папке сдачи")
 
     @app.post("/labs/{p}/{s}/{n}/delete")
     def lab_delete(p: str, s: str, n: str):
+        if busy_lab(p, s, n):
+            return redirect(lab_url(p, s, n), err=BUSY)
         ctx.store.delete_lab(p, s, n)
         return redirect(f"/?profile={_q(p)}&subject={_q(s)}", msg="Лаба удалена")
 

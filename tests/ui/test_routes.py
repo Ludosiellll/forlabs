@@ -180,3 +180,48 @@ def test_failed_lab_offers_continue(client, tmp_path):
     ctx.store.save_lab(st)
     page = client.get(lab + "?tab=report").text
     assert "Продолжить" in page and lab + "/execute" in page
+
+
+def _new_lab(client, tmp_path):
+    make_profile(client, tmp_path)
+    r = client.post("/labs/new", data={"profile_id": "ivanov_ivan_petrovich", "subject_id": "psip", "number": "",
+                                       "text": ""},
+                    files={"files": (FIXTURE.name, FIXTURE.read_bytes(), "text/plain")}, follow_redirects=False)
+    return r.headers["location"]
+
+
+def test_actions_refused_while_lab_busy(client, tmp_path):
+    lab = _new_lab(client, tmp_path)
+    ctx = client.app.state.ctx
+    ctx.running.add("ivanov_ivan_petrovich/psip/7")
+    r = client.post(lab + "/screenshot/1/2", content=b"png", headers={"Content-Type": "image/png"})
+    assert r.status_code == 409 and r.json()["error"]
+    for action, data in [("/accept", {"rule": "x"}), ("/confirm", {"topic": "Т", "goal": "Ц"}), ("/final", {}),
+                         ("/delete", {})]:
+        r = client.post(lab + action, data=data, follow_redirects=False)
+        assert r.status_code == 303 and "err=" in r.headers["location"], action
+    st = ctx.store.load_lab("ivanov_ivan_petrovich", "psip", "7")
+    assert st is not None and st.accepted_rules == [] and st.spec.topic != "Т"
+
+
+def test_screenshot_does_not_block_the_server(tmp_home, tmp_path):
+    import threading
+
+    fake = FakeLLM([RAW, SEC])
+    ctx = AppContext(settings=Settings(mode="local"), llm_override=lambda: fake, prefer_word=False,
+                     render_diagrams=False, synchronous=True)
+    client = TestClient(create_app(ctx), base_url="http://127.0.0.1:8765")
+    lab = _new_lab(client, tmp_path)
+    client.post(lab + "/execute", follow_redirects=False)
+    ctx.synchronous = False
+    release = threading.Event()
+
+    def slow_attach(*a, **k):
+        release.wait(5)
+
+    ctx.pipeline.attach_screenshot = slow_attach
+    t0 = time.monotonic()
+    r = client.post(lab + "/screenshot/1/2", content=b"png", headers={"Content-Type": "image/png"})
+    elapsed = time.monotonic() - t0
+    release.set()
+    assert r.status_code == 200 and elapsed < 2
