@@ -49,7 +49,7 @@
           {% set url = '/labs/' ~ q(l.profile_id) ~ '/' ~ q(l.subject_id) ~ '/' ~ q(l.number) %}
           <tr class="click" onclick="location.href='{{ url }}'">
             <td class="nowrap"><a href="{{ url }}">ЛР {{ l.number }}</a></td>
-            <td>{{ l.spec.topic if l.spec else 'Методичка ещё не разобрана' }}</td>
+            <td>{{ l.topic or 'Методичка ещё не разобрана' }}</td>
             <td><span class="status s-{{ l.status }}">{{ STATUS_RU[l.status] }}</span></td>
             <td class="muted nowrap small">{{ l.updated_at[:16].replace('T', ' ') }}</td>
           </tr>

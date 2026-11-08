@@ -213,11 +213,11 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         current = next((p for p in profiles if p.id == profile), profiles[0])
         enrolled = [e.subject_id for e in current.enrollments if e.subject_id in all_subjects()]
         subject_id = subject if subject in all_subjects() else (enrolled[0] if enrolled else next(iter(all_subjects())))
-        labs = ctx.store.list_labs(current.id, subject_id)
+        labs = ctx.store.list_lab_summaries(current.id, subject_id)
         counts = {}
         for sid in enrolled:
             try:
-                counts[sid] = len(ctx.store.list_labs(current.id, sid)) if sid != subject_id else len(labs)
+                counts[sid] = len(ctx.store.list_lab_summaries(current.id, sid)) if sid != subject_id else len(labs)
             except Exception:
                 counts[sid] = 0
         return render(request, "home.html", profiles=profiles, current=current, subject_id=subject_id,

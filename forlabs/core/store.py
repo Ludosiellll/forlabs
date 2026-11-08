@@ -78,6 +78,11 @@ class Store:
         states = [_read_model(LabState, x / "state.json") for x in d.iterdir() if (x / "state.json").exists()]
         return sorted((s for s in states if s is not None), key=lambda s: _number_key(s.number))
 
+    def list_lab_summaries(self, profile_id: str, subject_id: str) -> list:
+        from forlabs.core.models import summarize
+
+        return [summarize(st) for st in self.list_labs(profile_id, subject_id)]
+
     def delete_lab(self, profile_id: str, subject_id: str, number: str) -> None:
         import shutil
 

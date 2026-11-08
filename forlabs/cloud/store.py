@@ -28,7 +28,7 @@ from forlabs.cloud.admin import (
 from forlabs.cloud.auth import CloudAuth, CloudError
 from forlabs.core import paths
 from forlabs.core.fs import atomic_write_text
-from forlabs.core.models import LabState, Profile
+from forlabs.core.models import LabState, LabSummary, Profile, summarize
 from forlabs.core.store import Store, _number_key, _read_model, safe_name
 
 BUCKET = "labs"
@@ -210,6 +210,24 @@ class CloudStore:
             states = [_read_model(LabState, f / "state.json") for f in d.iterdir()] if d.exists() else []
             return sorted((x for x in states if x is not None), key=lambda x: _number_key(x.number))
         return sorted((LabState.model_validate(r["state"]) for r in rows), key=lambda s: _number_key(s.number))
+
+    def list_lab_summaries(self, profile_id: str, subject_id: str) -> list[LabSummary]:
+        """Для главной: номер, статус, тема и дата — без полного состояния (отчёт, версии, методичка)."""
+        try:
+            rows = self._rest("GET", "labs", params={
+                "select": "number,status,updated:state->>updated_at,topic:state->spec->>topic", **self._mine(),
+                "profile_id": f"eq.{profile_id}", "subject_id": f"eq.{subject_id}"}).json()
+        except CloudError as e:
+            self._offline_or_raise(e)
+            return [summarize(x) for x in self.list_labs(profile_id, subject_id)]
+        out = []
+        for r in rows:
+            state = r.get("state") or {}  # фейк в тестах отдаёт строку целиком
+            topic = r.get("topic") if "topic" in r else ((state.get("spec") or {}).get("topic"))
+            out.append(LabSummary(profile_id=profile_id, subject_id=subject_id, number=r["number"],
+                                  status=r.get("status") or state.get("status") or "draft",
+                                  updated_at=r.get("updated") or state.get("updated_at") or "", topic=topic))
+        return sorted(out, key=lambda x: _number_key(x.number))
 
     def delete_lab(self, profile_id: str, subject_id: str, number: str) -> None:
         """Строка в базе, файлы в облаке и локальная копия: новая лаба с тем же номером начинается с чистого листа."""

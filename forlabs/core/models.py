@@ -201,6 +201,21 @@ class LabState(BaseModel):
     wish_images_text: str = ""  # что модель прочитала с этих фото
 
 
+class LabSummary(BaseModel):
+    """Строка списка лаб на главной: без отчёта, версий и методички."""
+    profile_id: str
+    subject_id: str
+    number: str
+    status: str
+    updated_at: str = ""
+    topic: str | None = None
+
+
+def summarize(st: "LabState") -> LabSummary:
+    return LabSummary(profile_id=st.profile_id, subject_id=st.subject_id, number=st.number, status=st.status,
+                      updated_at=st.updated_at, topic=st.spec.topic if st.spec else None)
+
+
 def push_version(st: "LabState", label: str) -> int:
     """Снимок разбора и отчёта перед правкой; хранится не больше MAX_VERSIONS последних."""
     vid = (st.versions[-1].id if st.versions else 0) + 1
