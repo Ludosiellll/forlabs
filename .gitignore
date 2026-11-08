@@ -11,3 +11,6 @@ dist/
 *.egg-info/
 .forlabs-data/
 .superpowers/
+
+# служебные файлы браузерного инструмента
+.playwright-mcp/
