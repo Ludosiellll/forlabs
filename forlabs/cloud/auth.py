@@ -10,6 +10,8 @@ import time
 import httpx
 from pydantic import BaseModel
 
+from forlabs.core.fs import atomic_write_text, quarantine
+
 from forlabs.cloud.config import DEFAULT, CloudConfig
 from forlabs.core import paths
 
@@ -81,7 +83,7 @@ class CloudAuth:
         f = self._session_file()
         f.parent.mkdir(parents=True, exist_ok=True)
         if raw:
-            f.write_text(raw, encoding="utf-8")
+            atomic_write_text(f, raw)
             try:
                 os.chmod(f, 0o600)
             except OSError:
@@ -99,8 +101,15 @@ class CloudAuth:
             except Exception:
                 raw = None
         if not raw and self._session_file().exists():
-            raw = self._session_file().read_text(encoding="utf-8")
-        self.session = Session.model_validate_json(raw) if raw else None
+            try:
+                raw = self._session_file().read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                raw = None
+        try:
+            self.session = Session.model_validate_json(raw) if raw else None
+        except ValueError:  # обрезанный файл сессии — просто войти заново
+            quarantine(self._session_file(), "сессия повреждена")
+            self.session = None
         return self.session
 
     # запросы

@@ -9,6 +9,7 @@ from typing import Literal
 from pydantic import BaseModel, field_validator
 
 from forlabs.core import paths
+from forlabs.core.fs import atomic_write_text, quarantine
 
 KEYRING_SERVICE = "ForLabs"
 KEYRING_USER = "api_key"
@@ -59,14 +60,17 @@ def _settings_file():
 def load_settings() -> Settings:
     f = _settings_file()
     if f.exists():
-        return Settings.model_validate_json(f.read_text(encoding="utf-8"))
+        try:
+            return Settings.model_validate_json(f.read_text(encoding="utf-8"))
+        except (ValueError, UnicodeDecodeError) as e:  # обрезан при выключении — настройки по умолчанию
+            quarantine(f, str(e)[:120])
     return Settings()
 
 
 def save_settings(s: Settings) -> None:
     f = _settings_file()
     f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps(s.model_dump(), ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_text(f, json.dumps(s.model_dump(), ensure_ascii=False, indent=2))
 
 
 def _keyring_get() -> str | None:

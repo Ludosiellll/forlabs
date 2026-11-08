@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Callable
 
 from forlabs.core import paths
+from forlabs.core.fs import atomic_write_text
 from forlabs.core.models import LabState
 from forlabs.core.store import safe_name
 from forlabs.pipeline.write import section_text
@@ -30,9 +31,7 @@ class SubjectMemory:
         return f.read_text(encoding="utf-8") if f.exists() else ""
 
     def _write_local(self, profile_id: str, subject_id: str, text: str) -> None:
-        f = self._file(profile_id, subject_id)
-        f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(text, encoding="utf-8")
+        atomic_write_text(self._file(profile_id, subject_id), text)
 
     def read(self, profile_id: str, subject_id: str) -> str:
         return self._read(profile_id, subject_id)
