@@ -87,3 +87,28 @@ def test_live_check():
     assert "flash" in llm.check()
     res = llm.json([{"role": "user", "content": "Верни JSON: город Минск, население 2000000. Поля city, population."}], Answer)
     assert res.city == "Минск"
+
+
+@pytest.mark.parametrize("status,msg,needle", [
+    (403, "account not approved", "одобр"),
+    (503, "LLM_API_KEY is not set", "LLM_API_KEY"),
+])
+def test_cloud_proxy_errors(status, msg, needle):
+    llm = make_llm(lambda req: httpx.Response(status, json={"error": {"message": msg}}))
+    with pytest.raises(LLMError) as e:
+        llm.chat([{"role": "user", "content": "x"}])
+    assert e.value.kind == "access" and needle in e.value.message_ru
+
+
+def test_api_key_callable_is_called_per_request():
+    tokens = iter(["t1", "t2"])
+    seen = []
+
+    def handler(req):
+        seen.append(req.headers["authorization"])
+        return httpx.Response(200, json=_completion("ok"))
+
+    llm = LLM(Settings(base_url="https://x/v1"), api_key=lambda: next(tokens),
+              http_client=httpx.Client(transport=httpx.MockTransport(handler)))
+    llm.chat([{"role": "user", "content": "a"}]); llm.chat([{"role": "user", "content": "b"}])
+    assert seen == ["Bearer t1", "Bearer t2"]

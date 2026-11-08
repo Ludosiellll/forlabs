@@ -6,7 +6,7 @@ import json
 import re
 import threading
 from dataclasses import dataclass, field
-from typing import Any, Literal, TypeVar
+from typing import Any, Callable, Literal, TypeVar
 
 import httpx
 from pydantic import BaseModel, ValidationError
@@ -14,7 +14,7 @@ from pydantic import BaseModel, ValidationError
 from forlabs.core.settings import Settings
 
 T = TypeVar("T", bound=BaseModel)
-Kind = Literal["auth", "model", "quota", "network", "bad_response"]
+Kind = Literal["auth", "model", "quota", "network", "bad_response", "access"]
 
 _MESSAGES = {
     "auth": "Ключ API не принят. Проверь ключ в настройках или войди в аккаунт заново.",
@@ -22,14 +22,20 @@ _MESSAGES = {
     "quota": "Закончился лимит или баланс ключа, либо слишком много запросов подряд. Подожди или пополни ключ.",
     "network": "Нет связи с сервером модели. Проверь интернет и адрес API в настройках.",
     "bad_response": "Модель несколько раз ответила не в том формате. Попробуй ещё раз.",
+    "access": "Нет доступа к модели через облако.",
+}
+_ACCESS = {
+    "not approved": "Аккаунт ещё не одобрен администратором. Попроси его открыть «Пользователи» и одобрить тебя.",
+    "llm_api_key": "Администратор ещё не добавил ключ модели в Supabase (секрет LLM_API_KEY).",
+    "not signed in": "Сессия истекла — войди в аккаунт заново.",
 }
 
 
 class LLMError(Exception):
-    def __init__(self, kind: Kind, detail: str = ""):
+    def __init__(self, kind: Kind, detail: str = "", message_ru: str | None = None):
         self.kind = kind
         self.detail = detail
-        self.message_ru = _MESSAGES[kind]
+        self.message_ru = message_ru or _MESSAGES[kind]
         super().__init__(f"{self.message_ru} ({detail})" if detail else self.message_ru)
 
 
@@ -69,7 +75,7 @@ def _extract_json(text: str) -> Any:
 
 
 class LLM:
-    def __init__(self, settings: Settings, api_key: str, http_client: httpx.Client | None = None,
+    def __init__(self, settings: Settings, api_key: "str | Callable[[], str]", http_client: httpx.Client | None = None,
                  base_url: str | None = None, timeout: float = 240.0):
         self.settings = settings
         self.model = settings.model
@@ -80,13 +86,17 @@ class LLM:
 
     def _post(self, payload: dict) -> dict:
         try:
+            key = self.api_key() if callable(self.api_key) else self.api_key
             r = self.http.post(f"{self.base_url}/chat/completions", json=payload,
-                               headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"})
+                               headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
         except (httpx.TransportError, httpx.TimeoutException) as e:
             raise LLMError("network", str(e)) from e
         if r.status_code >= 400:
             detail = r.text[:300]
             low = detail.lower()
+            for needle, msg in _ACCESS.items():
+                if needle in low:
+                    raise LLMError("access", detail, msg)
             if r.status_code == 401:
                 raise LLMError("auth", detail)
             if r.status_code == 403:
