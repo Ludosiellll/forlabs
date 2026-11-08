@@ -7,7 +7,9 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol
 
-from forlabs.installer.core import InstallError, data_dir, default_target, uninstall
+import os
+
+from forlabs.installer.core import InstallError, data_dir, default_target, delayed_delete_command, spawn_detached, uninstall
 
 TITLE = "Удаление ForLabs"
 
@@ -83,7 +85,8 @@ def _forget_saved_keys(_: bool = True) -> None:
 
 
 def run(argv: list[str], *, target: Path, shell, dialogs: Dialogs, data: Path, is_running: Callable[[], bool],
-        exe: Path | None, forget_keys: Callable[[bool], None] = _forget_saved_keys) -> int:
+        exe: Path | None, forget_keys: Callable[[bool], None] = _forget_saved_keys,
+        spawn: Callable[[list[str]], None] = spawn_detached, pid: int | None = None) -> int:
     silent = "--silent" in argv
     if silent:  # тихий режим (CI, сценарии) ничего не показывает: итог — код выхода
         dialogs = SilentDialogs()
@@ -101,14 +104,16 @@ def run(argv: list[str], *, target: Path, shell, dialogs: Dialogs, data: Path, i
             f"только здесь ({data}).\nЛабы в облачном аккаунте и готовые отчёты в папке сдачи останутся.",
             default_no=True)
     try:
-        warnings = uninstall(target, shell=shell, data_dir=data, remove_data=remove_data, running_from=exe)
+        res = uninstall(target, shell=shell, data_dir=data, remove_data=remove_data, running_from=exe)
     except InstallError as e:
         dialogs.tell(str(e), warning=True)
         return 1
     if remove_data:
         forget_keys(True)
-    tail = ("\n\n" + "\n".join(warnings)) if warnings else ""
-    dialogs.tell("ForLabs удалён." + tail, warning=bool(warnings))
+    tail = ("\n\n" + "\n".join(res.warnings)) if res.warnings else ""
+    dialogs.tell("ForLabs удалён." + tail, warning=bool(res.warnings))
+    if res.delete_later is not None:  # последним шагом: команда ждёт выхода этого процесса и удаляет папку
+        spawn(delayed_delete_command(res.delete_later, pid if pid is not None else os.getpid()))
     return 0
 
 

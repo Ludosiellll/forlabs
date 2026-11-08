@@ -74,6 +74,15 @@ def test_cancel_keeps_old_version_and_cleans_staging(tmp_path, payload, shell):
 def test_running_program_blocks_update_early(tmp_path, payload, shell, monkeypatch):
     target = tmp_path / "ForLabs"
     _install(payload, target, shell)
+    monkeypatch.setattr(core, "forlabs_running", lambda: True)
+    with pytest.raises(InstallError, match="ForLabs сейчас открыт"):
+        _install(payload, target, shell)
+    assert (target / "ForLabs.exe").exists() and not list(tmp_path.glob("ForLabs.new*"))
+
+
+def test_locked_folder_during_swap_keeps_old_version(tmp_path, payload, shell, monkeypatch):
+    target = tmp_path / "ForLabs"
+    _install(payload, target, shell)
     real_rename = os.rename
 
     def locked(src, dst):
@@ -84,7 +93,20 @@ def test_running_program_blocks_update_early(tmp_path, payload, shell, monkeypat
     monkeypatch.setattr(core.os, "rename", locked)
     with pytest.raises(InstallError, match="ForLabs сейчас открыт"):
         _install(payload, target, shell)
-    assert (target / "ForLabs.exe").exists() and not (tmp_path / "ForLabs.new").exists()
+    assert (target / "ForLabs.exe").exists() and not list(tmp_path.glob("ForLabs.new*"))
+
+
+def test_running_check_uses_instance_lock(tmp_path, monkeypatch):
+    monkeypatch.setenv("FORLABS_HOME", str(tmp_path / "data"))
+    assert core.forlabs_running() is False
+    from forlabs.core.instance import InstanceLock
+
+    lock = InstanceLock()
+    assert lock.acquire()
+    try:
+        assert core.forlabs_running() is True
+    finally:
+        lock.release()
 
 
 def test_not_enough_disk_space(tmp_path, payload, shell, monkeypatch):
@@ -131,8 +153,8 @@ def test_uninstall_removes_program_shortcuts_and_entry_but_keeps_data(tmp_path, 
     data.mkdir()
     (data / "settings.json").write_text("{}")
     _install(payload, target, shell)
-    uninstall(target, shell=shell, data_dir=data, remove_data=False)
-    assert not target.exists() and shell.shortcuts == {} and shell.entry is None
+    res = uninstall(target, shell=shell, data_dir=data, remove_data=False)
+    assert not target.exists() and shell.shortcuts == {} and shell.entry is None and res.delete_later is None
     assert (data / "settings.json").exists()
 
 
@@ -144,15 +166,24 @@ def test_uninstall_with_data(tmp_path, payload, shell):
     assert not data.exists()
 
 
-def test_uninstall_from_inside_schedules_folder_removal(tmp_path, payload, shell):
+def test_uninstall_from_inside_leaves_folder_for_delayed_delete(tmp_path, payload, shell):
     target = tmp_path / "ForLabs"
     _install(payload, target, shell)
-    spawned = []
-    uninstall(target, shell=shell, data_dir=tmp_path / "d", remove_data=False, running_from=target / "ForLabs.exe",
-              spawn=spawned.append)
-    assert target.exists()  # себя удалить нельзя — удалит отложенная команда после выхода
-    assert len(spawned) == 1 and str(target) in " ".join(spawned[0])
-    assert shell.entry is None
+    res = uninstall(target, shell=shell, data_dir=tmp_path / "d", remove_data=False, running_from=target / "ForLabs.exe")
+    assert target.exists() and res.delete_later == target  # себя удалить нельзя — удалит команда после выхода
+    assert shell.entry is None and shell.shortcuts == {}
+
+
+# ревью I4: команда удаления ждёт выхода ForLabs и не ломается на кавычках, %, $ и пробелах в пути
+def test_delayed_delete_command_is_safe_for_odd_paths():
+    import base64
+
+    odd = Path("C:/Users/Ива'н 100%/$Программы/ForLabs")
+    cmd = core.delayed_delete_command(odd, pid=4321)
+    assert cmd[0].lower().startswith("powershell") and "-EncodedCommand" in cmd
+    script = base64.b64decode(cmd[cmd.index("-EncodedCommand") + 1]).decode("utf-16-le")
+    assert "Wait-Process -Id 4321" in script
+    assert "-LiteralPath '" + str(odd).replace("'", "''") + "'" in script
 
 
 def test_uninstall_keeps_entry_of_other_location(tmp_path, payload, shell):
@@ -181,15 +212,54 @@ def test_payload_zip_entries_are_utf8_names(tmp_path, shell):
     assert (tmp_path / "ForLabs" / "forlabs" / "rules" / "Правила.md").exists()
 
 
-# Review Focus: выбранная чужая папка (например, «Документы») не должна быть заменена программой
-def test_refuses_non_empty_foreign_folder(tmp_path, payload, shell):
+# Review Focus: выбранная чужая папка (например, «Документы») — ставим в подпапку ForLabs, её файлы не трогаем
+def test_foreign_folder_gets_forlabs_subfolder(tmp_path, payload, shell):
     docs = tmp_path / "Документы"
     docs.mkdir()
     (docs / "курсовая.docx").write_text("важное")
-    with pytest.raises(InstallError, match="не пуста"):
-        _install(payload, docs, shell)
+    res, _ = _install(payload, docs, shell)
+    assert res.target == docs / "ForLabs" and (docs / "ForLabs" / "ForLabs.exe").exists()
     assert (docs / "курсовая.docx").read_text() == "важное"
-    assert not (tmp_path / "Документы.new").exists()
+    uninstall(res.target, shell=shell, data_dir=tmp_path / "d", remove_data=False)
+    assert (docs / "курсовая.docx").read_text() == "важное"
+
+
+def test_typed_path_without_forlabs_leaf_gets_one(tmp_path):
+    assert core.check_target(tmp_path / "Programs") == tmp_path / "Programs" / "ForLabs"
+    assert core.check_target(tmp_path / "forlabs") == tmp_path / "forlabs"
+
+
+# ревью C1: папка данных ForLabs (%LOCALAPPDATA%\ForLabs) не может стать папкой программы
+def test_refuses_data_folder_as_target(tmp_path, payload, shell, monkeypatch):
+    data = tmp_path / "Local" / "ForLabs"
+    monkeypatch.setenv("FORLABS_HOME", str(data))
+    for bad in (data, data / "ForLabs", tmp_path / "Local"):  # «Local» → Local\ForLabs = папка данных
+        with pytest.raises(InstallError, match="данн"):
+            core.check_target(bad)
+    with pytest.raises(InstallError, match="данн"):
+        _install(payload, data, shell)
+
+
+def test_refuses_existing_forlabs_folder_without_install_marker(tmp_path, payload, shell):
+    t = tmp_path / "ForLabs"
+    t.mkdir()
+    (t / "settings.json").write_text("{}")  # например, папка данных старой версии
+    with pytest.raises(InstallError, match="не пуста"):
+        _install(payload, t, shell)
+    assert (t / "settings.json").exists()
+
+
+# ревью I5: чужие ForLabs.old / ForLabs.new рядом не удаляются
+def test_foreign_sibling_folders_survive_install(tmp_path, payload, shell):
+    for name in ("ForLabs.old", "ForLabs.new"):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "backup.txt").write_text("моё")
+    target = tmp_path / "ForLabs"
+    _install(payload, target, shell)
+    _install(payload, target, shell)
+    uninstall(target, shell=shell, data_dir=tmp_path / "d", remove_data=False)
+    assert (tmp_path / "ForLabs.old" / "backup.txt").read_text() == "моё"
+    assert (tmp_path / "ForLabs.new" / "backup.txt").read_text() == "моё"
 
 
 def test_empty_existing_folder_is_fine(tmp_path, payload, shell):

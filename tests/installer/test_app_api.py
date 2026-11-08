@@ -61,13 +61,13 @@ def test_install_runs_in_background_and_reports_components(payload, shell, tmp_p
 
 
 def test_install_error_is_shown_and_retry_works(payload, shell, tmp_path):
-    busy = tmp_path / "Занято"
-    busy.mkdir()
+    busy = tmp_path / "Занято" / "ForLabs"
+    busy.mkdir(parents=True)
     (busy / "чужое.txt").write_text("x")
     api = SetupApi(payload, shell)
     r = api.start(str(busy), True)
     assert r["ok"] is False and "не пуста" in r["error"]
-    assert api.start(str(tmp_path / "ForLabs"), True)["ok"]
+    assert api.start(str(tmp_path / "Другая" / "ForLabs"), True)["ok"]
     assert _wait(api)["state"] == "done"
 
 

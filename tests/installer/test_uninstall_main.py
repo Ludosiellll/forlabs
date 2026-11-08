@@ -99,3 +99,18 @@ def test_target_flag_overrides(tmp_path):
 def test_fake_shell_is_protocol_compatible():
     shell: core.Shell = FakeShell(Path("a"), Path("b"))
     assert shell.read_uninstall_entry() is None
+
+
+def test_running_from_inside_deletes_after_last_dialog(tmp_path, payload, shell):
+    target = _installed(tmp_path, payload, shell)
+    order = []
+
+    class D(Dialogs):
+        def tell(self, text, warning=False):
+            order.append("tell")
+
+    code = uninstall.run([], target=target, shell=shell, dialogs=D([True, False]), data=tmp_path / "data",
+                         is_running=lambda: False, exe=target / "ForLabs.exe", forget_keys=lambda _: None,
+                         spawn=lambda cmd: order.append(("spawn", cmd)), pid=777)
+    assert code == 0 and order[0] == "tell" and order[1][0] == "spawn"
+    assert "-EncodedCommand" in order[1][1] and target.exists()

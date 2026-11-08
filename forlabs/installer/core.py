@@ -26,6 +26,7 @@ EXE_NAME = "ForLabs.exe"
 PUBLISHER = "ForLabs"
 UNINSTALL_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\ForLabs"
 CHUNK = 1 << 20
+MARKER = ".forlabs-install"  # метка папки, которую создал установщик: только такую он заменяет и удаляет
 
 # (название в окне установщика, с чего начинаются пути файлов) — в этом порядке и ставятся
 COMPONENTS: list[tuple[str, tuple[str, ...]]] = [
@@ -64,6 +65,12 @@ class InstallResult:
     files: int
     size: int
     warnings: list[str] = field(default_factory=list)
+
+
+@dataclass
+class UninstallResult:
+    warnings: list[str] = field(default_factory=list)
+    delete_later: Path | None = None  # папка работающей программы: удалит команда после выхода ForLabs
 
 
 @dataclass
@@ -173,37 +180,92 @@ def _os_error(e: OSError, target: Path) -> InstallError:
     return InstallError(f"Не удалось записать файлы ForLabs: {e.strerror or e}")
 
 
+def _norm(p: Path) -> str:
+    return os.path.normcase(os.path.abspath(p))
+
+
+def _inside(child: Path, parent: Path) -> bool:
+    c, p = _norm(child), _norm(parent)
+    return c == p or c.startswith(p.rstrip("\\/") + os.sep)
+
+
+def _ours(p: Path) -> bool:
+    return (p / MARKER).is_file()
+
+
 def check_target(target: Path | str) -> Path:
-    """Папка установки: полный путь, не корень диска и не чужая непустая папка (её пришлось бы заменить)."""
-    t = Path(str(target).strip().strip('"'))
-    if not str(t).strip(".") or not t.is_absolute() or t.parent == t:
+    """Папка установки: полный путь; последняя папка — ForLabs (иначе добавляется); не папка данных и не чужая
+    непустая папка — заменять и удалять можно только папку с меткой установщика."""
+    raw = str(target).strip().strip('"').strip()
+    t = Path(raw) if raw else Path()
+    if not raw or not t.is_absolute() or t.parent == t:
         raise InstallError("Укажи полный путь к папке установки, например " + str(default_target()) + ".")
+    if t.name.lower() != APP_NAME.lower():
+        t = t / APP_NAME
+    data = data_dir()
+    if _inside(t, data) or _inside(data, t):
+        raise InstallError(f"В {t} лежат данные ForLabs (лабы, настройки) — программу туда ставить нельзя. "
+                           f"Выбери другую папку, например {default_target()}.")
+    if _inside(Path.home(), t):
+        raise InstallError(f"Папка {t} содержит папку пользователя — выбери другую.")
     if t.exists() and not t.is_dir():
         raise InstallError(f"По пути {t} уже лежит файл — выбери другую папку.")
-    if t.is_dir() and not (t / EXE_NAME).exists() and any(t.iterdir()):
-        raise InstallError(f"Папка {t} не пуста, и в ней нет ForLabs. Выбери пустую или новую папку, например "
-                           f"{t / APP_NAME}.")
+    if t.is_dir() and not _ours(t) and any(t.iterdir()):
+        raise InstallError(f"Папка {t} не пуста, и это не установленный ForLabs. Выбери пустую или новую папку.")
     return t
 
 
-def _check_not_running(target: Path) -> None:
-    """Папку с работающим ForLabs.exe Windows не даёт переименовать — проверяем до долгой распаковки."""
-    if not target.exists():
-        return
-    probe = target.with_name(target.name + ".check")
+def forlabs_running() -> bool:
+    """ForLabs держит блокировку файла в папке данных, пока работает (forlabs.core.instance.InstanceLock)."""
+    lock = data_dir() / "forlabs.lock"
+    if not lock.exists():
+        return False
     try:
-        os.rename(target, probe)
-    except PermissionError as e:
-        raise InstallError("ForLabs сейчас открыт — закрой его (и окно в браузере, если открыто) и нажми "
-                           "«Повторить».") from e
-    except OSError as e:
-        raise _os_error(e, target) from e
-    os.rename(probe, target)
+        fh = open(lock, "a+b")  # noqa: SIM115
+    except OSError:
+        return True
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        return False
+    except OSError:
+        return True
+    finally:
+        fh.close()
+
+
+def _sibling(target: Path, kind: str) -> Path:
+    """Временная папка рядом с целевой; занятое чужое имя не трогаем — берём другое."""
+    base = target.with_name(f"{target.name}.{kind}")
+    if not base.exists() or _ours(base):
+        return base
+    for i in range(2, 100):
+        cand = target.with_name(f"{target.name}.{kind}{i}")
+        if not cand.exists() or _ours(cand):
+            return cand
+    raise InstallError(f"Рядом с {target} слишком много папок {target.name}.{kind}* — удали лишние.")
+
+
+def _clean_leftovers(target: Path) -> None:
+    for kind in ("new", "old"):
+        for p in target.parent.glob(f"{target.name}.{kind}*"):
+            if p.is_dir() and _ours(p):
+                _rmtree(p)
 
 
 def _swap(staging: Path, target: Path) -> None:
-    old = target.with_name(target.name + ".old")
-    _rmtree(old)
+    old = _sibling(target, "old")
+    _rmtree(old) if old.exists() else None
     had_old = target.exists()
     try:
         if had_old:
@@ -231,8 +293,11 @@ def install(payload: Path, target: Path, *, shell: Shell, desktop: bool = True,
         need = total + 50 * 2**20
         if free < need:
             raise InstallError(f"Не хватает места на диске: нужно {need // 2**20} МБ, свободно {free // 2**20} МБ.")
-        _check_not_running(target)
-        staging = target.with_name(target.name + ".new")
+        if forlabs_running():
+            raise InstallError("ForLabs сейчас открыт — закрой его (и окно в браузере, если открыто) и нажми "
+                               "«Повторить».")
+        _clean_leftovers(target)
+        staging = _sibling(target, "new")
         _rmtree(staging)
         done = 0
         try:
@@ -250,6 +315,7 @@ def install(payload: Path, target: Path, *, shell: Shell, desktop: bool = True,
                     if cancelled():
                         raise InstallError("Установка отменена — установленный ForLabs не изменён.")
                     _extract_one(z, info, staging, step, cancelled)
+            (staging / MARKER).write_text(f"ForLabs {__version__}\n", encoding="utf-8")
             missing = [i.filename for c in comps for i in c.files
                        if not (staging / i.filename).is_file() or (staging / i.filename).stat().st_size != i.file_size]
             if missing:
@@ -295,36 +361,48 @@ def _same(a: Path, b: Path) -> bool:
     return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
 
 
-def _spawn_detached(cmd: list[str]) -> None:
+def delayed_delete_command(target: Path, pid: int) -> list[str]:
+    """PowerShell ждёт выхода ForLabs (pid) и удаляет папку программы. Скрипт в -EncodedCommand: кавычки, %, $
+    и пробелы в пути не ломают команду."""
+    import base64
+
+    path = str(target).replace("'", "''")
+    script = (f"Wait-Process -Id {int(pid)} -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 700; "
+              f"for ($i = 0; $i -lt 10 -and (Test-Path -LiteralPath '{path}'); $i++) {{ "
+              f"Remove-Item -LiteralPath '{path}' -Recurse -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 1 }}")
+    encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+    return ["powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-EncodedCommand", encoded]
+
+
+def spawn_detached(cmd: list[str]) -> None:
     flags = 0
     if sys.platform == "win32":
         flags = subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
-    subprocess.Popen(cmd, cwd=tempfile.gettempdir(), creationflags=flags, close_fds=True,
+    subprocess.Popen(cmd, cwd=tempfile.gettempdir(), creationflags=flags, close_fds=True,  # noqa: S603
                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def uninstall(target: Path, *, shell: Shell, data_dir: Path, remove_data: bool,
-              running_from: Path | None = None, spawn: Callable[[list[str]], None] = _spawn_detached) -> list[str]:
-    """Убрать ярлыки, строку в «Приложениях», файлы программы (и данные — только по согласию)."""
+              running_from: Path | None = None) -> UninstallResult:
+    """Убрать ярлыки, строку в «Приложениях», файлы программы (только папку с меткой установщика) и данные —
+    только по согласию. Папку работающей программы возвращает в delete_later: её удаляют после выхода."""
     target = Path(target)
-    if target.is_dir() and not (target / EXE_NAME).exists() and any(target.iterdir()):
+    if target.is_dir() and not _ours(target) and any(target.iterdir()):
         raise InstallError(f"В папке {target} нет ForLabs — удалять там нечего.")
-    warnings = []
+    res = UninstallResult()
     for lnk in (shell.programs_dir() / f"{APP_NAME}.lnk", shell.desktop_dir() / f"{APP_NAME}.lnk"):
         try:
             shell.remove_shortcut(lnk)
         except Exception as e:
-            warnings.append(f"Ярлык {lnk}: {e}")
+            res.warnings.append(f"Ярлык {lnk}: {e}")
     info = installed(shell)
     if info is None or _same(info.location, target):
         shell.remove_uninstall_entry()
     if remove_data and not _rmtree(Path(data_dir)):
-        warnings.append(f"Часть данных не удалилась: {data_dir}")
-    for leftover in (target.with_name(target.name + ".old"), target.with_name(target.name + ".new")):
-        _rmtree(leftover)
+        res.warnings.append(f"Часть данных не удалилась: {data_dir}")
+    _clean_leftovers(target)
     if running_from is not None and _same(Path(running_from).parent, target):
-        # работающий exe удалить нельзя: команда подождёт выхода этого процесса и удалит папку
-        spawn(["cmd.exe", "/d", "/c", f'ping -n 4 127.0.0.1 >nul & rmdir /s /q "{target}"'])
-    elif not _rmtree(target):
-        warnings.append(f"Не все файлы удалились — удали папку вручную: {target}")
-    return warnings
+        res.delete_later = target
+    elif target.exists() and not _rmtree(target):
+        res.warnings.append(f"Не все файлы удалились — удали папку вручную: {target}")
+    return res

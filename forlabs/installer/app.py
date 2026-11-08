@@ -176,6 +176,10 @@ def silent(payload: Path, argv: list[str], *, shell=None) -> int:
     except InstallError as e:
         out.write_text(f"ОШИБКА: {e}\n", encoding="utf-8")
         return 1
+    except Exception as e:  # непредвиденное — тоже в журнал и кодом выхода, а не молчаливым падением
+        log.exception("Сбой тихой установки")
+        out.write_text(f"ОШИБКА: {type(e).__name__}: {e}\n", encoding="utf-8")
+        return 1
 
 
 def webview2_ready() -> bool:
