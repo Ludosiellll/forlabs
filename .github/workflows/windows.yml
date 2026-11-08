@@ -61,10 +61,11 @@ jobs:
           python -m pip install ".[windows]" "nuitka==${{ env.NUITKA_VERSION }}" zstandard ordered-set
           python -m pip uninstall -y forlabs
       - name: Кэш Nuitka
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: ~\AppData\Local\Nuitka
-          key: nuitka-${{ env.NUITKA_VERSION }}-${{ hashFiles('pyproject.toml') }}
+          key: nuitka-${{ env.NUITKA_VERSION }}-${{ hashFiles('pyproject.toml') }}-${{ github.run_id }}
+          restore-keys: nuitka-${{ env.NUITKA_VERSION }}-${{ hashFiles('pyproject.toml') }}-
       - name: Правила внутрь программы
         run: python tools/embed_rules.py
       - name: Сборка ForLabs.exe
@@ -91,11 +92,19 @@ jobs:
             --nofollow-import-to=pytest --nofollow-import-to=tests
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Get-ChildItem build -Directory | Select-Object Name
+      - name: Сохранить кэш Nuitka (даже если дальше что-то упадёт)
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~\AppData\Local\Nuitka
+          key: nuitka-${{ env.NUITKA_VERSION }}-${{ hashFiles('pyproject.toml') }}-${{ github.run_id }}
       - name: Нет исходников и файлов правил в сборке
         shell: pwsh
         run: |
-          $dist = "build/run_forlabs.dist"
-          $py = Get-ChildItem $dist -Recurse -Include *.py, *.pyc | Where-Object { $_.FullName -match "\\forlabs\\" }
+          $dist = (Resolve-Path "build/run_forlabs.dist").Path
+          # путь внутри папки программы: сама папка сборки на машине GitHub тоже называется …\forlabs\…
+          $py = Get-ChildItem $dist -Recurse -Include *.py, *.pyc |
+            Where-Object { $_.FullName.Substring($dist.Length + 1) -like "forlabs\*" }
           $rules = Test-Path "$dist/forlabs/rules"
           if ($py -or $rules) {
             $py | ForEach-Object { Write-Output "::error title=leak::$($_.FullName)" }
