@@ -1,0 +1,46 @@
+// Чистая логика прокси: без сети и Supabase, чтобы проверять тестами Node.
+
+export type MemberAccess = { approved: boolean; role: string; access_until: string | null };
+export type Decision = { ok: true } | { ok: false; status: number; message: string };
+
+/** Пускать ли к модели: одобрен и (администратор, без срока или срок не прошёл). */
+export function decideAccess(m: MemberAccess, now: Date): Decision {
+  if (!m.approved) return { ok: false, status: 403, message: "account not approved" };
+  if (m.role === "admin" || !m.access_until) return { ok: true };
+  const until = new Date(m.access_until);
+  if (Number.isNaN(until.getTime())) return { ok: true };
+  if (until.getTime() <= now.getTime()) {
+    return { ok: false, status: 403, message: `subscription expired: ${until.toISOString()}` };
+  }
+  return { ok: true };
+}
+
+/** Свой ключ участника, иначе общий (если разрешён), иначе ничего. */
+export function pickKey(own: string | null, shared: string, allowShared: boolean): { key: string; kind: "own" | "shared" } | null {
+  if (own && own.trim()) return { key: own.trim(), kind: "own" };
+  if (allowShared && shared) return { key: shared, kind: "shared" };
+  return null;
+}
+
+/** Остаток токенов из ответа провайдера: token_balance, иначе balance. */
+export function parseBalance(body: unknown): number | null {
+  if (!body || typeof body !== "object") return null;
+  const b = body as Record<string, unknown>;
+  for (const field of ["token_balance", "balance"]) {
+    const v = b[field];
+    const n = typeof v === "number" ? v : typeof v === "string" && v.trim() !== "" ? Number(v) : NaN;
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+/** Метка лабы из заголовка X-ForLabs-Lab (URL-кодирована). */
+export function labTag(header: string | null): string | null {
+  if (!header) return null;
+  try {
+    const s = decodeURIComponent(header).trim();
+    return s ? s.slice(0, 200) : null;
+  } catch {
+    return null;
+  }
+}
