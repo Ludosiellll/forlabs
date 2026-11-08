@@ -161,8 +161,35 @@ class CloudStore:
         return sorted((LabState.model_validate(r["state"]) for r in rows), key=lambda s: _number_key(s.number))
 
     def delete_lab(self, profile_id: str, subject_id: str, number: str) -> None:
-        self._rest("DELETE", "labs", params={"profile_id": f"eq.{profile_id}", "subject_id": f"eq.{subject_id}",
-                                             "number": f"eq.{number}"})
+        """Строка в базе, файлы в облаке и локальная копия: новая лаба с тем же номером начинается с чистого листа."""
+        import shutil
+
+        self._rest("DELETE", "labs", params={**self._mine(), "profile_id": f"eq.{profile_id}",
+                                             "subject_id": f"eq.{subject_id}", "number": f"eq.{number}"})
+        shutil.rmtree(self.lab_dir(profile_id, subject_id, number), ignore_errors=True)
+        try:  # файлы — по возможности: без связи останутся в облаке, но лаба уже удалена
+            prefix = storage_key(self.auth.user_id, profile_id, subject_id, number, "x").rsplit("/", 1)[0]
+            keys = self._storage_list(prefix)
+            for i in range(0, len(keys), 100):
+                self.http.request("DELETE", f"{self.cfg.url}/storage/v1/object/{BUCKET}",
+                                  json={"prefixes": keys[i:i + 100]}, headers=self._h())
+        except (httpx.TransportError, CloudError):
+            pass
+
+    def _storage_list(self, prefix: str, depth: int = 0) -> list[str]:
+        """Все файлы под папкой хранилища (список Supabase не рекурсивный)."""
+        r = self.http.post(f"{self.cfg.url}/storage/v1/object/list/{BUCKET}", headers=self._h(),
+                           json={"prefix": prefix, "limit": 1000, "offset": 0})
+        if r.status_code >= 400:
+            return []
+        out = []
+        for item in r.json() or []:
+            name = f"{prefix}/{item['name']}"
+            if item.get("id"):
+                out.append(name)
+            elif depth < 4:
+                out += self._storage_list(name, depth + 1)
+        return out
 
     # память предмета и правила
     def read_memory(self, profile_id: str, subject_id: str) -> str:

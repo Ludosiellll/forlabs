@@ -106,7 +106,23 @@ class FakeSupabase:
                                 r.update(json.loads(req.content))
                 return httpx.Response(204)
             if req.method == "DELETE":
+                conds = {k: v[3:] for k, v in req.url.params.items() if v.startswith("eq.")}
+                rows[:] = [r for r in rows if any(str(r.get(k)) != v for k, v in conds.items())] if conds else rows
                 return httpx.Response(204)
+        if path == "/storage/v1/object/list/labs":
+            body = json.loads(req.content)
+            prefix = body["prefix"].rstrip("/") + "/"
+            names = set()
+            for key in self.objects:
+                if key.startswith(prefix):
+                    rest = key[len(prefix):]
+                    head = rest.split("/", 1)[0]
+                    names.add((head, "/" not in rest))
+            return httpx.Response(200, json=[{"name": n, "id": "x" if is_file else None} for n, is_file in sorted(names)])
+        if path == "/storage/v1/object/labs" and req.method == "DELETE":
+            for key in json.loads(req.content)["prefixes"]:
+                self.objects.pop(key, None)
+            return httpx.Response(200, json=[])
         if path.startswith("/storage/v1/object/labs/"):
             key = path[len("/storage/v1/object/labs/"):]
             if req.method == "POST":
@@ -219,3 +235,24 @@ def test_rest_retries_a_dropped_connection(auth, fake):
     fake.drop_next = 5
     with pytest.raises(CloudError):
         store.list_profiles()
+
+
+def test_delete_lab_removes_cache_and_cloud_files(auth, fake, tmp_home, tmp_path):
+    from forlabs.core.llm import FakeLLM
+    from forlabs.pipeline.run import Pipeline
+
+    auth.sign_in("a@b.c", "верный")
+    store = CloudStore(auth, retry_delays=(0, 0))
+    store.save_profile(Profile(id="ivanov", full_name="Иванов Иван", title_name="И.И. Иванов"))
+    pipe = Pipeline(store, llm_factory=lambda: FakeLLM([]), prefer_word=False, render_diagrams=False)
+    st = pipe.create_lab("ivanov", "ssp", [("старая_методичка_ЛР5.txt", b"old")], number="5")
+    asset = pipe.lab_dir(st) / "assets" / "fig.png"
+    asset.parent.mkdir(parents=True, exist_ok=True)
+    asset.write_bytes(b"PNG")
+    store.upload(asset, "ivanov", "ssp", "5", "assets/fig.png")
+    store.upload(asset, "ivanov", "ssp", "5", "report.docx")
+    store.delete_lab("ivanov", "ssp", "5")
+    assert store.load_lab("ivanov", "ssp", "5") is None
+    assert not any("/lr5/" in k for k in fake.objects)  # файлы лабы в облаке удалены
+    st = pipe.create_lab("ivanov", "ssp", [("новая.txt", b"new")], number="5")
+    assert [f.name for f in (pipe.lab_dir(st) / "source").iterdir()] == ["новая.txt"]

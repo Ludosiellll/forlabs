@@ -173,8 +173,8 @@ class Pipeline:
 
     # шаги
     def _taken(self, profile_id: str, subject_id: str, number: str) -> bool:
-        return (self.store.load_lab(profile_id, subject_id, number) is not None
-                or self.store.lab_dir(profile_id, subject_id, number).exists())
+        """Номер занят настоящей лабой (папка без состояния — остаток удалённой или прерванной, её можно очистить)."""
+        return self.store.load_lab(profile_id, subject_id, number) is not None
 
     def _save_images(self, st: LabState, images: list[tuple[str, bytes]], prefix: str) -> list[str]:
         """Проверяет и сохраняет фото в notes/; ошибка — PipelineError с понятным текстом, ничего не сохранено."""
@@ -207,6 +207,7 @@ class Pipeline:
         if wish_images:
             st.wish_images = self._save_images(st, wish_images, "wish")
         src = self.lab_dir(st) / "source"
+        shutil.rmtree(src, ignore_errors=True)  # остатки удалённой лабы с тем же номером не смешиваются
         src.mkdir(parents=True, exist_ok=True)
         for name, data in files:
             (src / safe_name(name)).write_bytes(data)
@@ -282,6 +283,8 @@ class Pipeline:
         new_dir = self.lab_dir(st)
         if old_dir.exists():
             new_dir.parent.mkdir(parents=True, exist_ok=True)
+            if new_dir.exists():  # папка без состояния (остаток) — иначе черновик окажется внутри неё
+                shutil.rmtree(new_dir, ignore_errors=True)
             shutil.move(str(old_dir), str(new_dir))
             st.source_path = str(new_dir / "source")
         try:
