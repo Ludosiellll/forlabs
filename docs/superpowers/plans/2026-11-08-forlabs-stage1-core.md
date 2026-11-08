@@ -241,3 +241,17 @@
 - [ ] С ключом из окружения: методичка ПСИП ЛР7 (фикстура) → разбор → текст → проверки → `.docx` → PDF (LibreOffice) → `compare()` == `[]`, визуальный осмотр страниц.
 - [ ] Повторить на теоретической методичке (ССП ЛР1-подобной) и с женским профилем.
 - [ ] Исправить найденное, `pytest -q` полностью зелёный, коммит и push.
+
+### Task 18: Многопользовательский режим (Supabase)
+
+**Files:** Create `supabase/migrations/0001_forlabs.sql`, `supabase/functions/llm/index.ts`, `tools/supabase_admin.py`, `forlabs/cloud/__init__.py`, `forlabs/cloud/config.py`, `forlabs/cloud/auth.py`, `forlabs/cloud/store.py`, `tests/cloud/test_cloud.py`
+
+**Interfaces — Produces:**
+- `cloud.config.CloudConfig(url, publishable_key)` — встроенные значения проекта (публичные).
+- `cloud.auth.CloudAuth(config, http=None)`: `sign_up(email, password, name) -> Session`, `sign_in(email, password) -> Session`, `refresh() -> Session`, `access_token() -> str` (обновляет, если истекает), `sign_out()`; сессия хранится в keyring/файле данных.
+- `cloud.store.CloudStore(auth, cache_home)`: тот же интерфейс, что `Store` (профили, лабы, память, правила), плюс `upload(path, rel)`, `download(rel, path)`, `member() -> Member`, `list_members()`, `set_approved(user_id, bool)`, `usage_summary()`.
+- `LLM` в облачном режиме: `base_url = <url>/functions/v1/llm`, `api_key = access_token()`; 403 «not approved» → `LLMError(kind="access")`.
+
+- [ ] Тесты на MockTransport: вход/обновление токена, upsert/выборка лабы, загрузка файла, ошибка «не одобрен».
+- [ ] Живой тест (`live`): регистрация тестового пользователя, RLS не пускает к чужим строкам, прокси отвечает.
+- [ ] Миграция применена, функция развёрнута, секрет задан, советник безопасности без ошибок.
