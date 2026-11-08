@@ -16,13 +16,23 @@
     <a href="/semester" class="{{ 'on' if nav == 'semester' }}">Отчёт за семестр</a>
     <a href="/rules" class="{{ 'on' if nav == 'rules' }}">Правила</a>
     <a href="/settings" class="{{ 'on' if nav == 'settings' }}">Настройки</a>
-    {% if member and member.role == 'admin' %}<a href="/users" class="{{ 'on' if nav == 'users' }}">Пользователи</a>{% endif %}
+    {% if member and member.role == 'admin' and member.approved %}<a href="/admin" class="{{ 'on' if nav == 'admin' }}">Админ</a>{% endif %}
   </nav>
   {% if ctx.cloud and user_email %}
-  <div class="who"><span>{{ user_email }}</span>
+  <div class="who">
+    {% if member and member.role != 'admin' and member.approved %}
+      {% set st = member.access_state %}
+      {% if st in ('active', 'expiring') %}<span class="sub sub-{{ st }}" title="Срок подписки">Подписка до {{ date_ru(member.access_until) }}</span>
+      {% elif st == 'unlimited' %}<span class="sub" title="Срок подписки">Подписка без срока</span>{% endif %}
+    {% endif %}
+    <span>{{ user_email }}</span>
     <form method="post" action="/logout"><button class="btn link small" type="submit">Выйти</button></form></div>
   {% elif not ctx.cloud %}<div class="who">Локальный режим</div>{% endif %}
 </header>
+{% if member and member.role != 'admin' and member.approved and member.access_state == 'expired' %}
+<div class="sub-banner" role="alert">Подписка закончилась {{ date_ru(member.access_until) }} — напиши администратору, чтобы он её продлил.
+  Свои лабы можно смотреть и скачивать, новые работы модель не выполнит.</div>
+{% endif %}
 {% endblock %}
 {% block body %}{% endblock %}
 <script src="/static/app.js"></script>

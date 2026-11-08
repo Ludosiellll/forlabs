@@ -24,6 +24,8 @@ from forlabs.pipeline.run import PipelineError, today
 from forlabs.render import libreoffice, word_com
 from forlabs.report.derive import numbered_blocks
 from forlabs.report.morph import goal_to_conclusion
+from forlabs.ui.admin_routes import access_text, ago, date_ru, labs_estimate, register_admin
+from forlabs.ui.charts import fmt_tokens
 from forlabs.ui.context import AppContext, slug
 
 HERE = Path(__file__).parent
@@ -57,7 +59,8 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
     app.state.ctx = ctx
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
     tpl = Jinja2Templates(directory=HERE / "templates")
-    tpl.env.globals.update(STATUS_RU=STATUS_RU, q=_q, finding_key=finding_key)
+    tpl.env.globals.update(STATUS_RU=STATUS_RU, q=_q, finding_key=finding_key, date_ru=date_ru, ago=ago,
+                           fmt_tokens=fmt_tokens, access_text=access_text, labs_estimate=labs_estimate)
 
     def render(request: Request, name: str, **kw) -> HTMLResponse:
         base = {"request": request, "ctx": ctx, "subjects": all_subjects(), "nav": kw.pop("nav", ""),
@@ -548,9 +551,15 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
     # настройки
     @app.get("/settings", response_class=HTMLResponse)
     def settings_page(request: Request):
+        my_balance, balance_known = None, False
+        if ctx.cloud and ctx.auth.session:
+            try:
+                my_balance, balance_known = ctx.store.my_balance(), True
+            except CloudError:
+                pass
         return render(request, "settings.html", s=ctx.settings, presets=API_PRESETS, has_key=bool(get_api_key()),
                       word=word_com.available(), soffice=libreoffice.find_soffice(ctx.settings.soffice_path),
-                      nav="settings")
+                      nav="settings", my_balance=my_balance, balance_known=balance_known)
 
     @app.post("/settings")
     async def settings_save(request: Request):
@@ -578,21 +587,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
             return redirect("/settings", err=getattr(e, "message_ru", str(e)))
         return redirect("/settings", msg=f"Связь есть, модель отвечает: {model}")
 
-    # пользователи (администратор)
-    @app.get("/users", response_class=HTMLResponse)
-    def users_page(request: Request):
-        if not ctx.cloud:
-            return redirect("/", err="Пользователи есть только в облачном режиме")
-        me = ctx.store.member()
-        if not me or me.role != "admin":
-            return redirect("/", err="Раздел только для администратора")
-        return render(request, "users.html", members=ctx.store.list_members(), usage=ctx.store.usage_summary(),
-                      me=me, nav="users")
-
-    @app.post("/users/{uid}/approve")
-    def users_approve(uid: str, approved: str = Form("1")):
-        ctx.store.set_approved(uid, approved == "1")
-        return redirect("/users", msg="Сохранено")
+    register_admin(app, ctx, render, redirect)
 
     return app
 

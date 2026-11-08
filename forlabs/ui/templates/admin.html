@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Админ{% endblock %}
+{% block body %}
+<main class="page admin" data-balances="/admin/balances">
+  {% include "_flash.html" %}
+  <h1>Админ</h1>
+  <p class="muted">Участники, подписки, ключи и расход модели. Цифры — за последние 30 дней.</p>
+
+  <dl class="figures">
+    <div><dt>Участников</dt><dd>{{ rows|length }}</dd><span>с доступом: {{ active }}</span></div>
+    <div><dt>Токенов</dt><dd>{{ fmt_tokens(total_30) }}</dd><span>за 30 дней</span></div>
+    <div><dt>Лаб</dt><dd>{{ labs_30 }}</dd><span>сдано: {{ final_30 }}</span></div>
+    <div><dt>Общий ключ</dt><dd data-balance="shared">…</dd><span data-balance-labs="shared">остаток у провайдера</span></div>
+  </dl>
+
+  <div class="admin-charts">
+    <section aria-labelledby="ch-usage"><h2 id="ch-usage">Расход токенов по дням</h2>{{ usage_chart }}</section>
+    <section aria-labelledby="ch-labs"><h2 id="ch-labs">Новые лабы по неделям</h2>{{ labs_chart }}</section>
+  </div>
+
+  <h2>Участники</h2>
+  <div class="table-wrap">
+    <table class="t members">
+      <thead><tr><th>Участник</th><th>Подписка</th><th>Ключ</th><th class="num">Остаток</th><th class="num">За 30 дней</th>
+        <th class="num">Лабы</th><th>Активность</th></tr></thead>
+      <tbody>
+      {% for r in rows %}
+        <tr class="click" data-href="/admin/u/{{ r.m.user_id }}">
+          <td><a class="who-link" href="/admin/u/{{ r.m.user_id }}">{% if r.color %}<i class="dot" style="background:{{ r.color }}" aria-hidden="true"></i>{% endif %}{{ r.m.name }}</a>{% if r.is_me %} <span class="small muted">· это ты</span>{% endif %}
+            <div class="small muted">{{ r.m.email }}{% if r.profiles %} · {{ r.profiles|join(', ') }}{% endif %}</div></td>
+          <td><span class="sub sub-{{ 'admin' if r.m.role == 'admin' else r.m.access_state }}">{{ r.access }}</span></td>
+          <td class="nowrap">{% if r.key %}<span class="mono">••••{{ r.key.last4 }}</span>{% elif r.m.allow_shared_key %}<span class="muted">общий</span>{% else %}<span class="muted">нет</span>{% endif %}</td>
+          <td class="num nowrap" {% if r.key %}data-balance="{{ r.m.user_id }}"{% endif %}>{{ '…' if r.key else '—' }}</td>
+          <td class="num nowrap">{{ fmt_tokens(r.usage) }}</td>
+          <td class="num nowrap">{{ r.labs[0] }}{% if r.labs[0] %} <span class="muted">· сдано {{ r.labs[1] }}</span>{% endif %}</td>
+          <td class="nowrap">{{ r.seen }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="hint">Остаток сообщает провайдер ключа. «≈ лаб» в подсказке — по 30 тыс. токенов на лабу.</p>
+</main>
+{% endblock %}

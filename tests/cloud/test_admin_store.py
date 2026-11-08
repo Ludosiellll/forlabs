@@ -136,3 +136,20 @@ def test_download_member_report(store, fake, tmp_path):
     assert store.download_member_report(M, "anna", "ssp", "4", out) is True
     assert out.read_bytes() == b"PK-docx"
     assert store.download_member_report(M, "anna", "ssp", "5", tmp_path / "x.docx") is False
+
+
+def test_own_data_only_even_for_admin(store, fake):
+    """Администратор читает чужие строки (для панели), но обычная работа приложения — только со своими."""
+    from forlabs.core.models import LabState, Profile
+
+    store.save_profile(Profile(id="ivanov", full_name="Иванов Иван", title_name="И.И. Иванов"))
+    store.save_lab(LabState(profile_id="ivanov", subject_id="ssp", number="4", status="parsed"))
+    fake.tables["student_profiles"].append({"owner": M, "id": "ivanov", "data": {
+        "id": "ivanov", "full_name": "Чужой Иванов", "title_name": "Ч.И."}})
+    fake.tables["labs"].insert(0, {"owner": M, "profile_id": "ivanov", "subject_id": "ssp", "number": "4",
+                                   "status": "final", "state": {"profile_id": "ivanov", "subject_id": "ssp",
+                                                                "number": "4", "status": "final"}})
+    assert [p.full_name for p in store.list_profiles()] == ["Иванов Иван"]
+    assert store.get_profile("ivanov").full_name == "Иванов Иван"
+    assert store.load_lab("ivanov", "ssp", "4").status == "parsed"
+    assert [s.status for s in store.list_labs("ivanov", "ssp")] == ["parsed"]

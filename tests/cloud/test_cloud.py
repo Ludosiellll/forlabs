@@ -77,6 +77,8 @@ class FakeSupabase:
             rows = self.tables.setdefault(table, [])
             if req.method == "POST":
                 for row in json.loads(req.content) if req.content.startswith(b"[") else [json.loads(req.content)]:
+                    if table in ("student_profiles", "labs", "subject_memory", "rule_overrides", "custom_subjects"):
+                        row.setdefault("owner", UID)  # в базе owner = auth.uid() по умолчанию
                     keys = {"student_profiles": ("id",), "labs": ("profile_id", "subject_id", "number")}.get(table, ())
                     rows[:] = [r for r in rows if any(r.get(k) != row.get(k) for k in keys)] if keys else rows
                     rows.append(row)

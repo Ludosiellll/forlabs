@@ -91,3 +91,39 @@
     es.onerror = function () { es.close(); setTimeout(function () { location.reload(); }, 3000); };
   }
 })();
+
+// админ-панель: остатки на ключах (подгружаются после открытия страницы), подсказки графиков, строки-ссылки
+(function () {
+  var root = document.querySelector("[data-balances]");
+  if (root && document.querySelector("[data-balance]")) {
+    fetch(root.getAttribute("data-balances")).then(function (r) { return r.json(); }).then(function (data) {
+      document.querySelectorAll("[data-balance]").forEach(function (el) {
+        var d = data[el.getAttribute("data-balance")];
+        el.textContent = d ? d.text : "—";
+        if (d && d.labs) el.title = d.labs;
+      });
+      document.querySelectorAll("[data-balance-labs]").forEach(function (el) {
+        var d = data[el.getAttribute("data-balance-labs")];
+        if (d && d.labs) el.textContent = d.labs;
+      });
+    }).catch(function () {
+      document.querySelectorAll("[data-balance]").forEach(function (el) { el.textContent = "нет связи"; });
+    });
+  }
+  var tip = null;
+  function hide() { if (tip) { tip.remove(); tip = null; } }
+  document.addEventListener("mousemove", function (e) {
+    var t = e.target.closest && e.target.closest(".chart [data-tip]");
+    if (!t) { hide(); return; }
+    if (!tip) { tip = document.createElement("div"); tip.className = "viz-tip"; document.body.appendChild(tip); }
+    tip.textContent = t.getAttribute("data-tip");
+    var x = e.clientX + 14, y = e.clientY + 14, w = tip.offsetWidth, h = tip.offsetHeight;
+    if (x + w > window.innerWidth - 8) x = e.clientX - w - 14;
+    if (y + h > window.innerHeight - 8) y = e.clientY - h - 14;
+    tip.style.left = x + "px"; tip.style.top = y + "px";
+  });
+  document.addEventListener("mouseleave", hide);
+  document.querySelectorAll("tr.click[data-href]").forEach(function (tr) {
+    tr.addEventListener("click", function (e) { if (!e.target.closest("a, button, input")) location.href = tr.getAttribute("data-href"); });
+  });
+})();

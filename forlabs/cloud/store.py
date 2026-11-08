@@ -98,17 +98,21 @@ class CloudStore:
             raise CloudError("Нет связи с облаком. Проверь интернет.", str(e)) from e
         return self._check(r)
 
+    def _mine(self) -> dict:
+        """Только свои строки: администратор по политикам видит и чужие, но работает со своими."""
+        return {"owner": f"eq.{self.auth.user_id}"}
+
     def _upsert(self, table: str, row: dict, on_conflict: str) -> None:
         self._rest("POST", table, params={"on_conflict": on_conflict}, json=row,
                    prefer="resolution=merge-duplicates,return=minimal")
 
     # профили
     def list_profiles(self) -> list[Profile]:
-        rows = self._rest("GET", "student_profiles", params={"select": "data"}).json()
+        rows = self._rest("GET", "student_profiles", params={"select": "data", **self._mine()}).json()
         return sorted((Profile.model_validate(r["data"]) for r in rows), key=lambda p: p.full_name)
 
     def get_profile(self, pid: str) -> Profile | None:
-        rows = self._rest("GET", "student_profiles", params={"select": "data", "id": f"eq.{pid}"}).json()
+        rows = self._rest("GET", "student_profiles", params={"select": "data", "id": f"eq.{pid}", **self._mine()}).json()
         return Profile.model_validate(rows[0]["data"]) if rows else None
 
     def save_profile(self, p: Profile) -> None:
@@ -134,12 +138,12 @@ class CloudStore:
                      "owner,profile_id,subject_id,number")
 
     def load_lab(self, profile_id: str, subject_id: str, number: str) -> LabState | None:
-        rows = self._rest("GET", "labs", params={"select": "state", "profile_id": f"eq.{profile_id}",
+        rows = self._rest("GET", "labs", params={"select": "state", **self._mine(), "profile_id": f"eq.{profile_id}",
                                                  "subject_id": f"eq.{subject_id}", "number": f"eq.{number}"}).json()
         return LabState.model_validate(rows[0]["state"]) if rows else None
 
     def list_labs(self, profile_id: str, subject_id: str) -> list[LabState]:
-        rows = self._rest("GET", "labs", params={"select": "state", "profile_id": f"eq.{profile_id}",
+        rows = self._rest("GET", "labs", params={"select": "state", **self._mine(), "profile_id": f"eq.{profile_id}",
                                                  "subject_id": f"eq.{subject_id}"}).json()
         return sorted((LabState.model_validate(r["state"]) for r in rows), key=lambda s: _number_key(s.number))
 
@@ -149,7 +153,7 @@ class CloudStore:
 
     # память предмета и правила
     def read_memory(self, profile_id: str, subject_id: str) -> str:
-        rows = self._rest("GET", "subject_memory", params={"select": "text", "profile_id": f"eq.{profile_id}",
+        rows = self._rest("GET", "subject_memory", params={"select": "text", **self._mine(), "profile_id": f"eq.{profile_id}",
                                                            "subject_id": f"eq.{subject_id}"}).json()
         return rows[0]["text"] if rows else ""
 
@@ -158,7 +162,7 @@ class CloudStore:
                      "owner,profile_id,subject_id")
 
     def rule_overrides(self) -> dict[str, str]:
-        rows = self._rest("GET", "rule_overrides", params={"select": "path,text"}).json()
+        rows = self._rest("GET", "rule_overrides", params={"select": "path,text", **self._mine()}).json()
         return {r["path"]: r["text"] for r in rows}
 
     def save_rule_override(self, path: str, text: str) -> None:
@@ -171,7 +175,7 @@ class CloudStore:
     def list_custom_subjects(self) -> list:
         from forlabs.core.subjects import Subject
 
-        rows = self._rest("GET", "custom_subjects", params={"select": "id,data"}).json()
+        rows = self._rest("GET", "custom_subjects", params={"select": "id,data", **self._mine()}).json()
         return [Subject.model_validate(r["data"]) for r in rows]
 
     def save_custom_subject(self, subject) -> None:
