@@ -28,6 +28,7 @@ API_PRESETS: dict[str, dict[str, object]] = {
 
 
 class Settings(BaseModel):
+    mode: Literal["cloud", "local"] = "cloud"
     base_url: str = "https://api.aikeysforyou.com/v1"
     model: str = "deepseek-v4.1-flash"
     api_key_source: Literal["keyring", "env"] = "keyring"

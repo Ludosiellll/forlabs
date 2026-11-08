@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Ожидание одобрения{% endblock %}
+{% block body %}
+<main class="page narrow">
+  <h1>Аккаунт ждёт одобрения</h1>
+  <p class="muted">Ты вошёл как {{ member.email }}. Администратор должен открыть раздел «Пользователи» и одобрить твой аккаунт.
+    После этого обнови страницу.</p>
+  <a class="btn" href="/">Обновить</a>
+</main>
+{% endblock %}

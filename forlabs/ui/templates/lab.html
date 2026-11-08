@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+{% block title %}ЛР {{ st.number }} · {{ subject.short_name }}{% endblock %}
+{% block body %}
+<div class="lab" data-lab data-base="{{ base_url }}" data-busy="{{ '1' if busy else '0' }}" data-seq="{{ last_seq }}" data-status="{{ st.status }}">
+  <aside class="lab-left" aria-label="Этапы">
+    <div class="lab-title">{{ profile.full_name if profile else st.profile_id }} · {{ subject.name }}</div>
+    <h1>ЛР {{ st.number }}</h1>
+    {% if st.spec %}<p class="small muted">{{ st.spec.topic }}</p>{% endif %}
+    <ol class="steps" data-steps>
+      {% for key, title in steps %}
+        {% set i = loop.index %}
+        <li data-step="{{ key }}" class="{{ step_state[key] }}">
+          <span class="dot" aria-hidden="true">{% if step_state[key] == 'done' %}<svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="#fff" stroke-width="1.9"><path d="M2.5 6.2l2.2 2.2 4.8-5"/></svg>{% else %}{{ i }}{% endif %}</span>
+          <span>{{ title }}</span>
+        </li>
+      {% endfor %}
+    </ol>
+
+    {% if slot_items %}
+    <h2 style="margin-top:18px">Нужно от тебя: {{ slot_items|length }}</h2>
+    <p class="small muted">Выбери рисунок и вставь скриншот через Ctrl+V или перетащи файл.</p>
+    {% for sec_n, blk, num, fig in slot_items %}
+      <div class="slot{{ ' on' if loop.first }}" tabindex="0" role="button" data-slot="{{ base_url }}/screenshot/{{ sec_n }}/{{ blk }}"
+           aria-label="Рисунок {{ num }}: выбрать для вставки">
+        <div class="t">Рисунок {{ num }} – {{ fig.topic }}</div>
+        <div class="i">{{ fig.slot }}</div>
+        <label class="small" style="margin:6px 0 0;font-weight:400">
+          <input type="file" accept="image/png,image/jpeg" data-slot-file style="font-size:12px"></label>
+      </div>
+    {% endfor %}
+    {% endif %}
+
+    {% if st.report %}
+    <h2 style="margin-top:18px">Переделать</h2>
+    <form method="post" data-redo class="row" style="margin-bottom:8px">
+      <select aria-label="Задание" data-redo-select style="flex:1">
+        {% for s in st.report.sections %}<option value="{{ s.n }}">Задание {{ s.n }}</option>{% endfor %}
+      </select>
+      <button class="btn small" type="submit" {{ 'disabled' if busy }}>Переписать</button>
+    </form>
+    <form method="post" action="{{ base_url }}/rerender"><button class="btn small" type="submit" {{ 'disabled' if busy }}>Пересобрать документ</button></form>
+    {% endif %}
+    <form method="post" action="{{ base_url }}/delete" style="margin-top:22px" onsubmit="return confirm('Удалить лабу со всеми файлами?')">
+      <button class="btn danger small" type="submit" {{ 'disabled' if busy }}>Удалить лабу</button></form>
+  </aside>
+
+  <section class="lab-center" aria-label="Документ">
+    {% include "_flash.html" %}
+    {% if st.status == 'failed' and st.error %}<div class="notice err" style="width:100%;max-width:760px">{{ st.error }}</div>{% endif %}
+    <nav class="tabs" aria-label="Вид">
+      <a href="{{ base_url }}?tab=report" class="{{ 'on' if tab == 'report' }}">Отчёт</a>
+      <a href="{{ base_url }}?tab=spec" class="{{ 'on' if tab == 'spec' }}">Разбор методички</a>
+      <a href="{{ base_url }}?tab=journal" class="{{ 'on' if tab == 'journal' }}">Журнал</a>
+    </nav>
+    {% if busy %}<div class="busybar" aria-hidden="true"><span></span></div>
+      <div class="sheet-meta" data-live>{{ events[-1].text if events else 'Работаю…' }}</div>{% endif %}
+
+    {% if tab == 'report' %}
+      {% if st.pages %}
+        {% for page in st.pages %}
+          <div class="sheet"><img src="{{ base_url }}/page/{{ loop.index }}?v={{ st.updated_at }}" alt="Страница {{ loop.index }} отчёта" loading="lazy"></div>
+          <div class="sheet-meta">Страница {{ loop.index }} из {{ st.pages|length }}</div>
+        {% endfor %}
+      {% elif not busy %}
+        <div class="pane">
+          {% if st.status in ('parsed', 'confirmed') %}
+            <h2>Разбор готов</h2>
+            <p class="muted">Проверь тему, задания и вопросы на вкладке «Разбор методички», затем нажми «Выполнить».</p>
+            <div class="row"><a class="btn" href="{{ base_url }}?tab=spec">Проверить разбор</a>
+              <form method="post" action="{{ base_url }}/execute"><button class="btn primary" type="submit">Выполнить</button></form></div>
+          {% elif st.status == 'draft' %}
+            <h2>Методичка ещё не разобрана</h2>
+            <form method="post" action="{{ base_url }}/reparse"><button class="btn primary" type="submit">Разобрать</button></form>
+          {% else %}
+            <h2>Документа пока нет</h2>
+            <p class="muted">Посмотри журнал: там видно, на каком шаге остановилось.</p>
+          {% endif %}
+        </div>
+      {% else %}
+        <div class="pane"><h2>Работаю</h2><p class="muted">Страницы появятся после вёрстки. Ход работы — во вкладке «Журнал».</p></div>
+      {% endif %}
+    {% elif tab == 'spec' %}
+      <div class="pane">
+        {% if st.spec %}
+        {% set spec_findings = st.findings|selectattr('stage', 'equalto', 'spec')|list %}
+        {% if spec_findings %}<div class="notice warn">Не всё найдено в методичке дословно — проверь отмеченные места:
+          {% for f in spec_findings %}<div class="small">· {{ f.location }}: {{ f.text }}</div>{% endfor %}</div>{% endif %}
+        <form method="post" action="{{ base_url }}/confirm">
+          <div class="field"><label for="topic">Тема</label><input id="topic" name="topic" type="text" value="{{ st.spec.topic }}"></div>
+          <div class="field"><label for="goal">Цель</label><textarea id="goal" name="goal" rows="2">{{ st.spec.goal }}</textarea>
+            <div class="hint">Из цели строится вывод: «{{ conclusion }}»</div></div>
+          <div class="grid2">
+            <div class="field"><label for="equipment">Оснащение</label><input id="equipment" name="equipment" type="text" value="{{ st.spec.equipment or '' }}"></div>
+            <div class="field"><label for="date">Дата выполнения</label><input id="date" name="date" type="text" value="{{ st.spec.date }}" placeholder="ДД.ММ.ГГГГ"></div>
+          </div>
+          <div class="field"><label for="assignment">«Задание:» в шапке</label><input id="assignment" name="assignment" type="text" value="{{ st.spec.assignment }}"></div>
+          <div class="field"><label for="tasks">Задания — по одному в строке, дословно</label>
+            <textarea id="tasks" name="tasks" rows="{{ [st.spec.tasks|length + 2, 6]|max }}">{% for t in st.spec.tasks %}{{ t.text }}
+{% endfor %}</textarea>
+            {% set first_extra = st.spec.tasks|selectattr('kind', 'equalto', 'extra')|map(attribute='n')|first %}
+            <div class="hint">Нумерация сквозная: дополнительные задания идут продолжением основных.</div></div>
+          <div class="grid2">
+            <div class="field"><label for="extra_from">Дополнительные задания начинаются с №</label>
+              <input id="extra_from" name="extra_from" type="text" value="{{ first_extra or '' }}" placeholder="нет"></div>
+            <div class="field"><label>Вариант</label><input type="text" value="{{ st.spec.variant or '' }}" disabled>
+              <div class="hint">Меняется в профиле.</div></div>
+          </div>
+          <div class="field"><label for="variant_text">Текст варианта из методички</label>
+            <textarea id="variant_text" name="variant_text" rows="3">{{ st.spec.variant_text or '' }}</textarea></div>
+          <div class="field"><label for="questions">Контрольные вопросы — по одному в строке</label>
+            <textarea id="questions" name="questions" rows="{{ [st.spec.questions|length + 1, 3]|max }}">{% for qq in st.spec.questions %}{{ qq }}
+{% endfor %}</textarea><div class="hint">Пусто — раздела с вопросами в отчёте не будет.</div></div>
+          <div class="row"><button class="btn" type="submit">Сохранить разбор</button></div>
+        </form>
+        <form method="post" action="{{ base_url }}/execute" style="margin-top:10px">
+          <button class="btn primary" type="submit" {{ 'disabled' if busy }}>{{ 'Выполнить заново' if st.report else 'Выполнить' }}</button>
+          {% if st.report %}<span class="small muted">Текст всех заданий будет написан заново.</span>{% endif %}
+        </form>
+        {% else %}
+        <p class="muted">Разбор ещё не готов.</p>
+        {% endif %}
+      </div>
+    {% else %}
+      <div class="pane">
+        <h2>Журнал</h2>
+        <ul class="journal" data-journal>
+          {% for e in events if e.kind not in ('idle', 'moved') %}<li class="k-{{ e.kind }}">{{ e.text }}</li>{% else %}<li class="muted">Записей пока нет.</li>{% endfor %}
+        </ul>
+      </div>
+    {% endif %}
+  </section>
+
+  <aside class="lab-right" aria-label="Документ и замечания">
+    <div class="row" style="margin-bottom:12px">
+      {% if st.docx_path %}<a class="btn primary" href="{{ base_url }}/docx">Скачать .docx</a>
+        <form method="post" action="{{ base_url }}/open"><input type="hidden" name="what" value="docx"><button class="btn" type="submit">Открыть в Word</button></form>{% endif %}
+      <form method="post" action="{{ base_url }}/open"><input type="hidden" name="what" value="dir"><button class="btn" type="submit">Папка лабы</button></form>
+    </div>
+    {% if st.status in ('rendered', 'final') %}
+    <form method="post" action="{{ base_url }}/final" style="margin-bottom:14px">
+      <button class="btn {{ 'primary' if st.status == 'rendered' }}" type="submit" style="width:100%" {{ 'disabled' if errors }}>
+        {{ 'Сдана — положить ещё раз в папку сдачи' if st.status == 'final' else 'Сдать: положить в папку сдачи' }}</button>
+      {% if errors %}<div class="hint">Сначала разберись с замечаниями ниже.</div>{% endif %}
+    </form>
+    {% endif %}
+    {% for w in st.warnings %}<div class="notice warn small">{{ w }}</div>{% endfor %}
+    <h2>Замечания</h2>
+    {% set shown = st.findings|rejectattr('stage', 'equalto', 'spec')|list %}
+    {% if not shown %}
+      <p class="small muted">{{ 'Замечаний нет: стандарт РС02-23 и проверки на признаки ИИ пройдены.' if st.report else 'Появятся после проверки текста.' }}</p>
+    {% endif %}
+    {% for f in shown %}
+      {% set accepted = f.rule_id in st.accepted_rules %}
+      <div class="finding {{ f.severity }}">
+        <div class="where">{{ f.location }}{% if accepted %} · принято{% endif %}</div>
+        <div>{{ f.message }}</div>
+        {% if f.text %}<div class="txt">{{ f.text[:220] }}</div>{% endif %}
+        {% if f.suggestion %}<div class="txt">Как исправить: {{ f.suggestion }}</div>{% endif %}
+        {% if f.severity == 'error' and not accepted %}
+        <form method="post" action="{{ base_url }}/accept" style="margin-top:6px"><input type="hidden" name="rule" value="{{ f.rule_id }}">
+          <button class="btn link small" type="submit">Оставить как есть</button></form>{% endif %}
+      </div>
+    {% endfor %}
+  </aside>
+</div>
+{% endblock %}

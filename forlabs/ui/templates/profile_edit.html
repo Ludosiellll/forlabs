@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Новый профиль' if is_new else p.full_name }}{% endblock %}
+{% block body %}
+<main class="page narrow">
+  {% include "_flash.html" %}
+  <h1>{{ 'Новый профиль' if is_new else p.full_name }}</h1>
+  <p class="muted">Эти данные попадают в титул, шапку отчёта и вывод.</p>
+  <form method="post" action="/profiles/save">
+    <input type="hidden" name="id" value="{{ p.id }}">
+    <fieldset><legend>Студент</legend>
+      <div class="field"><label for="full_name">ФИО полностью</label>
+        <input id="full_name" name="full_name" type="text" required value="{{ p.full_name }}" placeholder="Иванов Иван Петрович"></div>
+      <div class="grid2">
+        <div class="field"><label for="title_name">ФИО на титуле</label>
+          <input id="title_name" name="title_name" type="text" value="{{ p.title_name }}" placeholder="И.П. Иванов">
+          <div class="hint">Пусто — составится из ФИО.</div></div>
+        <div class="field"><label for="group">Группа</label><input id="group" name="group" type="text" value="{{ p.group }}"></div>
+      </div>
+      <div class="field"><span style="display:block;font-weight:500;margin-bottom:4px">Пол</span>
+        <label class="radio"><input type="radio" name="gender" value="m" {{ 'checked' if p.gender != 'f' }}> Мужской («Изучил», «Выполнил»)</label>
+        <label class="radio"><input type="radio" name="gender" value="f" {{ 'checked' if p.gender == 'f' }}> Женский («Изучила», «Выполнила»)</label></div>
+      <div class="grid2">
+        <div class="field"><label for="doc_author">Автор в свойствах документа</label>
+          <input id="doc_author" name="doc_author" type="text" value="{{ p.doc_author }}" placeholder="Иванов Иван"></div>
+        <div class="field"><label for="output_root">Папка сдачи</label>
+          <input id="output_root" name="output_root" type="text" value="{{ p.output_root }}" placeholder="D:\Лабы\Иванов">
+          <div class="hint">Сюда кладутся готовые файлы: Предмет\ЛР N\…</div></div>
+      </div>
+    </fieldset>
+    <fieldset><legend>Титульный лист</legend>
+      {% for i in range(3) %}<div class="field"><label for="college_lines_{{ i }}">Строка учреждения {{ i + 1 }}</label>
+        <input id="college_lines_{{ i }}" name="college_lines_{{ i }}" type="text" value="{{ p.college_lines[i] if p.college_lines|length > i else '' }}"></div>{% endfor %}
+      <div class="grid2">
+        <div class="field"><label for="specialty_code">Код специальности</label><input id="specialty_code" name="specialty_code" type="text" value="{{ p.specialty_code }}"></div>
+        <div class="field"><label for="city">Город</label><input id="city" name="city" type="text" value="{{ p.city }}"></div>
+      </div>
+      {% for i in range(3) %}<div class="field"><label for="specialty_lines_{{ i }}">Название специальности, строка {{ i + 1 }}</label>
+        <input id="specialty_lines_{{ i }}" name="specialty_lines_{{ i }}" type="text" value="{{ p.specialty_lines[i] if p.specialty_lines|length > i else '' }}"></div>{% endfor %}
+    </fieldset>
+    <fieldset><legend>Предметы</legend>
+      <p class="small muted">Отметь предметы этого студента. Название пойдёт на титул, вариант — в задания.</p>
+      {% for sid, s in subjects.items() %}
+        {% set e = p.enrollment(sid) %}
+        <div class="card" style="margin-bottom:10px">
+          <label class="radio" style="font-weight:600"><input type="checkbox" name="enr_{{ sid }}_on" {{ 'checked' if e }}> {{ s.name }}</label>
+          <div class="grid2" style="margin-top:8px">
+            <div class="field"><label for="t_{{ sid }}">Название на титуле</label>
+              <input id="t_{{ sid }}" name="enr_{{ sid }}_title" type="text" value="{{ e.title_subject if e else s.name }}"></div>
+            <div class="field"><label for="te_{{ sid }}">Руководитель</label>
+              <input id="te_{{ sid }}" name="enr_{{ sid }}_teacher" type="text" value="{{ e.teacher if e else '' }}" placeholder="А.А. Петров"></div>
+          </div>
+          <div class="grid3">
+            <div class="field"><label for="y_{{ sid }}">Учебный год</label>
+              <input id="y_{{ sid }}" name="enr_{{ sid }}_year" type="text" value="{{ e.academic_year if e else '2026/2027' }}"></div>
+            <div class="field"><label for="v_{{ sid }}">Вариант</label>
+              <input id="v_{{ sid }}" name="enr_{{ sid }}_variant" type="number" min="1" value="{{ e.variant if e and e.variant else s.default_variant }}"></div>
+            <div class="field"><label for="st_{{ sid }}">Метки шапки</label>
+              <select id="st_{{ sid }}" name="enr_{{ sid }}_style">
+                {% set style = e.header_style if e else s.default_header_style %}
+                <option value="long" {{ 'selected' if style == 'long' }}>«Тема работы:»</option>
+                <option value="short" {{ 'selected' if style == 'short' }}>«Тема:» + «Оснащение работы:»</option>
+              </select></div>
+          </div>
+        </div>
+      {% endfor %}
+    </fieldset>
+    <div class="row"><button class="btn primary" type="submit">Сохранить</button>
+      <a class="btn link" href="/profiles">Отмена</a></div>
+  </form>
+  {% if not is_new %}
+  <form method="post" action="/profiles/{{ q(p.id) }}/delete" style="margin-top:28px"
+        onsubmit="return confirm('Удалить профиль? Лабы останутся, но без профиля их не открыть.')">
+    <button class="btn danger small" type="submit">Удалить профиль</button></form>
+  {% endif %}
+</main>
+{% endblock %}

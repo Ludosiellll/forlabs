@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Отчёт за семестр{% endblock %}
+{% block body %}
+<main class="page narrow">
+  {% include "_flash.html" %}
+  <h1>Отчёт за семестр</h1>
+  <p class="muted">Один документ: титульный лист, содержание и выбранные лабы, каждая с новой страницы — как в итоговых отчётах.</p>
+  {% if not current %}
+    <div class="empty">Сначала создай профиль и сделай хотя бы одну лабу.</div>
+  {% else %}
+  <form method="get" action="/semester" class="grid2" style="margin-bottom:6px">
+    <div class="field"><label for="sp">Профиль</label>
+      <select id="sp" name="profile" onchange="this.form.submit()">{% for p in profiles %}<option value="{{ p.id }}" {{ 'selected' if p.id == current.id }}>{{ p.full_name }}</option>{% endfor %}</select></div>
+    <div class="field"><label for="ss">Предмет</label>
+      <select id="ss" name="subject" onchange="this.form.submit()">{% for e in current.enrollments %}<option value="{{ e.subject_id }}" {{ 'selected' if e.subject_id == subject_id }}>{{ subjects[e.subject_id].name if e.subject_id in subjects else e.subject_id }}</option>{% endfor %}</select></div>
+  </form>
+  {% if labs %}
+  <form method="post" action="/semester">
+    <input type="hidden" name="profile_id" value="{{ current.id }}"><input type="hidden" name="subject_id" value="{{ subject_id }}">
+    <div class="table-wrap" style="margin-bottom:14px">
+      <table class="t"><thead><tr><th style="width:44px"><span class="sr-only">Включить</span></th><th>№</th><th>Тема</th><th>Статус</th></tr></thead>
+        <tbody>{% for l in labs %}<tr>
+          <td><input type="checkbox" name="numbers" value="{{ l.number }}" checked aria-label="Включить ЛР {{ l.number }}"></td>
+          <td class="nowrap">ЛР {{ l.number }}</td><td>{{ l.spec.topic if l.spec else '' }}</td>
+          <td><span class="status s-{{ l.status }}">{{ STATUS_RU[l.status] }}</span></td></tr>{% endfor %}</tbody></table>
+    </div>
+    <p class="small muted">Номера страниц в содержании и «Продолжение листинга» расставит Word при сборке. Без Word номера посчитает LibreOffice.</p>
+    <button class="btn primary" type="submit">Собрать и скачать</button>
+  </form>
+  {% else %}
+    <div class="empty">По этому предмету ещё нет написанных лаб.</div>
+  {% endif %}
+  {% endif %}
+</main>
+{% endblock %}

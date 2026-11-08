@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Настройки{% endblock %}
+{% block body %}
+<main class="page narrow">
+  {% include "_flash.html" %}
+  <h1>Настройки</h1>
+  <form method="post" action="/settings">
+    <fieldset><legend>Режим работы</legend>
+      <label class="radio"><input type="radio" name="mode" value="cloud" {{ 'checked' if s.mode == 'cloud' }}> Облако — вход по e-mail, общий ключ модели у администратора</label><br>
+      <label class="radio"><input type="radio" name="mode" value="local" {{ 'checked' if s.mode == 'local' }}> Локально — данные только на этом ПК, свой ключ</label>
+      <div class="hint" style="margin-bottom:12px">В облаке ключ модели хранится в Supabase и пользователям не виден.</div>
+    </fieldset>
+    <fieldset><legend>Модель</legend>
+      <div class="grid2">
+        <div class="field"><label for="model">Модель</label>
+          <select id="model" name="model">
+            {% for m in ['deepseek-v4.1-flash', 'deepseek-v4-flash'] %}<option value="{{ m }}" {{ 'selected' if s.model == m }}>{{ m }}</option>{% endfor %}
+            {% if s.model not in ['deepseek-v4.1-flash', 'deepseek-v4-flash'] %}<option value="{{ s.model }}" selected>{{ s.model }}</option>{% endif %}
+          </select></div>
+        <div class="field"><label for="base_url">Адрес API (для локального режима)</label>
+          <input id="base_url" name="base_url" type="text" value="{{ s.base_url }}" list="presets">
+          <datalist id="presets">{% for k, pr in presets.items() %}<option value="{{ pr.base_url }}">{{ pr.title }}</option>{% endfor %}</datalist></div>
+      </div>
+      <div class="field"><label for="api_key">Ключ API (для локального режима)</label>
+        <input id="api_key" name="api_key" type="password" autocomplete="off" placeholder="{{ 'Ключ сохранён — вставь новый, чтобы заменить' if has_key else 'sk-…' }}">
+        <div class="hint">Хранится в диспетчере учётных данных Windows, не в файлах.</div></div>
+    </fieldset>
+    <fieldset><legend>Программы на этом ПК</legend>
+      <p class="small">Word: <b>{{ 'найден' if word else 'не найден' }}</b>{% if not word %} — номера страниц посчитает LibreOffice, «Продолжение листинга» расставится, когда запустишь на ПК с Word.{% endif %}</p>
+      <div class="field"><label for="soffice_path">LibreOffice (soffice)</label>
+        <input id="soffice_path" name="soffice_path" type="text" value="{{ s.soffice_path or '' }}" placeholder="{{ soffice or 'не найден' }}"></div>
+      <div class="field"><label for="tesseract_path">Tesseract для фото методичек</label>
+        <input id="tesseract_path" name="tesseract_path" type="text" value="{{ s.tesseract_path or '' }}" placeholder="C:\Program Files\Tesseract-OCR\tesseract.exe"></div>
+    </fieldset>
+    <div class="row"><button class="btn primary" type="submit">Сохранить</button></div>
+  </form>
+  <form method="post" action="/settings/check" style="margin-top:14px">
+    <button class="btn" type="submit">Проверить подключение к модели</button></form>
+</main>
+{% endblock %}

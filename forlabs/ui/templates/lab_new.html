@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Новая лаба{% endblock %}
+{% block body %}
+<main class="page narrow">
+  {% include "_flash.html" %}
+  <h1>Новая лаба</h1>
+  <p class="muted">Добавь методичку — приложение разберёт тему, цель, задания, вариант и контрольные вопросы. Перед выполнением всё покажет на проверку.</p>
+  <form method="post" action="/labs/new" enctype="multipart/form-data">
+    <div class="grid3">
+      <div class="field"><label for="profile_id">Профиль</label>
+        <select id="profile_id" name="profile_id">{% for p in profiles %}<option value="{{ p.id }}" {{ 'selected' if p.id == profile_id }}>{{ p.full_name }}</option>{% endfor %}</select></div>
+      <div class="field"><label for="subject_id">Предмет</label>
+        <select id="subject_id" name="subject_id">{% for sid, s in subjects.items() %}<option value="{{ sid }}" {{ 'selected' if sid == subject_id }}>{{ s.name }}</option>{% endfor %}</select></div>
+      <div class="field"><label for="number">Номер лабы</label><input id="number" name="number" type="text" placeholder="из методички">
+        <div class="hint">Можно не заполнять.</div></div>
+    </div>
+    <div class="field">
+      <span style="display:block;font-weight:500;margin-bottom:4px">Методичка</span>
+      <div class="dropzone" data-dropzone>
+        <div>Перетащи сюда PDF, DOCX, TXT или фото страниц</div>
+        <input type="file" name="files" multiple accept=".pdf,.docx,.txt,.md,.png,.jpg,.jpeg" aria-label="Файлы методички">
+        <div class="files-picked" data-picked></div>
+      </div>
+    </div>
+    <div class="field"><label for="text">Или вставь текст методички</label>
+      <textarea id="text" name="text" rows="8" placeholder="Лабораторная работа №…&#10;Тема: …&#10;Цель: …"></textarea></div>
+    <div class="row"><button class="btn primary" type="submit">Разобрать методичку</button>
+      <a class="btn link" href="/">Отмена</a></div>
+  </form>
+</main>
+{% endblock %}

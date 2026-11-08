@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Пользователи{% endblock %}
+{% block body %}
+<main class="page">
+  {% include "_flash.html" %}
+  <h1>Пользователи</h1>
+  <p class="muted">Новые аккаунты не работают, пока их не одобрит администратор. Расход — токены модели за всё время.</p>
+  <div class="table-wrap">
+    <table class="t">
+      <thead><tr><th>E-mail</th><th>Имя</th><th>Роль</th><th>Доступ</th><th>Расход</th><th></th></tr></thead>
+      <tbody>
+      {% for m in members %}
+        <tr>
+          <td>{{ m.email }}</td><td>{{ m.display_name }}</td>
+          <td>{{ 'администратор' if m.role == 'admin' else 'участник' }}</td>
+          <td><span class="status {{ 's-rendered' if m.approved else 's-needs_manual' }}">{{ 'одобрен' if m.approved else 'ждёт одобрения' }}</span></td>
+          <td class="nowrap">{{ '{:,}'.format(usage.get(m.user_id, 0)).replace(',', ' ') }}</td>
+          <td>{% if m.user_id != me.user_id %}
+            <form method="post" action="/users/{{ m.user_id }}/approve"><input type="hidden" name="approved" value="{{ '0' if m.approved else '1' }}">
+              <button class="btn small {{ 'danger' if m.approved else 'primary' }}" type="submit">{{ 'Отключить' if m.approved else 'Одобрить' }}</button></form>
+          {% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</main>
+{% endblock %}

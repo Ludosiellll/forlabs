@@ -43,6 +43,7 @@ class Pipeline:
         self.soffice = soffice
         self.memory = memory
         self._locks: dict[str, threading.Lock] = {}
+        self.renamed: dict[str, str] = {}
 
     # служебное
     def key(self, st: LabState) -> str:
@@ -128,7 +129,12 @@ class Pipeline:
                                           None if st.number == "новая" else st.number, date or today())
             old_dir = self.lab_dir(st)
             if st.number != spec.number:
+                old_key = self.key(st)
                 st = self._renumber(st, spec.number, old_dir)
+                spec.number = st.number
+                for ev in self.bus.history(old_key):
+                    self.bus.publish(self.key(st), ev.text, ev.kind, ev.step)
+                self.bus.publish(old_key, st.number, "moved")
             st.spec, st.findings, st.status, st.error = spec, findings, "parsed", None
             self._emit(st, f"Разбор готов: {len(spec.tasks)} заданий, {len(spec.questions)} вопросов", "done",
                        step="parse")
@@ -137,7 +143,11 @@ class Pipeline:
             return self._fail(st, e)
 
     def _renumber(self, st: LabState, number: str, old_dir: Path) -> LabState:
+        old_key = self.key(st)
+        if self.store.load_lab(st.profile_id, st.subject_id, number) is not None:
+            number = f"{number}-{len(self.renamed) + 2}"
         st = st.model_copy(update={"number": number})
+        self.renamed[old_key] = number
         new_dir = self.lab_dir(st)
         if old_dir.exists() and old_dir != new_dir:
             if new_dir.exists():
