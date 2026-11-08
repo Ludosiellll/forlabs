@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field, field_validator
 from forlabs.core.models import Enrollment, Finding, LabSpec, Task
 from forlabs.core.subjects import Subject
 from forlabs.core.text import normalize_for_compare
-from forlabs.ingest.extract import SourceText
+from forlabs.ingest.extract import SourceText, join_hyphenation
 from forlabs.spec.prompts import SPEC_SYSTEM, SPEC_USER
 
 MAX_SOURCE_CHARS = 400_000
@@ -51,7 +51,7 @@ _LABEL = re.compile(r"^\s*(?:Тема(?:\s+работы)?|Цел[ьи](?:\s+ра
 
 
 def one_line(s: str) -> str:
-    s = re.sub(r"(\w)-\s*\n\s*(\w)", r"\1\2", s)
+    s = join_hyphenation(s)
     s = " ".join(s.split())
     s = re.sub(r"\s+([,.;:!?)»])", r"\1", s)  # пробел перед знаком препинания из PDF
     return re.sub(r"([(«])\s+", r"\1", s)
@@ -61,15 +61,24 @@ def _starts_lower(s: str) -> bool:
     return bool(s) and s[0].isalpha() and s[0].islower()
 
 
+_SUB_MARKER = re.compile(r"^\s*([а-яёa-z]\)|\d+\))\s+")
+
+
 def merge_subitems(items: list[str]) -> list[str]:
-    """Подпункты («описать …;») — часть предыдущего задания: дописываем их в него с нумерацией «1) …»."""
+    """Подпункты («описать …;») — часть предыдущего задания, если оно кончается двоеточием.
+
+    Буквенные и скобочные маркеры методички («а)», «1)») сохраняются; тире, точки и пункты без маркера
+    нумеруются «1) …». Строчное задание без такого «родителя» остаётся отдельным."""
     out: list[str] = []
     k = 0
     for raw in items:
-        text = clean_item(raw)
-        if out and _starts_lower(text):
+        line = one_line(raw)
+        marker = _SUB_MARKER.match(line)
+        text = clean_item(line[marker.end():] if marker else line)
+        opens = bool(out) and (out[-1].endswith(":") or k > 0)
+        if opens and (marker or _starts_lower(text)):
             k += 1
-            out[-1] = f"{out[-1]} {k}) {text}"
+            out[-1] = f"{out[-1]} {marker.group(1) if marker else f'{k})'} {text}"
         else:
             k = 0
             out.append(text)

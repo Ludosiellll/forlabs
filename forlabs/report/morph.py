@@ -23,6 +23,11 @@ def _morph() -> pymorphy3.MorphAnalyzer:
     return pymorphy3.MorphAnalyzer()
 
 
+def is_known_word(word: str) -> bool:
+    """Есть ли слово в словаре (для склейки переносов в методичке)."""
+    return _morph().word_is_known(word.lower())
+
+
 class ConclusionResult(BaseModel):
     text: str
     needs_confirm: bool = False

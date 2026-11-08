@@ -21,10 +21,57 @@ TEXT = ("Лабораторная работа №7\nТема работы: Со
         "1. Создайте 2 простых анимации к выбранной тематике.\n2. Создайте анимированное меню. Эти програм-\nмы проверяются.")
 
 
-def test_normalize_joins_hyphenation_and_drops_page_numbers():
-    s = normalize("Эти програм-\nмы работают\n\n12\n\nДалее текст")
+def test_normalize_joins_hyphenation():
+    s = normalize("Эти програм-\nмы работают")
     assert "программы работают" in s
-    assert "\n12\n" not in s
+
+
+@pytest.mark.parametrize("src,expected", [
+    ("Создать веб-\nстраницу сайта", "Создать веб-страницу сайта"),
+    ("клиент-\nсерверная архитектура", "клиент-серверная архитектура"),
+    ("адрес e-\nmail в форме", "адрес e-mail в форме"),
+    ("для конфигу-\nрации сети", "для конфигурации сети"),
+])
+def test_hyphenation_keeps_real_hyphens(src, expected):
+    assert normalize(src) == expected
+
+
+def test_normalize_keeps_numeric_lines():
+    # в DOCX и TXT нет страниц: строки-числа — это данные (ячейки таблиц вариантов)
+    s = normalize("Вариант\n1\n2\n3\nЗадание")
+    assert s == "Вариант\n1\n2\n3\nЗадание"
+
+
+def _pdf_pages(tmp_path, pages):
+    font = _cyrillic_font()
+    if font is None:
+        pytest.skip("нет шрифта с кириллицей")
+    pdf = tmp_path / "pages.pdf"
+    doc = pymupdf.open()
+    for top, body, bottom in pages:
+        page = doc.new_page()
+        page.insert_font(fontname="F0", fontfile=font)
+        if top:
+            page.insert_text((50, 40), top, fontname="F0", fontsize=9)
+        page.insert_text((50, 90), body, fontname="F0", fontsize=11)
+        if bottom:
+            page.insert_text((290, 800), bottom, fontname="F0", fontsize=11)
+    doc.save(pdf)
+    return pdf
+
+
+def test_pdf_drops_page_numbers_and_running_header_but_keeps_table_numbers(tmp_path):
+    head = "МДК 01.01 Системное программирование"
+    pdf = _pdf_pages(tmp_path, [
+        (head, "Таблица вариантов\nВариант\n1\n2\n3\nКонец таблицы", "5"),
+        (head, "Задание\n4\nПятый пункт", "6"),
+        (head, "Контрольные вопросы", "7"),
+    ])
+    lines = extract_text(pdf).text.split("\n")
+    assert head not in lines
+    assert "5" not in lines and "6" not in lines and "7" not in lines
+    assert lines[lines.index("Вариант") + 1:lines.index("Вариант") + 4] == ["1", "2", "3"]
+    assert "4" in lines
 
 
 def test_pdf_roundtrip(tmp_path):

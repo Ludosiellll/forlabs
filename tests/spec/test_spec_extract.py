@@ -8,7 +8,7 @@ from forlabs.core.models import Enrollment
 from forlabs.core.settings import Settings
 from forlabs.core.subjects import SUBJECTS
 from forlabs.ingest.extract import SourceText, normalize
-from forlabs.spec.extract import extract_spec, verify_verbatim
+from forlabs.spec.extract import extract_spec, merge_subitems, one_line, verify_verbatim
 
 SRC = SourceText(normalize((Path(__file__).parents[1] / "fixtures" / "methodology_psip_lr7.txt").read_text("utf-8")))
 ENR = Enrollment(subject_id="psip", title_subject="ПССИП", variant=14, header_style="short")
@@ -111,6 +111,20 @@ def test_subitems_merged_into_parent_task():
                                        "2) занести в этот массив объекты дочерних классов; 3) продемонстрировать "
                                        "работу методов класса у всех элементов этого массива.")
     assert findings == []
+
+
+def test_lowercase_item_without_colon_parent_stays_separate():
+    assert merge_subitems(["Создать форму входа.", "добавить кнопку выхода."]) == \
+        ["Создать форму входа.", "добавить кнопку выхода."]
+
+
+def test_subitems_keep_letter_markers():
+    assert merge_subitems(["Сделать в методе Main:", "а) описать массив;", "б) заполнить его."]) == \
+        ["Сделать в методе Main: а) описать массив; б) заполнить его."]
+
+
+def test_one_line_keeps_compound_hyphen():
+    assert one_line("Создать веб-\nстраницу") == "Создать веб-страницу"
 
 
 def test_space_before_comma_and_assignment_not_a_task():
