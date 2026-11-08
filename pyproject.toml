@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "forlabs"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Выполнение и оформление лабораторных работ по канону колледжа"
 requires-python = ">=3.11"
 dependencies = [
@@ -32,8 +32,11 @@ dev = ["pytest>=8"]
 [tool.setuptools.packages.find]
 include = ["forlabs*"]
 
+[tool.setuptools.dynamic]
+version = {attr = "forlabs.version.__version__"}
+
 [tool.setuptools.package-data]
-forlabs = ["render/assets/*", "executors/assets/*", "ui/templates/*", "ui/static/*", "ui/static/fonts/*", "../rules/**/*"]
+forlabs = ["render/assets/*", "executors/assets/*", "ui/templates/*", "ui/static/*", "ui/static/fonts/*", "rules/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

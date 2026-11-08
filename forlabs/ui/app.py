@@ -197,7 +197,9 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
 
     @app.get("/health")
     def health():
-        return {"app": "forlabs"}
+        from forlabs.version import __version__
+
+        return {"app": "forlabs", "version": __version__}
 
     @app.exception_handler(Exception)
     async def unexpected_error(request: Request, exc: Exception):

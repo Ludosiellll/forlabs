@@ -9,7 +9,7 @@ from typing import Callable, Literal
 from forlabs.core import paths
 from forlabs.core.fs import atomic_write_text
 
-RULES_DIR = Path(__file__).resolve().parents[2] / "rules"
+RULES_DIR = Path(__file__).resolve().parents[1] / "rules"
 Stage = Literal["write", "repair", "code", "design"]
 
 STAGE_FILES: dict[str, list[str]] = {
@@ -53,9 +53,34 @@ def _order(path: str) -> tuple:
     return (group, path.endswith("_template.md"), rule_title(path))
 
 
+_BUILTIN: dict[str, str] | None = None
+_SOURCE = "none"
+
+
+def builtin_rules() -> dict[str, str]:
+    """Поставляемые правила: в собранном exe — встроенные в машинный код (forlabs/_embedded_rules.py создаёт
+    tools/embed_rules.py при сборке, папки rules рядом с программой нет), иначе — файлы пакета."""
+    global _BUILTIN, _SOURCE
+    if _BUILTIN is None:
+        try:
+            from forlabs import _embedded_rules  # type: ignore[attr-defined]
+
+            _BUILTIN, _SOURCE = _embedded_rules.load(), "embedded"
+        except ImportError:
+            _BUILTIN = {p.relative_to(RULES_DIR).as_posix(): p.read_text(encoding="utf-8")
+                        for p in RULES_DIR.rglob("*.md")} if RULES_DIR.exists() else {}
+            _SOURCE = "files" if _BUILTIN else "none"
+    return _BUILTIN
+
+
+def rules_source() -> str:
+    """embedded — встроены в программу, files — папка пакета, none — правил нет."""
+    builtin_rules()
+    return _SOURCE
+
+
 def list_rule_files() -> list[RuleFile]:
-    files = [RuleFile(p.relative_to(RULES_DIR).as_posix(), p.read_text(encoding="utf-8"))
-             for p in RULES_DIR.rglob("*.md")]
+    files = [RuleFile(path, text) for path, text in builtin_rules().items()]
     return sorted(files, key=lambda f: _order(f.path))
 
 
@@ -87,8 +112,7 @@ class RuleBook:
         overrides = self._get() if overrides is None else overrides
         if path in overrides:
             return overrides[path]
-        f = RULES_DIR / path
-        return f.read_text(encoding="utf-8") if f.exists() else None
+        return builtin_rules().get(path)
 
     def load(self, stage: Stage, subject_id: str) -> str:
         overrides = self._get()

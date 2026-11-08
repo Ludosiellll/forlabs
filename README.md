@@ -83,7 +83,7 @@ python -m forlabs --browser        # интерфейс в браузере
 ```
 
 - `forlabs/` — код: `core` (модели, хранилище, LLM, правила), `ingest`, `spec`, `report`, `antiai`, `render`, `pipeline`, `cloud`, `ui`.
-- `rules/` — правила для модели.
+- `forlabs/rules/` — правила для модели (в exe встраиваются в машинный код: `tools/embed_rules.py`).
 - `supabase/` — миграции базы и функция-прокси `llm`.
 - `tools/extract_exemplars.py` — снятие канона с эталонных отчётов; `tools/live_run.py` — живой прогон; `tools/ui_screens.py` — скриншоты интерфейса.
 - Спецификация и план: `docs/superpowers/`.
