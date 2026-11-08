@@ -88,6 +88,7 @@ jobs:
             --include-package-data=docx `
             --include-module=win32timezone `
             --nofollow-import-to=pymupdf.mupdf --include-module=pymupdf._mupdf `
+            --no-deployment-flag=excluded-module-usage `
             --include-data-files="${mupdf}=pymupdf/mupdf.py" `
             --nofollow-import-to=pytest --nofollow-import-to=tests
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
