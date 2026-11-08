@@ -267,3 +267,24 @@ def test_final_rerenders_stale_docx_with_screenshot_slot(tmp_home, tmp_path):
     st = pipe.mark_final(st)
     out = tmp_path / "сдача" / "ПССИП" / "ЛР7" / "ЛР7_ПССИП.docx"
     assert "Вставить скриншот" not in zipfile.ZipFile(out).read("word/document.xml").decode()
+
+
+def test_render_uses_current_profile_and_spec(tmp_home, tmp_path):
+    from forlabs.core.models import Finding
+
+    pipe, _ = setup(tmp_home, tmp_path, [RAW, SEC, SEC2, ANS])
+    st = pipe.create_lab("ivanov", "psip", [(FIXTURE.name, FIXTURE.read_bytes())])
+    st = pipe.execute(pipe.confirm(pipe.parse(st, date="24.09.2026"), None))
+    st = pipe.attach_screenshot(st, section=1, block=4, image=png_bytes())
+    # после выполнения поменяли профиль (другой человек) и дату в разборе
+    p = pipe.store.get_profile("ivanov")
+    pipe.store.save_profile(p.model_copy(update={"gender": "f", "group": "РС03-24"}))
+    st.spec.date = "01.10.2026"
+    st.findings = [Finding(stage="standard", rule_id="conclusion.formula", message="устарело")]
+    st = pipe.render(st)
+    assert st.report.conclusion == "Сформировала умение создавать визуальные эффекты и анимации на HTML – странице."
+    assert st.report.header["Номер учебной группы"] == "РС03-24"
+    assert st.report.header["Дата выполнения работы"] == "01.10.2026"
+    assert not [f for f in st.findings if f.rule_id == "conclusion.formula"]
+    xml = zipfile.ZipFile(st.docx_path).read("word/document.xml").decode()
+    assert "Сформировала" in xml and "01.10.2026" in xml

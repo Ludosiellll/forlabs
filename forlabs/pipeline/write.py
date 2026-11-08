@@ -142,6 +142,13 @@ def write_report(spec: LabSpec, profile: Profile, enrollment: Enrollment, subjec
         if spec.questions:
             emit("Ответы на контрольные вопросы")
         questions = answer_questions(spec, profile, subject, llm, rules)
-    return ReportDoc(lab_number=spec.number, header=build_header(spec, enrollment.header_style, profile.group),
-                     sections=sections, questions=questions,
-                     conclusion=spec.conclusion or goal_to_conclusion(spec.goal, profile.gender).text)
+    return refresh_derived(ReportDoc(lab_number=spec.number, sections=sections, questions=questions),
+                           spec, profile, enrollment)
+
+
+def refresh_derived(doc: ReportDoc, spec: LabSpec, profile: Profile, enrollment: Enrollment) -> ReportDoc:
+    """Номер, шапка и вывод не пишутся моделью: они всегда берутся из текущего разбора и профиля."""
+    return doc.model_copy(update={
+        "lab_number": spec.number,
+        "header": build_header(spec, enrollment.header_style, profile.group),
+        "conclusion": spec.conclusion or goal_to_conclusion(spec.goal, profile.gender).text})

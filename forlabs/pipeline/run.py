@@ -16,8 +16,8 @@ from forlabs.core.store import safe_name
 from forlabs.core.subjects import get_subject
 from forlabs.ingest.extract import SourceText, extract_many
 from forlabs.pipeline.events import EventBus
-from forlabs.pipeline.repair import check_and_repair, report_text
-from forlabs.pipeline.write import write_report
+from forlabs.pipeline.repair import check_all, check_and_repair, report_text
+from forlabs.pipeline.write import refresh_derived, write_report
 from forlabs.render.docx_builder import build_lab, build_semester
 from forlabs.render.finalize import finalize, has_slots
 from forlabs.spec.extract import extract_spec, verify_verbatim
@@ -311,6 +311,10 @@ class Pipeline:
     def render(self, st: LabState) -> LabState:
         try:
             profile = self._profile(st)
+            if st.spec is not None:
+                # профиль или разбор могли поменяться после выполнения: шапка, вывод и проверки — по текущим
+                st.report = refresh_derived(st.report, st.spec, profile, self._enrollment(profile, st.subject_id))
+                st.findings = check_all(st.report, st.spec, profile, self._others(st))
             self._emit(st, "Вёрстка по канону", step="render")
             d = self.lab_dir(st)
             self._fetch_missing(st)
