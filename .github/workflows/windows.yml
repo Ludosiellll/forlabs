@@ -38,8 +38,9 @@ jobs:
           python -m pytest -q -p no:cacheprovider -rfE --tb=line 2>&1 | Tee-Object -FilePath pytest.txt
           $code = $LASTEXITCODE
           if ($code -ne 0) {
-            Get-Content pytest.txt | Select-String -Pattern "^(FAILED|ERROR) |^[A-Z]:\\.*:\d+: " | Select-Object -First 50 |
-              ForEach-Object { Write-Output "::error title=pytest::$($_.Line)" }
+            # GitHub показывает не больше 10 аннотаций на шаг — все падения одной аннотацией
+            $lines = Get-Content pytest.txt | Select-String -Pattern "^(FAILED|ERROR) |^[A-Z]:\\.*:\d+: " | ForEach-Object { $_.Line }
+            Write-Output ("::error title=pytest::" + (($lines | Select-Object -First 120) -join "%0A"))
           }
           exit $code
 
@@ -76,7 +77,7 @@ jobs:
             --include-package=forlabs --include-package-data=forlabs `
             --noinclude-data-files="forlabs/rules/*.md" --noinclude-data-files="forlabs/rules/*/*.md" `
             --include-package=uvicorn --include-package=keyring.backends --include-package=win32ctypes `
-            --include-package=webview --include-package-data=webview `
+            --enable-plugin=pywebview `
             --include-package-data=pythonnet --include-package-data=clr_loader `
             --include-package-data=pymorphy3_dicts_ru --include-package-data=pymorphy3 `
             --include-package-data=docx --include-package-data=playwright `
@@ -124,7 +125,7 @@ jobs:
             --include-package=forlabs.installer --include-package-data=forlabs.installer `
             --nofollow-import-to=forlabs.cloud --nofollow-import-to=forlabs.core.settings `
             --nofollow-import-to=forlabs.core.instance --nofollow-import-to=keyring `
-            --include-package=webview --include-package-data=webview `
+            --enable-plugin=pywebview `
             --include-package-data=pythonnet --include-package-data=clr_loader `
             --include-data-files=build/payload.zip=payload.zip `
             --include-data-files=build/MicrosoftEdgeWebview2Setup.exe=MicrosoftEdgeWebview2Setup.exe
