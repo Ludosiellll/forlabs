@@ -59,7 +59,7 @@ def _error_from(r: httpx.Response) -> CloudError:
 class CloudAuth:
     def __init__(self, config: CloudConfig = DEFAULT, http: httpx.Client | None = None, use_keyring: bool = True):
         self.config = config
-        self.http = http or httpx.Client(timeout=30)
+        self.http = http or httpx.Client(timeout=httpx.Timeout(30, connect=5))
         self.use_keyring = use_keyring
         self.session: Session | None = None
         self._lock = threading.Lock()
@@ -128,7 +128,8 @@ class CloudAuth:
         d = r.json()
         user = d.get("user") or {}
         self.session = Session(access_token=d["access_token"], refresh_token=d["refresh_token"],
-                               expires_at=int(d.get("expires_at") or time.time() + int(d.get("expires_in", 3600))),
+                               # по своим часам: у ноутбука может быть неверное время или пояс
+                               expires_at=int(time.time()) + int(d.get("expires_in") or 3600),
                                user_id=user.get("id", ""), email=user.get("email", ""))
         self._save()
         return self.session

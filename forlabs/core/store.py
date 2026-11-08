@@ -68,7 +68,7 @@ class Store:
         st.updated_at = datetime.now().isoformat(timespec="seconds")
         atomic_write_text(d / "state.json", st.model_dump_json(indent=2))
 
-    def load_lab(self, profile_id: str, subject_id: str, number: str) -> LabState | None:
+    def load_lab(self, profile_id: str, subject_id: str, number: str, strict: bool = False) -> LabState | None:
         return _read_model(LabState, self.lab_dir(profile_id, subject_id, number) / "state.json")
 
     def list_labs(self, profile_id: str, subject_id: str) -> list[LabState]:

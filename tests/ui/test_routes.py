@@ -167,7 +167,7 @@ def test_preview_from_other_computer_offers_rerender(client, tmp_path):
     st.status = "rendered"
     ctx.store.save_lab(st)
     page = client.get(lab + "?tab=report").text
-    assert "на другом компьютере" in page and "/page/1" not in page
+    assert "Документ нужно пересобрать" in page and "/page/1" not in page
     assert "Скачать .docx" not in page and "Word на том компьютере" not in page
 
 

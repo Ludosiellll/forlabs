@@ -13,6 +13,25 @@ CFG = CloudConfig(url="https://proj.supabase.test", publishable_key="sb_publisha
 UID = "11111111-2222-3333-4444-555555555555"
 
 
+def _field(row: dict, key: str):
+    """Поле строки, в том числе путь внутрь JSON: state->>rev."""
+    if "->>" in key:
+        col, _, sub_key = key.partition("->>")
+        v = (row.get(col) or {}).get(sub_key)
+        return None if v is None else str(v)
+    v = row.get(key)
+    return None if v is None else str(v)
+
+
+def _match(row: dict, params) -> bool:
+    for k, v in params.items():
+        if v.startswith("eq.") and _field(row, k) != v[3:]:
+            return False
+        if v == "is.null" and _field(row, k) is not None:
+            return False
+    return True
+
+
 class FakeSupabase:
     def __init__(self):
         self.tables = {"student_profiles": [], "labs": [], "members": [
@@ -96,21 +115,20 @@ class FakeSupabase:
                         row.setdefault("owner", UID)  # в базе owner = auth.uid() по умолчанию
                     keys = {"student_profiles": ("id",), "labs": ("profile_id", "subject_id", "number"),
                             "member_notes": ("user_id",)}.get(table, ())
+                    same = [r for r in rows if keys and all(r.get(k) == row.get(k) for k in keys)]
+                    if same and "merge-duplicates" not in req.headers.get("prefer", ""):
+                        return httpx.Response(409, json={"code": "23505", "message": "duplicate key"})
                     rows[:] = [r for r in rows if any(r.get(k) != row.get(k) for k in keys)] if keys else rows
                     rows.append(row)
                 return httpx.Response(201, json=[])
             if req.method == "GET":
-                out = rows
-                for k, v in req.url.params.items():
-                    if v.startswith("eq."):
-                        out = [r for r in out if str(r.get(k)) == v[3:]]
-                return httpx.Response(200, json=out)
+                return httpx.Response(200, json=[r for r in rows if _match(r, req.url.params)])
             if req.method == "PATCH":
-                for k, v in req.url.params.items():
-                    if v.startswith("eq."):
-                        for r in rows:
-                            if str(r.get(k)) == v[3:]:
-                                r.update(json.loads(req.content))
+                hit = [r for r in rows if _match(r, req.url.params)]
+                for r in hit:
+                    r.update(json.loads(req.content))
+                if "return=representation" in req.headers.get("prefer", ""):
+                    return httpx.Response(200, json=hit)
                 return httpx.Response(204)
             if req.method == "DELETE":
                 conds = {k: v[3:] for k, v in req.url.params.items() if v.startswith("eq.")}
@@ -278,5 +296,6 @@ def test_offline_shows_local_copy(auth, fake, tmp_home):
     assert [p.id for p in store.list_profiles()] == ["ivanov"]
     assert store.offline is True
     fake.drop_next = 0
+    store._offline_until = 0  # прошло 30 с — снова пробуем облако
     store.list_profiles()
     assert store.offline is False

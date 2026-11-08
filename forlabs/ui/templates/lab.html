@@ -90,7 +90,9 @@
 
   <section class="lab-center" aria-label="Документ">
     {% include "_flash.html" %}
-    {% set interrupted = st.status == 'executing' and not busy %}
+    {% set interrupted = st.status == 'executing' and not busy and not elsewhere %}
+    {% if elsewhere %}<div class="notice warn" style="width:100%;max-width:760px">Лаба сейчас выполняется на другом компьютере. Когда там закончится — обнови страницу.</div>{% endif %}
+    {% if st.pending_uploads %}<div class="notice warn" style="width:100%;max-width:760px">{{ st.pending_uploads|length }} файл(ов) ещё не отправлено в облако (не было связи) — отправлю при следующей сборке документа. Не удаляй их с этого компьютера.</div>{% endif %}
     {% if (st.status == 'failed' and st.error) or interrupted %}<div class="notice err" style="width:100%;max-width:760px">
       {{ st.error if st.status == 'failed' else 'Работа прервалась: приложение закрывали или пропала связь. Написанное сохранено.' }}
       {% if st.spec and not busy %}
@@ -115,8 +117,8 @@
     {% if tab == 'report' %}
       {% if st.pages and not preview_here and not busy %}
         <div class="pane">
-          <h2>Предпросмотр сделан на другом компьютере</h2>
-          <p class="muted">Текст отчёта сохранён в облаке. Нажми «Пересобрать документ» — я скачаю рисунки и сверстаю отчёт здесь.</p>
+          <h2>Документ нужно пересобрать</h2>
+          <p class="muted">Отчёт менялся после последней вёрстки (правка, скриншот, другой компьютер) или вёрстку прервали. Текст сохранён — нажми «Пересобрать документ».</p>
           <form method="post" action="{{ base_url }}/rerender"><button class="btn primary" type="submit">Пересобрать документ</button></form>
         </div>
       {% elif st.pages and preview_here %}
@@ -151,8 +153,8 @@
       <div class="pane">
         {% if st.spec %}
         {% set spec_findings = st.findings|selectattr('stage', 'equalto', 'spec')|list %}
-        {% if spec_findings %}<div class="notice warn">Не всё найдено в методичке дословно — проверь отмеченные места:
-          {% for f in spec_findings %}<div class="small">· {{ f.location }}: {{ f.text }}</div>{% endfor %}</div>{% endif %}
+        {% if spec_findings %}<div class="notice warn">Проверь разбор:
+          {% for f in spec_findings %}<div class="small">· {{ f.location }}: {{ f.message }}{% if f.text %} — «{{ f.text[:160] }}»{% endif %}</div>{% endfor %}</div>{% endif %}
         <form method="post" action="{{ base_url }}/confirm">
           <div class="field"><label for="topic">Тема</label><input id="topic" name="topic" type="text" value="{{ st.spec.topic }}"></div>
           <div class="field"><label for="goal">Цель</label><textarea id="goal" name="goal" rows="2">{{ st.spec.goal }}</textarea></div>
@@ -187,7 +189,7 @@
 {% endfor %}</textarea><div class="hint">Пусто — раздела с вопросами в отчёте не будет.</div></div>
           <div class="row"><button class="btn" type="submit">Сохранить разбор</button></div>
         </form>
-        <form method="post" action="{{ base_url }}/execute" style="margin-top:10px">
+        <form method="post" action="{{ base_url }}/execute" style="margin-top:10px"{% if st.report and not (st.status in ('failed', 'executing') and not complete) %} onsubmit="return confirm('Текст всех заданий будет написан заново, вставленные скриншоты нужно будет вставить снова. Нынешний отчёт сохранится в версиях — к нему можно вернуться из чата правок. Продолжить?')"{% endif %}>
           <button class="btn primary" type="submit" {{ 'disabled' if busy }}>{{ 'Выполнить заново' if st.report else 'Выполнить' }}</button>
           {% if st.report %}<span class="small muted">{{ 'Допишу недостающие задания и ответы.' if st.status in ('failed', 'executing') and not complete else 'Текст всех заданий будет написан заново.' }}</span>{% endif %}
         </form>

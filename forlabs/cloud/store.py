@@ -27,12 +27,17 @@ from forlabs.cloud.admin import (
 )
 from forlabs.cloud.auth import CloudAuth, CloudError
 from forlabs.core import paths
-from forlabs.core.fs import atomic_write_text
+from forlabs.core.fs import atomic_write_bytes, atomic_write_text
 from forlabs.core.models import LabState, LabSummary, Profile, summarize
 from forlabs.core.netcert import is_cert_error, offline_message
 from forlabs.core.store import Store, _number_key, _read_model, safe_name
 
 BUCKET = "labs"
+OFFLINE_HOLD = 30.0  # секунд после обрыва чтение идёт сразу в копию на компьютере
+CONFLICT_MESSAGE = ("Лаба изменилась на другом компьютере или в другой вкладке — обнови страницу. Изменения с того "
+                    "компьютера сохранены, а это действие — нет, повтори его.")
+OFFLINE_COPY_MESSAGE = ("Нет связи с облаком: лаба открыта из копии на этом компьютере — её можно смотреть и "
+                        "скачивать, а менять — когда вернётся связь.")
 
 
 class Member(BaseModel):
@@ -82,6 +87,7 @@ class CloudStore:
         self.cfg = auth.config
         self.local = Store(cache_home or paths.data_home() / "cloud_cache")
         self.offline = False
+        self._offline_until = 0.0  # недавно не было связи: чтение с копией идёт сразу в копию
 
     # HTTP
     def _h(self, extra: dict | None = None) -> dict:
@@ -96,36 +102,40 @@ class CloudStore:
             raise CloudError(f"Облако ответило ошибкой {r.status_code}.", r.text[:300])
         return r
 
-    def _rest(self, method: str, table: str, params: dict | None = None, json=None, prefer: str | None = None):
+    def _rest(self, method: str, table: str, params: dict | None = None, json=None, prefer: str | None = None,
+              retries: bool = True, ok: tuple[int, ...] = ()):
         """Запрос к базе; обрыв связи и 5xx повторяются (все наши записи — upsert/patch/delete по ключу,
         повтор безопасен)."""
         refreshed = False
         attempt = 0
+        delays = self.retry_delays if retries else ()
         while True:
             try:
                 r = self.http.request(method, f"{self.cfg.url}/rest/v1/{table}", params=params, json=json,
                                       headers=self._h({"Prefer": prefer} if prefer else None))
             except CloudError as e:  # обрыв при обновлении входа — повторяется, как и сам запрос
-                if not e.offline or attempt == len(self.retry_delays) or is_cert_error(e.detail):
+                if not e.offline or attempt == len(delays) or is_cert_error(e.detail):
                     raise
-                time.sleep(self.retry_delays[attempt])
+                time.sleep(delays[attempt])
                 attempt += 1
                 continue
             except httpx.TransportError as e:
-                if attempt == len(self.retry_delays) or is_cert_error(str(e)):
+                if attempt == len(delays) or is_cert_error(str(e)):
                     raise CloudError(offline_message(e), str(e), offline=True) from e
-                time.sleep(self.retry_delays[attempt])
+                time.sleep(delays[attempt])
                 attempt += 1
                 continue
-            if r.status_code >= 500 and attempt < len(self.retry_delays):
-                time.sleep(self.retry_delays[attempt])
+            if r.status_code >= 500 and attempt < len(delays):
+                time.sleep(delays[attempt])
                 attempt += 1
                 continue
             if r.status_code == 401 and not refreshed:  # часы компьютера сбиты: сервер считает вход просроченным
                 refreshed = True
                 self.auth.refresh()
                 continue
-            self.offline = False
+            self.offline, self._offline_until = False, 0.0
+            if r.status_code in ok:
+                return r
             return self._check(r)
 
     def _mine(self) -> dict:
@@ -156,12 +166,22 @@ class CloudStore:
         if not e.offline:
             raise e
         self.offline = True
+        self._offline_until = time.monotonic() + OFFLINE_HOLD
 
-    def list_profiles(self) -> list[Profile]:
+    def _read(self, table: str, params: dict):
+        """Чтение, у которого есть копия на компьютере: одна попытка без пауз; None — связи нет, брать копию."""
+        if time.monotonic() < self._offline_until:
+            self.offline = True
+            return None
         try:
-            rows = self._rest("GET", "student_profiles", params={"select": "data", **self._mine()}).json()
+            return self._rest("GET", table, params=params, retries=False).json()
         except CloudError as e:
             self._offline_or_raise(e)
+            return None
+
+    def list_profiles(self) -> list[Profile]:
+        rows = self._read("student_profiles", {"select": "data", **self._mine()})
+        if rows is None:
             return self._cached_profiles()
         profiles = sorted((Profile.model_validate(r["data"]) for r in rows), key=lambda p: p.full_name)
         for p in profiles:
@@ -169,11 +189,8 @@ class CloudStore:
         return profiles
 
     def get_profile(self, pid: str) -> Profile | None:
-        try:
-            rows = self._rest("GET", "student_profiles",
-                              params={"select": "data", "id": f"eq.{pid}", **self._mine()}).json()
-        except CloudError as e:
-            self._offline_or_raise(e)
+        rows = self._read("student_profiles", {"select": "data", "id": f"eq.{pid}", **self._mine()})
+        if rows is None:
             return next((p for p in self._cached_profiles() if p.id == pid), None)
         p = Profile.model_validate(rows[0]["data"]) if rows else None
         if p:
@@ -192,48 +209,87 @@ class CloudStore:
         return self.local.home / "labs" / safe_name(self.auth.user_id) / safe_name(profile_id) / \
             safe_name(subject_id) / f"ЛР{safe_name(number)}"
 
+    def _cache_lab(self, st: LabState) -> None:
+        try:
+            atomic_write_text(self.lab_dir(st.profile_id, st.subject_id, st.number) / "state.json",
+                              st.model_dump_json(indent=2))
+        except OSError:
+            pass
+
+    def _cached_lab(self, profile_id: str, subject_id: str, number: str) -> LabState | None:
+        st = _read_model(LabState, self.lab_dir(profile_id, subject_id, number) / "state.json")
+        if st is not None:
+            st._offline_copy = True  # только смотреть: запись такой копии затёрла бы облако
+        return st
+
+    def _cached_labs(self, profile_id: str, subject_id: str) -> list[LabState]:
+        d = self.lab_dir(profile_id, subject_id, "x").parent
+        states = [self._cached_lab(profile_id, subject_id, f.name[2:]) for f in d.iterdir()
+                  if f.is_dir() and f.name.startswith("ЛР") and ".old-" not in f.name] if d.exists() else []
+        return sorted((x for x in states if x is not None), key=lambda x: _number_key(x.number))
+
+    def _lab_key(self, st: LabState) -> dict:
+        return {**self._mine(), "profile_id": f"eq.{st.profile_id}", "subject_id": f"eq.{st.subject_id}",
+                "number": f"eq.{st.number}"}
+
     def save_lab(self, st: LabState) -> None:
+        """Запись с проверкой версии (rev): если лабу успели изменить на другом компьютере — отказ, а не затирание."""
         from datetime import datetime
 
-        st.updated_at = datetime.now().isoformat(timespec="seconds")
-        d = self.lab_dir(st.profile_id, st.subject_id, st.number)
-        d.mkdir(parents=True, exist_ok=True)
-        (d / "state.json").write_text(st.model_dump_json(indent=2), encoding="utf-8")
-        self._upsert("labs", {"profile_id": st.profile_id, "subject_id": st.subject_id, "number": st.number,
-                              "status": st.status, "state": st.model_dump(mode="json")},
-                     "owner,profile_id,subject_id,number")
+        if getattr(st, "_offline_copy", False):
+            raise CloudError(OFFLINE_COPY_MESSAGE, "копия без связи", offline=True)
+        import uuid
 
-    def load_lab(self, profile_id: str, subject_id: str, number: str) -> LabState | None:
+        expected, prev_write = st.rev, st.write_id
+        st.rev, st.updated_at = expected + 1, datetime.now().isoformat(timespec="seconds")
+        st.write_id = uuid.uuid4().hex[:12]
+        body = {"status": st.status, "state": st.model_dump(mode="json")}
         try:
-            rows = self._rest("GET", "labs", params={"select": "state", **self._mine(),
-                                                     "profile_id": f"eq.{profile_id}", "subject_id": f"eq.{subject_id}",
-                                                     "number": f"eq.{number}"}).json()
-        except CloudError as e:
-            self._offline_or_raise(e)
-            return _read_model(LabState, self.lab_dir(profile_id, subject_id, number) / "state.json")
-        return LabState.model_validate(rows[0]["state"]) if rows else None
+            cond = {"state->>rev": f"eq.{expected}"} if expected else {"state->>rev": "is.null"}
+            hit = self._rest("PATCH", "labs", params={**self._lab_key(st), **cond}, json=body,
+                             prefer="return=representation").json()
+            if not hit:
+                rows = self._rest("GET", "labs", params={"select": "state", **self._lab_key(st)}).json()
+                if not rows:
+                    r = self._rest("POST", "labs", json={"profile_id": st.profile_id, "subject_id": st.subject_id,
+                                                         "number": st.number, **body},
+                                   prefer="return=minimal", ok=(409,))
+                    if r.status_code == 409:
+                        raise CloudError(CONFLICT_MESSAGE, "лаба создана на другом компьютере")
+                elif (rows[0].get("state") or {}).get("write_id") != st.write_id:
+                    raise CloudError(CONFLICT_MESSAGE, f"в облаке версия {(rows[0].get('state') or {}).get('rev')}, "
+                                                       f"у нас {expected}")
+                # иначе — это наша же запись, ответ на которую потерялся при обрыве
+        except CloudError:
+            st.rev, st.write_id = expected, prev_write
+            raise
+        self._cache_lab(st)
+
+    def load_lab(self, profile_id: str, subject_id: str, number: str, strict: bool = False) -> LabState | None:
+        """strict — для решений и действий: без связи ошибка, а не копия с этого компьютера."""
+        params = {"select": "state", **self._mine(), "profile_id": f"eq.{profile_id}",
+                  "subject_id": f"eq.{subject_id}", "number": f"eq.{number}"}
+        rows = self._rest("GET", "labs", params=params).json() if strict else self._read("labs", params)
+        if rows is None:
+            return self._cached_lab(profile_id, subject_id, number)
+        st = LabState.model_validate(rows[0]["state"]) if rows else None
+        if st is not None:
+            self._cache_lab(st)
+        return st
 
     def list_labs(self, profile_id: str, subject_id: str) -> list[LabState]:
-        try:
-            rows = self._rest("GET", "labs", params={"select": "state", **self._mine(),
-                                                     "profile_id": f"eq.{profile_id}",
-                                                     "subject_id": f"eq.{subject_id}"}).json()
-        except CloudError as e:
-            self._offline_or_raise(e)
-            d = self.lab_dir(profile_id, subject_id, "x").parent
-            states = [_read_model(LabState, f / "state.json") for f in d.iterdir()] if d.exists() else []
-            return sorted((x for x in states if x is not None), key=lambda x: _number_key(x.number))
+        rows = self._read("labs", {"select": "state", **self._mine(), "profile_id": f"eq.{profile_id}",
+                                   "subject_id": f"eq.{subject_id}"})
+        if rows is None:
+            return self._cached_labs(profile_id, subject_id)
         return sorted((LabState.model_validate(r["state"]) for r in rows), key=lambda s: _number_key(s.number))
 
     def list_lab_summaries(self, profile_id: str, subject_id: str) -> list[LabSummary]:
         """Для главной: номер, статус, тема и дата — без полного состояния (отчёт, версии, методичка)."""
-        try:
-            rows = self._rest("GET", "labs", params={
-                "select": "number,status,updated:state->>updated_at,topic:state->spec->>topic", **self._mine(),
-                "profile_id": f"eq.{profile_id}", "subject_id": f"eq.{subject_id}"}).json()
-        except CloudError as e:
-            self._offline_or_raise(e)
-            return [summarize(x) for x in self.list_labs(profile_id, subject_id)]
+        rows = self._read("labs", {"select": "number,status,updated:state->>updated_at,topic:state->spec->>topic",
+                                   **self._mine(), "profile_id": f"eq.{profile_id}", "subject_id": f"eq.{subject_id}"})
+        if rows is None:
+            return [summarize(x) for x in self._cached_labs(profile_id, subject_id)]
         out = []
         for r in rows:
             state = r.get("state") or {}  # фейк в тестах отдаёт строку целиком
@@ -305,41 +361,61 @@ class CloudStore:
         self._upsert("custom_subjects", {"id": subject.id, "data": subject.model_dump(mode="json")}, "owner,id")
 
     # файлы
+    def _storage(self, method: str, path: str, headers: dict | None = None, **kw) -> httpx.Response:
+        """Запрос к хранилищу с теми же повторами, что у базы: обрыв, 5xx, просроченный вход (401) — один раз."""
+        refreshed, attempt = False, 0
+        while True:
+            try:
+                r = self.http.request(method, f"{self.cfg.url}/storage/v1/{path}", headers=self._h(headers), **kw)
+            except CloudError as e:  # обрыв при обновлении входа
+                if not e.offline or attempt >= len(self.retry_delays) or is_cert_error(e.detail):
+                    raise
+            except httpx.TransportError as e:
+                if attempt >= len(self.retry_delays) or is_cert_error(str(e)):
+                    raise CloudError(offline_message(e), str(e), offline=True) from e
+            else:
+                if r.status_code == 401 and not refreshed:
+                    refreshed = True
+                    self.auth.refresh()
+                    continue
+                if not (r.status_code >= 500 and attempt < len(self.retry_delays)):
+                    return r
+            time.sleep(self.retry_delays[attempt])
+            attempt += 1
+
     def upload(self, local: Path, profile_id: str, subject_id: str, number: str, rel: str) -> str:
         key = storage_key(self.auth.user_id, profile_id, subject_id, number, rel)
-        try:
-            r = self.http.post(f"{self.cfg.url}/storage/v1/object/{BUCKET}/{quote(key)}", content=Path(local).read_bytes(),
-                               headers=self._h({"x-upsert": "true", "Content-Type": "application/octet-stream"}))
-        except httpx.TransportError as e:
-            raise CloudError(offline_message(e), str(e), offline=True) from e
+        data = Path(local).read_bytes()
+        r = self._storage("POST", f"object/{BUCKET}/{quote(key)}", content=data,
+                          headers={"x-upsert": "true", "Content-Type": "application/octet-stream"})
         self._check(r)
         return key
 
     def download(self, key: str, local: Path) -> Path:
-        try:
-            r = self.http.get(f"{self.cfg.url}/storage/v1/object/{BUCKET}/{quote(key)}", headers=self._h())
-        except httpx.TransportError as e:
-            raise CloudError(offline_message(e), str(e), offline=True) from e
-        self._check(r)
-        local = Path(local)
-        local.parent.mkdir(parents=True, exist_ok=True)
-        local.write_bytes(r.content)
-        return local
+        r = self._check(self._storage("GET", f"object/{BUCKET}/{quote(key)}"))
+        atomic_write_bytes(local, r.content)
+        return Path(local)
 
     def fetch(self, profile_id: str, subject_id: str, number: str, rel: str, local: Path) -> bool:
         """Скачивает файл лабы по её пути (assets/…). False — такого файла в облаке нет."""
         key = storage_key(self.auth.user_id, profile_id, subject_id, number, rel)
-        try:
-            r = self.http.get(f"{self.cfg.url}/storage/v1/object/{BUCKET}/{quote(key)}", headers=self._h())
-        except httpx.TransportError as e:
-            raise CloudError(offline_message(e), str(e), offline=True) from e
+        r = self._storage("GET", f"object/{BUCKET}/{quote(key)}")
         if r.status_code == 404 or (r.status_code == 400 and "not_found" in r.text.replace(" ", "_").lower()):
             return False
         self._check(r)
-        local = Path(local)
-        local.parent.mkdir(parents=True, exist_ok=True)
-        local.write_bytes(r.content)
+        atomic_write_bytes(local, r.content)
         return True
+
+    def delete_file(self, profile_id: str, subject_id: str, number: str, rel: str) -> None:
+        key = storage_key(self.auth.user_id, profile_id, subject_id, number, rel)
+        self._storage("DELETE", f"object/{BUCKET}", json={"prefixes": [key]})
+
+    def wipe_local(self) -> None:
+        """Стереть копию лаб и профилей этого пользователя на компьютере (общий компьютер в колледже)."""
+        import shutil
+
+        for d in (self.local.home / "labs" / safe_name(self.auth.user_id), self._profiles_cache()):
+            shutil.rmtree(d, ignore_errors=True)
 
     # участники (для администратора)
     def member(self) -> Member | None:

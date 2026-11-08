@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated, Literal, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 Gender = Literal["m", "f"]
 HeaderStyle = Literal["long", "short"]
@@ -188,6 +188,7 @@ class LabState(BaseModel):
     findings: list[Finding] = Field(default_factory=list)
     accepted_rules: list[str] = Field(default_factory=list)
     docx_path: str | None = None
+    docx_sha: str | None = None  # отпечаток report.docx последней удачной вёрстки; None — документ устарел
     pdf_path: str | None = None
     pages: list[str] = Field(default_factory=list)
     engine: str | None = None
@@ -199,6 +200,12 @@ class LabState(BaseModel):
     wishes: str = ""  # пожелания, введённые при создании (до разбора)
     wish_images: list[str] = Field(default_factory=list)  # фото к пожеланиям
     wish_images_text: str = ""  # что модель прочитала с этих фото
+    rev: int = 0  # номер записи в облаке: запись с другого компьютера не затирается молча
+    write_id: str = ""  # метка последней записи: повтор после обрыва узнаёт свою же запись
+    lease_machine: str | None = None  # какой компьютер сейчас выполняет лабу
+    lease_until: str | None = None  # до какого времени (UTC) это считается правдой
+    pending_uploads: list[str] = Field(default_factory=list)  # файлы, не ушедшие в облако из-за обрыва
+    _offline_copy: bool = PrivateAttr(default=False)  # прочитана из копии без связи — только смотреть
 
 
 class LabSummary(BaseModel):

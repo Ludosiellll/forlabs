@@ -8,6 +8,7 @@ import shutil
 import threading
 import uuid
 from datetime import date as _date
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -36,7 +37,7 @@ from forlabs.pipeline.images import (
     prepare_image,
 )
 from forlabs.pipeline.repair import check_all, check_and_repair, report_text
-from forlabs.pipeline.write import refresh_derived, write_report
+from forlabs.pipeline.write import refresh_derived, section_has_content, write_report
 from forlabs.render.conformance import compare
 from forlabs.render.docx_builder import build_lab, build_semester
 from forlabs.render.finalize import finalize, has_slots
@@ -80,6 +81,10 @@ class Pipeline:
         self.memory = memory
         self._locks: dict[str, threading.Lock] = {}
         self.renamed: dict[str, str] = {}
+        self.background: set[str] = set()  # фоновая работа после «Сдать» (память предмета): окно спросит при закрытии
+        self._bg_lock = threading.Lock()
+        self._memory_locks: dict[str, threading.Lock] = {}
+        self._threads: list[threading.Thread] = []
 
     # служебное
     def key(self, st: LabState) -> str:
@@ -143,6 +148,11 @@ class Pipeline:
             header_style=subject.default_header_style)
 
     def _save(self, st: LabState) -> LabState:
+        if st.status == "executing":  # другой компьютер увидит, что лаба выполняется здесь, а не «прервалась»
+            st.lease_machine = machine_id()
+            st.lease_until = (datetime.now(timezone.utc) + LEASE).isoformat(timespec="seconds")
+        else:
+            st.lease_machine = st.lease_until = None
         self.store.save_lab(st)
         return st
 
@@ -153,8 +163,21 @@ class Pipeline:
                 if f.exists():
                     try:
                         self.store.upload(f, st.profile_id, st.subject_id, st.number, rel)
-                    except Exception as e:  # облако не должно ломать локальную работу
-                        self._emit(st, f"Не удалось отправить файл в облако: {e}", "warn")
+                        if rel in st.pending_uploads:
+                            st.pending_uploads.remove(rel)
+                    except Exception as e:  # облако не должно ломать локальную работу: отправим позже
+                        if rel not in st.pending_uploads:
+                            st.pending_uploads.append(rel)
+                        self._emit(st, f"Файл {rel} пока не отправлен в облако ({getattr(e, 'message_ru', e)}) — "
+                                       "отправлю при следующей вёрстке", "warn")
+
+    def _retry_pending(self, st: LabState) -> None:
+        """Файлы, не ушедшие в облако при обрыве, отправляются снова (исчезнувшие — забываются)."""
+        for rel in list(st.pending_uploads):
+            if not (self.lab_dir(st) / rel).exists():
+                st.pending_uploads.remove(rel)
+        if st.pending_uploads:
+            self._sync(st, list(st.pending_uploads))
 
     def _sync_assets(self, st: LabState) -> None:
         d = self.lab_dir(st)
@@ -206,9 +229,24 @@ class Pipeline:
             return st
 
     # шаги
+    @staticmethod
+    def _clear_leftover(d: Path) -> None:
+        """Папка лабы без читаемого состояния. С файлом состояния (битым) — откладывается в «ЛРN.old-<время>»,
+        чтобы снимки и отчёт можно было достать; без него — это остаток удалённой лабы, его можно стереть."""
+        if not d.exists():
+            return
+        if any(d.glob("state*")):
+            from datetime import datetime
+
+            aside = d.with_name(f"{d.name}.old-{datetime.now():%Y%m%d-%H%M%S}")
+            os.replace(d, aside)
+            logging.getLogger("forlabs").warning("Папка %s с нечитаемым состоянием отложена в %s", d, aside.name)
+        else:
+            shutil.rmtree(d, ignore_errors=True)
+
     def _taken(self, profile_id: str, subject_id: str, number: str) -> bool:
         """Номер занят настоящей лабой (папка без состояния — остаток удалённой или прерванной, её можно очистить)."""
-        return self.store.load_lab(profile_id, subject_id, number) is not None
+        return self.store.load_lab(profile_id, subject_id, number, strict=True) is not None
 
     def _save_images(self, st: LabState, images: list[tuple[str, bytes]], prefix: str) -> list[str]:
         """Проверяет и сохраняет фото в notes/; ошибка — PipelineError с понятным текстом, ничего не сохранено."""
@@ -232,16 +270,16 @@ class Pipeline:
                    number: str | None = None, pasted_text: str = "", wishes: str = "",
                    wish_images: list[tuple[str, bytes]] | None = None) -> LabState:
         number = (number or "").strip()
-        if number and self.store.load_lab(profile_id, subject_id, number) is not None:
+        if number and self.store.load_lab(profile_id, subject_id, number, strict=True) is not None:
             raise PipelineError(f"ЛР {number} уже есть. Открой её или удали, чтобы сделать заново.")
         if not number:
             number = f"{DRAFT_PREFIX}{uuid.uuid4().hex[:6]}"
         st = LabState(profile_id=profile_id, subject_id=subject_id, number=number, status="draft",
                       wishes=(wishes or "").strip()[:4000])
+        self._clear_leftover(self.lab_dir(st))  # остатки удалённой или нечитаемой лабы с тем же номером
         if wish_images:
             st.wish_images = self._save_images(st, wish_images, "wish")
         src = self.lab_dir(st) / "source"
-        shutil.rmtree(src, ignore_errors=True)  # остатки удалённой лабы с тем же номером не смешиваются
         src.mkdir(parents=True, exist_ok=True)
         for name, data in files:
             (src / safe_file_name(name)).write_bytes(data)
@@ -328,19 +366,28 @@ class Pipeline:
         new_dir = self.lab_dir(st)
         if old_dir.exists():
             new_dir.parent.mkdir(parents=True, exist_ok=True)
-            if new_dir.exists():  # папка без состояния (остаток) — иначе черновик окажется внутри неё
-                shutil.rmtree(new_dir, ignore_errors=True)
+            self._clear_leftover(new_dir)  # иначе черновик окажется внутри неё
             shutil.move(str(old_dir), str(new_dir))
             st.source_path = str(new_dir / "source")
         return st  # строку черновика удаляет parse — после сохранения под новым номером
 
     def confirm(self, st: LabState, spec: LabSpec | None) -> LabState:
+        old_tasks = [(t.n, t.text) for t in st.spec.tasks] if st.spec else None
         if spec is not None:
             st.spec = spec
         if st.spec is None:
             raise PipelineError("Сначала разбери методичку")
-        st.findings = verify_verbatim(st.spec, _SourceProxy(st.spec.source_text))
-        st.status = "confirmed"
+        keep = [f for f in st.findings if f.stage != "spec" or f.rule_id != "spec.not_verbatim"]
+        if not st.report:
+            keep = [f for f in keep if f.stage == "spec"]
+        st.findings = keep + verify_verbatim(st.spec, _SourceProxy(st.spec.source_text))
+        same_tasks = old_tasks == [(t.n, t.text) for t in st.spec.tasks]
+        if st.report is not None and same_tasks and st.status in ("rendered", "final", "needs_manual"):
+            # задания те же (поправили дату, вариант, вопросы): отчёт на месте, документ — пересобрать
+            st.status = "needs_manual" if st.status == "needs_manual" else "rendered"
+            st.docx_sha = None
+        else:
+            st.status = "confirmed"
         return self._save(st)
 
     def _others(self, st: LabState) -> dict[str, str]:
@@ -464,7 +511,7 @@ class Pipeline:
                 report, findings = check_and_repair(st.report, st.spec, profile, llm, self.rules, self._others(st),
                                                     on_event=lambda t: self._emit(st, t, step="check"))
                 st.report = _relative_images(report, self.lab_dir(st))
-                st.findings = findings
+                st.findings = _keep_spec(st.findings, findings)
                 self._sync_assets(st)
                 text = plan.reply or "Готово."
                 if changed:
@@ -486,6 +533,7 @@ class Pipeline:
                                            text=f"Не получилось: {reason} Отчёт не изменён — попробуй ещё раз."))
                 self._emit(st, f"Правка не удалась: {reason}", "error", step="write")
                 return self._save(st)
+            st.docx_sha = None  # документ устарел, пока вёрстка не закончится
             self._save(st)  # правка сохранена до вёрстки: выключение во время вёрстки её не потеряет
         st = self.render(st)
         if st.status == "failed":
@@ -507,6 +555,7 @@ class Pipeline:
             st.chat.append(ChatMessage(id=uuid.uuid4().hex[:8], role="assistant", at=_now(), kind="revert",
                                        version=current,
                                        text=f"Вернул отчёт к состоянию до правки «{target.label[:80]}»."))
+            st.docx_sha = None
             self._save(st)
         return self.render(st)
 
@@ -516,13 +565,22 @@ class Pipeline:
                 profile = self._profile(st)
                 subject = get_subject(st.subject_id)
                 enrollment = self._enrollment(profile, st.subject_id)
+                if not st.spec.tasks:
+                    raise PipelineError("В разборе нет заданий — добавь их на вкладке «Разбор методички».")
                 if only is None and st.status in ("failed", "executing") and st.report is not None:
-                    # прошлый запуск оборвался: дописываем только то, чего ещё нет
-                    done = {s.n for s in st.report.sections}
+                    # прошлый запуск оборвался: дописываем только то, чего ещё нет (пустые задания — заново)
+                    done = {s.n for s in st.report.sections if section_has_content(s)}
                     only = [t.n for t in st.spec.tasks if t.n not in done]
                     if done:
                         self._emit(st, f"Продолжаю: уже написаны задания {', '.join(map(str, sorted(done)))}",
                                    step="write")
+                elif only is None and st.report is not None:
+                    # «Выполнить заново»: прежний отчёт — в версии, новый пишется с чистого листа (если запуск
+                    # оборвётся, «Продолжить» допишет новый, а не выдаст старый за готовый)
+                    push_version(st, "до выполнения заново")
+                    st.report, st.docx_sha = None, None
+                elif only is not None and st.report is not None:
+                    push_version(st, f"до переписывания задания {', '.join(map(str, only))}")
                 st.status, st.error = "executing", None
                 self._save(st)
                 llm = self._llm(st)
@@ -542,11 +600,12 @@ class Pipeline:
                 report, findings = check_and_repair(report, st.spec, profile, llm, self.rules, self._others(st),
                                                     on_event=lambda t: self._emit(st, t, step="check"))
                 st.report = _relative_images(report, self.lab_dir(st))
-                st.findings = findings
+                st.findings = _keep_spec(st.findings, findings)
                 self._sync_assets(st)
                 left = [f for f in findings if f.severity == "error"]
                 self._emit(st, "Проверка: замечаний нет" if not left else f"Осталось замечаний: {len(left)}",
                            "done" if not left else "warn", step="check")
+                st.docx_sha = None
                 self._save(st)  # отчёт целиком — до вёрстки (Word может работать минуты)
                 return self.render(st)
             except Exception as e:  # любая ошибка — в статус лабы, а не в никуда
@@ -580,6 +639,7 @@ class Pipeline:
         b.image_path = rel
         self._sync(st, [rel])
         self._emit(st, f"Скриншот для задания {section} добавлен")
+        st.docx_sha = None
         self._save(st)  # скриншот сохранён до вёрстки
         return self.render(st)
 
@@ -591,9 +651,10 @@ class Pipeline:
             if st.spec is not None:
                 # профиль или разбор могли поменяться после выполнения: шапка, вывод и проверки — по текущим
                 st.report = refresh_derived(st.report, st.spec, profile, self._enrollment(profile, st.subject_id))
-                st.findings = check_all(st.report, st.spec, profile, self._others(st))
+                st.findings = _keep_spec(st.findings, check_all(st.report, st.spec, profile, self._others(st)))
             self._emit(st, "Вёрстка по канону", step="render")
             d = self.lab_dir(st)
+            self._retry_pending(st)
             self._fetch_missing(st)
             self._drop_broken_images(st)
             docx = d / "report.docx"
@@ -615,6 +676,7 @@ class Pipeline:
                 self._emit(st, f"Оформление отличается от эталона в {len(canon)} местах — смотри замечания", "warn",
                            step="render")
             st.docx_path, st.pdf_path = str(docx), str(rep.pdf)
+            st.docx_sha = file_sha(docx)
             st.pages = [str(p) for p in rep.pages]
             st.engine, st.warnings = rep.engine, rep.warnings
             st.status = "needs_manual" if self.slots(st) else "rendered"
@@ -634,9 +696,11 @@ class Pipeline:
         left = [f for f in st.findings if f.severity == "error" and not is_accepted(f, accepted)]
         if left:
             raise PipelineError(f"Остались замечания проверок ({len(left)}). Исправь или прими их явно.")
+        if st.spec is not None and not lab_complete(st):
+            raise PipelineError("Отчёт дописан не до конца — нажми «Продолжить».")
         docx = self.lab_dir(st) / "report.docx"
-        if not docx.exists() or has_slots(docx):
-            # документ свёрстан на другом компьютере или до вставки скриншотов — свёрстать заново
+        if not docx_fresh(st, self.lab_dir(st)) or has_slots(docx):
+            # документ устарел: свёрстан на другом компьютере, вёрстку оборвали или до вставки скриншотов
             st = self.render(st)
             if st.status == "failed" or not docx.exists() or has_slots(docx):
                 raise PipelineError(st.error or "Не удалось свёрстать отчёт без мест для скриншотов")
@@ -667,14 +731,25 @@ class Pipeline:
         st = self._save(st)  # сдано — сразу; память предмета обновляется в фоне (запрос к модели может быть долгим)
         if self.memory is not None:
             snapshot, llm = st.model_copy(deep=True), self._llm(st)
+            subject_key = f"{st.profile_id}/{st.subject_id}"
+            job = f"memory/{self.key(st)}"
+            with self._bg_lock:
+                self.background.add(job)
+                lock = self._memory_locks.setdefault(subject_key, threading.Lock())
 
             def update_memory() -> None:
                 try:
-                    self.memory.update(snapshot, llm)
+                    with lock:  # две сдачи подряд по одному предмету не теряют друг друга
+                        self.memory.update(snapshot, llm)
                 except Exception as e:
                     logging.getLogger("forlabs").warning("Память предмета не обновлена: %s", e)
+                finally:
+                    with self._bg_lock:
+                        self.background.discard(job)
 
-            threading.Thread(target=update_memory, name="memory-update", daemon=True).start()
+            t = threading.Thread(target=update_memory, name="memory-update", daemon=True)
+            self._threads = [x for x in self._threads if x.is_alive()] + [t]
+            t.start()
         return st
 
     def build_semester(self, profile_id: str, subject_id: str, numbers: list[str], out: Path) -> tuple[Path, object]:
@@ -697,14 +772,74 @@ class Pipeline:
         return out, rep
 
 
+LEASE = timedelta(minutes=15)  # вёрстка Word без сохранений длится до 5 минут
+
+
+def machine_id() -> str:
+    """Постоянный номер этого компьютера (папка данных) — чтобы отличать «выполняется здесь» от «на другом»."""
+    from forlabs.core import paths
+    from forlabs.core.fs import atomic_write_text
+
+    f = paths.data_home() / "machine_id"
+    try:
+        v = f.read_text(encoding="utf-8").strip()
+        if v:
+            return v
+    except OSError:
+        pass
+    v = uuid.uuid4().hex
+    try:
+        atomic_write_text(f, v)
+    except OSError:
+        pass
+    return v
+
+
+def running_elsewhere(st: LabState) -> bool:
+    """Лаба сейчас выполняется на другом компьютере (аренда не истекла)."""
+    if st.status != "executing" or not st.lease_machine or st.lease_machine == machine_id():
+        return False
+    try:
+        return datetime.fromisoformat(st.lease_until or "") > datetime.now(timezone.utc)
+    except ValueError:
+        return False
+
+
+def _keep_spec(old: list, new: list) -> list:
+    """Замечания разбора (вариант по рабочему месту, «не дословно») переживают проверки отчёта."""
+    return [f for f in old if f.stage == "spec"] + [f for f in new if f.stage != "spec"]
+
+
+def file_sha(path: Path) -> str:
+    import hashlib
+
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def docx_fresh(st: LabState, lab_dir: Path) -> bool:
+    """report.docx на этом компьютере — именно тот, что получился при последней удачной вёрстке этой лабы
+    (не старый с другого компьютера и не недоделанный при оборванной вёрстке)."""
+    docx = Path(lab_dir) / "report.docx"
+    try:
+        return bool(st.docx_sha) and docx.exists() and file_sha(docx) == st.docx_sha
+    except OSError:
+        return False
+
+
 def lab_complete(st: LabState) -> bool:
-    """Все задания и ответы на вопросы методички есть в отчёте."""
+    """Все задания написаны (не пусты) и на все вопросы методички есть непустые ответы."""
     if not st.spec or not st.report:
         return False
-    written = {s.n for s in st.report.sections}
+    written = {s.n for s in st.report.sections if section_has_content(s)}
     if any(t.n not in written for t in st.spec.tasks):
         return False
-    return len(st.report.questions) >= len(st.spec.questions)
+    if len(st.report.questions) < len(st.spec.questions):
+        return False
+    return all(qa.answer.strip() for qa in st.report.questions)
 
 
 class _SourceProxy:

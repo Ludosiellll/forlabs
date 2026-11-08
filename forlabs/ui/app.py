@@ -44,7 +44,13 @@ from forlabs.core.settings import (
 )
 from forlabs.core.subjects import Subject, all_subjects, get_subject
 from forlabs.pipeline.images import MAX_IMAGES, normalize_screenshot, prepare_image
-from forlabs.pipeline.run import PipelineError, lab_complete, today
+from forlabs.pipeline.run import (
+    PipelineError,
+    docx_fresh,
+    lab_complete,
+    running_elsewhere,
+    today,
+)
 from forlabs.render import libreoffice, word_com
 from forlabs.report.derive import numbered_blocks
 from forlabs.report.morph import goal_to_conclusion
@@ -68,6 +74,8 @@ STEPS = [("parse", "Разбор методички"), ("write", "Текст о�
          ("finalize", "Доводка и предпросмотр")]
 
 
+ELSEWHERE = ("Эта лаба сейчас выполняется на другом компьютере. Дождись окончания там (или 15 минут, если тот "
+             "компьютер выключили) и обнови страницу.")
 BUSY_MESSAGE = "Сейчас идёт работа над лабой — дождись её окончания, потом меняй настройки или выходи."
 
 
@@ -187,9 +195,11 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         return redirect("/" if ctx.auth.session else "/login", msg=msg)
 
     @app.post("/logout")
-    def logout():
+    def logout(wipe: str = Form("")):
         if ctx.running:
             return redirect("/", err=BUSY_MESSAGE)
+        if wipe and ctx.cloud and hasattr(ctx.store, "wipe_local"):
+            ctx.store.wipe_local()  # общий компьютер: копию своих лаб не оставлять
         ctx.auth.sign_out()
         ctx.reset()
         return redirect("/login")
@@ -348,8 +358,10 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         return redirect(url)
 
     # лаба
-    def load(p: str, s: str, n: str):
-        st = ctx.store.load_lab(p, s, n)
+    def load(p: str, s: str, n: str, strict: bool = True):
+        """strict — для действий: без связи с облаком не работать с копией на компьютере (её можно только смотреть),
+        иначе после возврата связи она перезапишет лабу, изменённую на другом компьютере."""
+        st = ctx.store.load_lab(p, s, n, strict=strict)
         if st is None:
             raise CloudError("Лаба не найдена")
         return st
@@ -402,10 +414,12 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
             teacher_rules = ctx.memory().teacher_list(p, s)
         except Exception:
             teacher_rules = []
-        preview_here = bool(st.pages) and all(Path(x).exists() for x in st.pages)
-        docx_here = bool(st.docx_path) and Path(st.docx_path).exists()
+        fresh = docx_fresh(st, ctx.store.lab_dir(p, s, n))  # документ — от последней удачной вёрстки этой лабы
+        preview_here = fresh and bool(st.pages) and all(Path(x).exists() for x in st.pages)
+        docx_here = fresh
         return render(request, "lab.html", st=st, profile=profile, subject=get_subject(s), busy=busy,
                       preview_here=preview_here, docx_here=docx_here, teacher_rules=teacher_rules,
+                      elsewhere=running_elsewhere(st),
                       complete=lab_complete(st),
                       events=events, journal=journal, slot_items=slot_items, errors=errors, tab=tab, steps=STEPS,
                       step_state=step_state, conclusion=conclusion, conclusion_note=conclusion_note,
@@ -442,6 +456,8 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
     @app.post("/labs/{p}/{s}/{n}/execute")
     def lab_execute(p: str, s: str, n: str):
         st = load(p, s, n)
+        if running_elsewhere(st):
+            return redirect(lab_url(p, s, n), err=ELSEWHERE)
         if st.status in ("parsed",):
             st = ctx.pipeline.confirm(st, None)
         ctx.run(ctx.pipeline.key(st), ctx.pipeline.execute, st)
@@ -518,6 +534,8 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
     @app.post("/labs/{p}/{s}/{n}/rerender")
     def lab_rerender(p: str, s: str, n: str):
         st = load(p, s, n)
+        if running_elsewhere(st):
+            return redirect(lab_url(p, s, n), err=ELSEWHERE)
         ctx.run(ctx.pipeline.key(st), ctx.pipeline.render, st)
         return redirect(lab_url(p, s, n))
 
@@ -583,16 +601,18 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
 
     @app.get("/labs/{p}/{s}/{n}/docx")
     def lab_docx(p: str, s: str, n: str):
-        st = load(p, s, n)
-        if not st.docx_path or not Path(st.docx_path).exists():
-            raise CloudError("Документ ещё не свёрстан")
+        st = load(p, s, n, strict=False)
+        if not docx_fresh(st, ctx.store.lab_dir(p, s, n)):
+            return redirect(lab_url(p, s, n), err="Документ устарел или ещё не свёрстан — нажми «Пересобрать документ».")
         subj = get_subject(s)
         return FileResponse(st.docx_path, filename=f"ЛР{n}_{subj.short_name}.docx",
                             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
     @app.post("/labs/{p}/{s}/{n}/open")
     def lab_open(p: str, s: str, n: str, what: str = Form("docx")):
-        st = load(p, s, n)
+        st = load(p, s, n, strict=False)
+        if what == "docx" and not docx_fresh(st, ctx.store.lab_dir(p, s, n)):
+            return redirect(lab_url(p, s, n), err="Документ устарел или ещё не свёрстан — нажми «Пересобрать документ».")
         target = st.docx_path if what == "docx" else str(ctx.store.lab_dir(p, s, n))
         if target and Path(target).exists():
             _open_local(target)
@@ -600,14 +620,14 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
 
     @app.get("/labs/{p}/{s}/{n}/page/{i}")
     def lab_page_png(p: str, s: str, n: str, i: int):
-        st = load(p, s, n)
+        st = load(p, s, n, strict=False)
         if not (1 <= i <= len(st.pages)) or not Path(st.pages[i - 1]).exists():
             return JSONResponse({"error": "нет страницы"}, status_code=404)
         return FileResponse(st.pages[i - 1], media_type="image/png", headers={"Cache-Control": "no-store"})
 
     @app.get("/labs/{p}/{s}/{n}/state")
     def lab_state(p: str, s: str, n: str):
-        st = load(p, s, n)
+        st = load(p, s, n, strict=False)
         key = ctx.pipeline.key(st)
         return {"status": st.status, "busy": key in ctx.running, "pages": len(st.pages)}
 

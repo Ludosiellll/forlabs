@@ -67,6 +67,7 @@ class LLMError(Exception):
         self.detail = detail
         self.retryable = retryable  # временный сбой: сеть, перегрузка сервера, частые запросы
         self.retry_after = retry_after  # сколько секунд просит подождать сервер (заголовок Retry-After)
+        self.unauthorized = False  # прокси не принял вход: можно обновить вход и повторить один раз
         self.message_ru = message_ru or _MESSAGES[kind]
         super().__init__(f"{self.message_ru} ({detail})" if detail else self.message_ru)
 
@@ -108,6 +109,7 @@ def _extract_json(text: str) -> Any:
 
 class LLM:
     accepts_lab_tag = False  # True только для прокси ForLabs в облаке
+    on_unauthorized: "Callable[[], object] | None" = None  # облако: обновить вход при 401 (сбитые часы)
     def __init__(self, settings: Settings, api_key: "str | Callable[[], str]", http_client: httpx.Client | None = None,
                  base_url: str | None = None, timeout: float = 240.0,
                  retry_delays: tuple[float, ...] = (3.0, 10.0)):
@@ -136,19 +138,29 @@ class LLM:
 
     def _post_retrying(self, payload: dict) -> dict:
         """Запрос с повторами при временных сбоях; ключ, лимит и баланс не повторяются."""
-        for attempt in range(len(self.retry_delays) + 1):
+        attempt, refreshed = 0, False
+        while True:
             try:
                 return self._post_once(payload)
             except LLMError as e:
-                if not e.retryable or attempt == len(self.retry_delays):
+                if e.unauthorized and self.on_unauthorized is not None and not refreshed:
+                    refreshed = True
+                    try:
+                        self.on_unauthorized()
+                    except Exception:
+                        raise e from None
+                    continue
+                if not e.retryable or attempt >= len(self.retry_delays):
                     raise
                 time.sleep(max(self.retry_delays[attempt], min(e.retry_after or 0, MAX_RETRY_AFTER)))
-        raise AssertionError("недостижимо")
+                attempt += 1
 
     def _post_once(self, payload: dict) -> dict:
         try:
             key = self.api_key() if callable(self.api_key) else self.api_key
         except Exception as e:  # обновление токена облака не удалось
+            if getattr(e, "offline", False):  # обрыв связи в момент обновления входа — повторяемо
+                raise LLMError("network", str(e), getattr(e, "message_ru", None), retryable=True) from e
             raise LLMError("access", str(e), getattr(e, "message_ru", None) or
                            "Не удалось получить доступ к модели. Войди в аккаунт заново.") from e
         try:
@@ -168,7 +180,9 @@ class LLM:
                                                  "администратору, чтобы он её продлил.")
             for needle, msg in _ACCESS.items():
                 if needle in low:
-                    raise LLMError("access", detail, msg)
+                    err = LLMError("access", detail, msg)
+                    err.unauthorized = needle == "not signed in"
+                    raise err
             if r.status_code in (400, 413) and any(w in low for w in ("context length", "maximum context",
                                                                      "too many tokens", "too long", "token limit")):
                 raise LLMError("bad_response", detail, "Методичка слишком большая для модели — оставь в файле только "

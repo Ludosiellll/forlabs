@@ -11,6 +11,16 @@ from forlabs.core.store import safe_name
 from forlabs.pipeline.write import section_text
 
 MAX_CHARS = 3000
+MAX_LAB_SUMMARY = 600  # одна лаба не вытесняет память о прежних
+
+
+def _merge(old: str, number: str, summary: str) -> str:
+    """Строка «ЛР №N: …» заменяет прежнюю строку этой лабы; старейшие строки уходят целиком, а не обрезаются."""
+    line = f"ЛР №{number}: " + " ".join(summary.split())[:MAX_LAB_SUMMARY]
+    lines = [ln for ln in old.splitlines() if ln.strip() and not ln.startswith(f"ЛР №{number}:")] + [line]
+    while len("\n".join(lines)) > MAX_CHARS and len(lines) > 1:
+        lines.pop(0)
+    return "\n".join(lines)
 PROMPT = ("Сожми выполненную лабораторную работу в 2–5 коротких строк для памяти следующих работ этого предмета: "
           "выбранная тема/проект/предметная область, ключевые имена (файлы, классы, объекты, страницы), "
           "что уже сделано. Без оценок и воды, по-русски, обычным текстом без markdown.")
@@ -46,10 +56,7 @@ class SubjectMemory:
         summary = llm.chat([{"role": "system", "content": PROMPT},
                             {"role": "user", "content": f"ЛР №{st.number}. Тема: {st.spec.topic}\n\n{body[:20000]}"}],
                            temperature=0.2).strip()
-        old = self.read(st.profile_id, st.subject_id)
-        lines = [ln for ln in old.splitlines() if not ln.startswith(f"ЛР №{st.number}:")]
-        lines.append(f"ЛР №{st.number}: " + " ".join(summary.split()))
-        text = "\n".join(lines)
+        text = _merge(self.read(st.profile_id, st.subject_id), st.number, summary)
         self.write(st.profile_id, st.subject_id, text)
         return text
 

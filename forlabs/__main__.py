@@ -49,7 +49,7 @@ def _open_window(url: str, ctx=None) -> None:
 
     def on_closing():  # закрытие во время работы: спросить, иначе работа оборвётся
         try:
-            if ctx is not None and ctx.running:
+            if ctx is not None and ctx.busy():
                 return window.create_confirmation_dialog(
                     "ForLabs ещё работает",
                     "Сейчас выполняется лаба. Если закрыть окно, работа прервётся — потом её можно будет "

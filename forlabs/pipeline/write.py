@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from forlabs.core.models import (
     QA,
@@ -43,11 +43,43 @@ class BlockDraft(BaseModel):
 
 
 class SectionDraft(BaseModel):
-    blocks: list[BlockDraft] = Field(default_factory=list)
+    model_config = ConfigDict(extra="forbid")
+    blocks: list[BlockDraft] = Field(min_length=1)
+
+
+class AnswerItem(BaseModel):
+    n: int
+    answer: str = ""
 
 
 class AnswersDraft(BaseModel):
-    answers: list[str] = Field(default_factory=list)
+    model_config = ConfigDict(extra="forbid")
+    answers: list[AnswerItem | str]
+
+    def for_questions(self, numbers: list[int]) -> dict[int, str]:
+        """Ответы по номерам вопросов: {n, answer} — по n, просто строки — по порядку; лишние отбрасываются."""
+        got: dict[int, str] = {}
+        plain = [a for a in self.answers if isinstance(a, str)]
+        for n, a in zip(numbers, plain):
+            got[n] = a.strip()
+        for a in self.answers:
+            if isinstance(a, AnswerItem) and a.n in numbers:
+                got[a.n] = a.answer.strip()
+        return got
+
+
+def section_has_content(sec: TaskSection) -> bool:
+    """В задании есть текст, список, листинг или таблица (не только рисунки и не пусто)."""
+    for b in sec.blocks:
+        if isinstance(b, Paragraph) and b.text.strip():
+            return True
+        if isinstance(b, Listing) and b.code.strip():
+            return True
+        if isinstance(b, Table) and b.rows:
+            return True
+        if getattr(b, "items", None) and any(str(x).strip() for x in b.items):
+            return True
+    return False
 
 
 def _gender_ru(g: str) -> str:
@@ -105,6 +137,20 @@ def wishes_text(spec: LabSpec) -> str:
     return f"Пожелания и отклонения от методички — обязательно учти, они важнее методички:\n{spec.wishes.strip()}\n"
 
 
+SOURCE_FOR_WRITING = 20_000  # символов методички в запросе на текст задания и ответы
+
+
+def source_block(spec: LabSpec) -> str:
+    """Строка «Задание» и сам текст методички: имена объектов, значения и порядок действий — оттуда, а не выдуманы."""
+    out = f"Общее задание из методички: {spec.assignment}\n" if (spec.assignment or "").strip() else ""
+    src = (spec.source_text or "").strip()
+    if src:
+        cut = src[:SOURCE_FOR_WRITING]
+        out += ("Текст методички (имена объектов, файлов, значения, адреса и порядок действий бери отсюда, "
+                f"ничего не придумывай вместо них):\n<<<\n{cut}\n>>>\n")
+    return out
+
+
 def _context(spec: LabSpec, profile: Profile, subject: Subject, memory: str, previous: list[TaskSection]) -> dict:
     all_tasks = "\n".join(f"{t.n}. {t.text}" for t in spec.tasks)
     variant_block = (f"Варианты из методички:\n{spec.variant_text}\n" if spec.variant_text else
@@ -117,7 +163,7 @@ def _context(spec: LabSpec, profile: Profile, subject: Subject, memory: str, pre
                 workplace=spec.workplace or "не указан",
                 topic=spec.topic, goal=spec.goal, equipment=spec.equipment or "—", all_tasks=all_tasks,
                 variant_block=variant_block, wishes_block=wishes_block, memory_block=memory_block,
-                previous_block=previous_block)
+                previous_block=previous_block, source_block=source_block(spec))
 
 
 def write_section(spec: LabSpec, n: int, profile: Profile, subject: Subject, llm, rules: RuleBook,
@@ -134,13 +180,23 @@ def write_section(spec: LabSpec, n: int, profile: Profile, subject: Subject, llm
 def answer_questions(spec: LabSpec, profile: Profile, subject: Subject, llm, rules: RuleBook) -> list[QA]:
     if not spec.questions:
         return []
-    qs = "\n".join(f"{i}. {q}" for i, q in enumerate(spec.questions, start=1))
-    messages = [{"role": "system", "content": ANSWERS_SYSTEM.format(rules=rules.load("repair", subject.id))},
-                {"role": "user", "content": f"Предмет: {subject.name}. Тема работы: {spec.topic}.\n"
-                                            f"Пол студента: {_gender_ru(profile.gender)}.\nВопросы:\n{qs}"}]
-    draft = llm.json(messages, AnswersDraft)
-    answers = draft.answers + [""] * (len(spec.questions) - len(draft.answers))
-    return [QA(n=i, question=q, answer=a.strip()) for i, (q, a) in enumerate(zip(spec.questions, answers), start=1)]
+    system = ANSWERS_SYSTEM.format(rules=rules.load("repair", subject.id))
+    source = source_block(spec)
+
+    def ask(numbers: list[int]) -> dict[int, str]:
+        qs = "\n".join(f"{i}. {spec.questions[i - 1]}" for i in numbers)
+        draft = llm.json([{"role": "system", "content": system},
+                          {"role": "user", "content": f"Предмет: {subject.name}. Тема работы: {spec.topic}.\n"
+                                                      f"Пол студента: {_gender_ru(profile.gender)}.\n{source}"
+                                                      f"Вопросы:\n{qs}"}], AnswersDraft)
+        return draft.for_questions(numbers)
+
+    numbers = list(range(1, len(spec.questions) + 1))
+    answers = ask(numbers)
+    missing = [i for i in numbers if not answers.get(i)]
+    if missing:  # модель пропустила ответы — один раз переспрашиваем только их
+        answers.update({i: a for i, a in ask(missing).items() if a})
+    return [QA(n=i, question=q, answer=answers.get(i, "")) for i, q in enumerate(spec.questions, start=1)]
 
 
 def write_report(spec: LabSpec, profile: Profile, enrollment: Enrollment, subject: Subject, llm, rules: RuleBook,
@@ -155,7 +211,7 @@ def write_report(spec: LabSpec, profile: Profile, enrollment: Enrollment, subjec
     old = {s.n: s for s in (existing.sections if existing else [])}
     keep_old = only is not None
     for i, t in enumerate(spec.tasks):
-        if keep_old and t.n not in only and t.n in old:
+        if keep_old and t.n not in only and t.n in old and section_has_content(old[t.n]):
             sections.append(old[t.n])
             continue
         emit(f"Задание {t.n} из {len(spec.tasks)}: пишу текст")
@@ -166,7 +222,8 @@ def write_report(spec: LabSpec, profile: Profile, enrollment: Enrollment, subjec
             on_progress(refresh_derived(ReportDoc(lab_number=spec.number, sections=sections + rest,
                                                   questions=existing.questions if existing and keep_old else []),
                                         spec, profile, enrollment))
-    if existing and only is not None and existing.questions:
+    if (existing and only is not None and [qa.question for qa in existing.questions] == list(spec.questions)
+            and all(qa.answer.strip() for qa in existing.questions)):
         questions = existing.questions
     else:
         if spec.questions:

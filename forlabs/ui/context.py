@@ -30,6 +30,9 @@ def slug(text: str) -> str:
     return s or "profile"
 
 
+LLM_TIMEOUT = 240.0
+
+
 class AppContext:
     def __init__(self, settings: Settings | None = None, llm_override: Callable[[], object] | None = None,
                  prefer_word: bool = True, render_diagrams: bool = True, synchronous: bool = False):
@@ -92,13 +95,23 @@ class AppContext:
         if self.llm_override:
             return self.llm_override()
         if self.cloud:
-            llm = LLM(self.settings, api_key=self.auth.access_token, base_url=CLOUD.llm_base_url)
+            llm = LLM(self.settings, api_key=self.auth.access_token, base_url=CLOUD.llm_base_url,
+                      http_client=self._llm_http())
             llm.accepts_lab_tag = True
+            llm.on_unauthorized = self.auth.refresh
             return llm
         key = get_api_key()
         if not key:
             raise CloudError("Не задан ключ API. Открой «Настройки» и вставь ключ.")
-        return LLM(self.settings, api_key=key)
+        return LLM(self.settings, api_key=key, http_client=self._llm_http())
+
+    def _llm_http(self):
+        """Один HTTP-клиент на все запросы к модели (а не новый на каждый вызов)."""
+        if getattr(self, "_http_llm", None) is None:
+            import httpx
+
+            self._http_llm = httpx.Client(timeout=httpx.Timeout(LLM_TIMEOUT, connect=10))
+        return self._http_llm
 
     @property
     def pipeline(self) -> Pipeline:
@@ -107,6 +120,10 @@ class AppContext:
                                       render_diagrams=self.render_diagrams, prefer_word=self.prefer_word,
                                       soffice=self.settings.soffice_path, memory=self.memory())
         return self._pipeline
+
+    def busy(self) -> bool:
+        """Идёт работа: задача по лабе или фоновое обновление памяти после сдачи."""
+        return bool(self.running) or bool(self._pipeline is not None and self._pipeline.background)
 
     def claim(self, key: str) -> bool:
         """Занять лабу под короткое действие в запросе (сдача). False — по ней уже идёт работа."""

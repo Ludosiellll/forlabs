@@ -183,7 +183,7 @@ class SharedStore(Store):
         self.lab_dir(st.profile_id, st.subject_id, st.number).mkdir(parents=True, exist_ok=True)
         self.shared["labs"][(st.profile_id, st.subject_id, st.number)] = st.model_dump_json()
 
-    def load_lab(self, profile_id, subject_id, number):
+    def load_lab(self, profile_id, subject_id, number, strict=False):
         from forlabs.core.models import LabState
 
         raw = self.shared["labs"].get((profile_id, subject_id, number))

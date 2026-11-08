@@ -18,6 +18,8 @@ from forlabs.report.morph import goal_to_conclusion, wrong_gender_verbs
 
 REQUIRED_HEADER = [("Номер учебной группы",), ("Дата выполнения работы",), ("Тема работы", "Тема"),
                    ("Цель работы", "Цель"), ("Задание",)]
+REFUSAL = re.compile(r"(я не могу (выполнить|помочь|написать|создать)|не могу выполнить это|как языков\w* модел|"
+                     r"как ии[ ,]|as an ai|i (cannot|can't|am unable)|извините, но я)", re.I)
 MAX_ANSWER_WORDS = 22
 MAX_ANSWER_CHARS = 165
 
@@ -105,7 +107,17 @@ def check_standard(doc: ReportDoc, spec: LabSpec, gender: Gender) -> list[Findin
     if len(doc.questions) < len(spec.questions):
         out.append(_f("qa.missing", f"Нет ответов на контрольные вопросы: в методичке {len(spec.questions)}, "
                                     f"в отчёте {len(doc.questions)}. Нажми «Продолжить».", "Контрольные вопросы"))
+    for sec in doc.sections:
+        for b in sec.blocks:
+            text = getattr(b, "text", None) or " ".join(getattr(b, "items", None) or [])
+            if text and REFUSAL.search(text):
+                out.append(_f("task.refusal", "Модель отказалась выполнять задание вместо ответа — перепиши задание",
+                              f"Задание {sec.n}", text[:200]))
     for qa in doc.questions:
+        if not qa.answer.strip():
+            out.append(_f("qa.empty", "Нет ответа на вопрос — нажми «Продолжить»", f"Вопрос {qa.n}", qa.question))
+        elif REFUSAL.search(qa.answer):
+            out.append(_f("task.refusal", "Вместо ответа — отказ модели", f"Вопрос {qa.n}", qa.answer))
         if normalize_for_compare(qa.question) not in spec_q:
             out.append(_f("qa.not_in_spec", "Такого вопроса нет в методичке", f"Вопрос {qa.n}", qa.question))
         ans = qa.answer.strip()
