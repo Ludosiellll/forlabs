@@ -121,9 +121,13 @@ jobs:
           $p = Start-Process build/run_forlabs.dist/ForLabs.exe -ArgumentList "--selfcheck --offline --out `"$out`"" -Wait -PassThru
           if (Test-Path $out) { Get-Content $out -Encoding utf8 } else { Write-Output "::error title=selfcheck::нет отчёта (код $($p.ExitCode))" }
           if ($p.ExitCode -ne 0) {
-            if (Test-Path $out) { Get-Content $out -Encoding utf8 | ForEach-Object { Write-Output "::error title=selfcheck dist::$_" } }
+            if (Test-Path $out) { Write-Output ("::error title=selfcheck dist::" + ((Get-Content $out -Encoding utf8) -join "%0A")) }
             $log = "$env:FORLABS_HOME\forlabs.log"
-            if (Test-Path $log) { Get-Content $log -Tail 30 -Encoding utf8 | ForEach-Object { Write-Output "::error title=forlabs.log::$_" } }
+            if (Test-Path $log) { Write-Output ("::error title=forlabs.log::" + ((Get-Content $log -Tail 30 -Encoding utf8) -join "%0A")) }
+            $files = Get-ChildItem build/run_forlabs.dist/pymupdf -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Name) $($_.Length)" }
+            Write-Output ("::error title=dist pymupdf::" + ($files -join "%0A"))
+            $dlls = Get-ChildItem build/run_forlabs.dist -Filter *mupdf* -Recurse -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName.Substring((Resolve-Path build/run_forlabs.dist).Path.Length) }
+            Write-Output ("::error title=dist mupdf files::" + ($dlls -join "%0A"))
             exit 1
           }
       - name: Установщик ForLabsSetup.exe

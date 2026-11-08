@@ -29,11 +29,20 @@ def _line(ok: bool | None, name: str, detail: str) -> str:
     return f"[{mark}] {name}: {detail}"
 
 
+def _chain(e: BaseException) -> str:
+    """Ошибка вместе с причинами: библиотеки часто прячут настоящую ошибку за запасным вариантом импорта."""
+    parts, seen, cur = [], 0, e
+    while cur is not None and seen < 4:
+        parts.append(f"{type(cur).__name__}: {cur}" if str(cur) else type(cur).__name__)
+        cur, seen = cur.__cause__ or cur.__context__, seen + 1
+    return " ← ".join(parts)
+
+
 def _run(name: str, fn: Callable[[], str]) -> Check:
     try:
         return Check(name, True, fn())
     except Exception as e:  # самопроверка не падает: каждая поломка — строка отчёта
-        return Check(name, False, (f"{type(e).__name__}: {e}" if str(e) else type(e).__name__)[:300])
+        return Check(name, False, _chain(e)[:600])
 
 
 def _version() -> str:
@@ -80,7 +89,7 @@ def _libraries() -> str:
         try:
             importlib.import_module(n)
         except Exception as e:
-            missing.append(f"{n} ({type(e).__name__})")
+            missing.append(f"{n} ({_chain(e)[:300]})")
     if missing:
         raise RuntimeError("не загружаются: " + ", ".join(missing))
     return f"{len(names)} загружаются"
