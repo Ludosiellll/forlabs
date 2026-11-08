@@ -32,6 +32,8 @@ jobs:
           cache-dependency-path: pyproject.toml
       - name: Зависимости
         run: python -m pip install ".[windows,dev]"
+      - name: LibreOffice (предпросмотр страниц, как у студента без Word)
+        run: choco install libreoffice-fresh -y --no-progress
       - name: Тесты
         shell: pwsh
         run: |
