@@ -169,14 +169,14 @@
       <p class="small muted">{{ 'Замечаний нет: стандарт РС02-23 и проверки на признаки ИИ пройдены.' if st.report else 'Появятся после проверки текста.' }}</p>
     {% endif %}
     {% for f in shown %}
-      {% set accepted = f.rule_id in st.accepted_rules %}
+      {% set accepted = finding_key(f) in st.accepted_rules %}
       <div class="finding {{ f.severity }}">
         <div class="where">{{ f.location }}{% if accepted %} · принято{% endif %}</div>
         <div>{{ f.message }}</div>
         {% if f.text %}<div class="txt">{{ f.text[:220] }}</div>{% endif %}
         {% if f.suggestion %}<div class="txt">Как исправить: {{ f.suggestion }}</div>{% endif %}
         {% if f.severity == 'error' and not accepted %}
-        <form method="post" action="{{ base_url }}/accept" style="margin-top:6px"><input type="hidden" name="rule" value="{{ f.rule_id }}">
+        <form method="post" action="{{ base_url }}/accept" style="margin-top:6px"><input type="hidden" name="rule" value="{{ finding_key(f) }}">
           <button class="btn link small" type="submit">Оставить как есть</button></form>{% endif %}
       </div>
     {% endfor %}

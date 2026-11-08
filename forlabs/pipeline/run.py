@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Callable
 
 from forlabs.core.llm import LLMError
-from forlabs.core.models import Figure, LabSpec, LabState, Profile, ReportDoc
+from forlabs.core.models import Figure, LabSpec, LabState, Profile, ReportDoc, is_accepted
 from forlabs.core.rules import RuleBook
 from forlabs.core.store import safe_name
 from forlabs.core.subjects import get_subject
@@ -358,10 +358,12 @@ class Pipeline:
             return self._fail(st, e)
 
     def mark_final(self, st: LabState, accept_rules: list[str] | None = None) -> LabState:
+        if st.status not in ("rendered", "final"):
+            raise PipelineError("Сдать можно только свёрстанный отчёт. Сначала нажми «Пересобрать документ».")
         if self.slots(st):
             raise PipelineError("Сначала вставь все скриншоты")
         accepted = set(st.accepted_rules) | set(accept_rules or [])
-        left = [f for f in st.findings if f.severity == "error" and f.rule_id not in accepted]
+        left = [f for f in st.findings if f.severity == "error" and not is_accepted(f, accepted)]
         if left:
             raise PipelineError(f"Остались замечания проверок ({len(left)}). Исправь или прими их явно.")
         docx = self.lab_dir(st) / "report.docx"
@@ -376,7 +378,10 @@ class Pipeline:
         out_dir = root / subject.short_name / f"ЛР{safe_name(st.number)}"
         out_dir.mkdir(parents=True, exist_ok=True)
         target = out_dir / f"ЛР{safe_name(st.number)}_{subject.short_name}.docx"
-        shutil.copyfile(docx, target)
+        try:
+            shutil.copyfile(docx, target)
+        except PermissionError as e:
+            raise PipelineError(f"Не получилось записать {target.name}: файл открыт в Word. Закрой его и нажми ещё раз.") from e
         st.accepted_rules = sorted(accepted)
         st.status = "final"
         self._emit(st, f"Готово: {target}", "done")

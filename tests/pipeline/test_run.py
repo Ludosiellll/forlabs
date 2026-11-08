@@ -334,3 +334,58 @@ def test_render_checks_final_docx_against_canon(tmp_home, tmp_path, monkeypatch)
     assert bad and "Фон шапки" in bad[0].text and bad[0].severity == "error"
     with pytest.raises(PipelineError):
         pipe.mark_final(st)
+
+
+def _rendered(tmp_home, tmp_path):
+    pipe, fake = setup(tmp_home, tmp_path, [RAW, SEC, SEC2, ANS])
+    st = pipe.create_lab("ivanov", "psip", [(FIXTURE.name, FIXTURE.read_bytes())], number="7")
+    st = pipe.execute(pipe.confirm(pipe.parse(st, date="24.09.2026"), None))
+    st = pipe.attach_screenshot(st, section=1, block=4, image=png_bytes())
+    assert st.status == "rendered", st.error
+    return pipe, st
+
+
+def test_final_refuses_failed_lab(tmp_home, tmp_path):
+    import pytest
+
+    from forlabs.pipeline.run import PipelineError
+
+    pipe, st = _rendered(tmp_home, tmp_path)
+    st.status, st.error = "failed", "вёрстка упала"
+    with pytest.raises(PipelineError):
+        pipe.mark_final(st)
+
+
+def test_final_with_target_open_in_word_is_a_message(tmp_home, tmp_path, monkeypatch):
+    import pytest
+
+    import forlabs.pipeline.run as run_mod
+    from forlabs.pipeline.run import PipelineError
+
+    pipe, st = _rendered(tmp_home, tmp_path)
+
+    def locked(*a, **k):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(run_mod.shutil, "copyfile", locked)
+    with pytest.raises(PipelineError) as e:
+        pipe.mark_final(st)
+    assert "Word" in str(e.value)
+
+
+def test_accepting_one_finding_does_not_accept_the_rule_everywhere(tmp_home, tmp_path):
+    import pytest
+
+    from forlabs.core.models import Finding, finding_key
+    from forlabs.pipeline.run import PipelineError
+
+    pipe, st = _rendered(tmp_home, tmp_path)
+    a = Finding(stage="antiai", rule_id="ai.banned_word", location="Задание 1, блок 1", text="является",
+                message="Слово «является»")
+    b = Finding(stage="antiai", rule_id="ai.banned_word", location="Задание 2, блок 1", text="ключевой",
+                message="Слово «ключевой»")
+    st.findings = [a, b]
+    with pytest.raises(PipelineError):
+        pipe.mark_final(st, accept_rules=[finding_key(a)])
+    st = pipe.mark_final(st, accept_rules=[finding_key(a), finding_key(b)])
+    assert st.status == "final"

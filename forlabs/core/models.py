@@ -135,6 +135,18 @@ class Finding(BaseModel):
     suggestion: str | None = None
 
 
+def finding_key(f: "Finding") -> str:
+    """Ключ конкретного замечания: правило, место и текст. После «Переписать» текст другой — ключ тоже."""
+    import hashlib
+
+    digest = hashlib.sha1(f"{f.location}\n{f.text}".encode("utf-8")).hexdigest()[:10]
+    return f"{f.rule_id}@{digest}"
+
+
+def is_accepted(f: "Finding", accepted: "list[str] | set[str]") -> bool:
+    return finding_key(f) in accepted
+
+
 LabStatus = Literal["draft", "parsed", "confirmed", "executing", "needs_manual", "rendered", "final", "failed"]
 
 

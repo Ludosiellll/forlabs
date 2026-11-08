@@ -17,7 +17,7 @@ from fastapi.templating import Jinja2Templates
 
 from forlabs.cloud.auth import CloudError
 from forlabs.core.llm import LLMError
-from forlabs.core.models import Enrollment, LabSpec, Profile, Task
+from forlabs.core.models import Enrollment, LabSpec, Profile, Task, finding_key, is_accepted
 from forlabs.core.settings import API_PRESETS, Settings, get_api_key, save_settings, set_api_key
 from forlabs.core.subjects import Subject, add_custom_subject, all_subjects, get_subject
 from forlabs.pipeline.run import PipelineError, today
@@ -57,7 +57,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
     app.state.ctx = ctx
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
     tpl = Jinja2Templates(directory=HERE / "templates")
-    tpl.env.globals.update(STATUS_RU=STATUS_RU, q=_q)
+    tpl.env.globals.update(STATUS_RU=STATUS_RU, q=_q, finding_key=finding_key)
 
     def render(request: Request, name: str, **kw) -> HTMLResponse:
         base = {"request": request, "ctx": ctx, "subjects": all_subjects(), "nav": kw.pop("nav", ""),
@@ -289,7 +289,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         busy = key in ctx.running
         events = ctx.bus.history(key)
         journal = [e for e in events if e.kind not in ("idle", "moved")] or ctx.pipeline.journal(st)
-        errors = [f for f in st.findings if f.severity == "error" and f.rule_id not in st.accepted_rules]
+        errors = [f for f in st.findings if f.severity == "error" and not is_accepted(f, st.accepted_rules)]
         numbers = {}
         if st.report:
             for b in numbered_blocks(st.report):
@@ -414,7 +414,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         st = load(p, s, n)
         st.accepted_rules = sorted(set(st.accepted_rules) | {rule})
         ctx.store.save_lab(st)
-        return redirect(lab_url(p, s, n) + "?tab=checks", msg="Замечание принято")
+        return redirect(lab_url(p, s, n) + "?tab=report", msg="Замечание принято")
 
     @app.post("/labs/{p}/{s}/{n}/final")
     def lab_final(p: str, s: str, n: str):
