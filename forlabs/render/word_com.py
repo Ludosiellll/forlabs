@@ -263,8 +263,12 @@ def parse_word_processes(listing: str) -> set[int]:
     return out
 
 
-def _automation_word_pids() -> set[int]:
-    """PID Word, запущенных для автоматизации (наших), — с этого компьютера, по командной строке процесса."""
+SCAN_AFTER = 15.0  # секунд без вестей от дочернего процесса — тогда ищем зависший Word сами
+
+
+def _automation_word_pids() -> set[int] | None:
+    """PID Word, запущенных для автоматизации (наших), по командной строке процесса. None — узнать не удалось
+    (PowerShell запрещён политикой колледжа или не ответил)."""
     if sys.platform != "win32":
         return set()
     import subprocess
@@ -272,11 +276,13 @@ def _automation_word_pids() -> set[int]:
     ps = ("Get-CimInstance Win32_Process -Filter \"Name='WINWORD.EXE'\" | "
           "ForEach-Object { \"$($_.ProcessId) $($_.CommandLine)\" }")
     try:
-        raw = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], capture_output=True,
-                             timeout=20, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
+        res = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], capture_output=True,
+                             timeout=20, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except Exception:
-        return set()
-    return parse_word_processes(raw.decode("utf-8", errors="replace"))
+        return None
+    if res.returncode != 0:
+        return None
+    return parse_word_processes(res.stdout.decode("utf-8", errors="replace"))
 
 
 def _pids_file():
@@ -310,7 +316,9 @@ def _kill_ours(pids) -> None:
     открытый в те же секунды)."""
     pids = set(pids)
     if sys.platform == "win32":
-        pids &= _automation_word_pids()
+        scan = _automation_word_pids()
+        if scan is not None:  # узнать не удалось — завершаем те, о которых сообщил дочерний процесс
+            pids &= scan
     if pids:
         _kill_pids(sorted(pids))
     _remember_pids(_remembered_pids() - pids)
@@ -322,7 +330,10 @@ def cleanup_stale_word() -> None:
     remembered = _remembered_pids()
     if not remembered:
         return
-    stale = remembered & _automation_word_pids()
+    scan = _automation_word_pids()
+    if scan is None:  # проверить, что это всё ещё наш Word, нельзя — не трогаем
+        return
+    stale = remembered & scan
     if stale:
         _kill_pids(sorted(stale))
     _remember_pids(set())
@@ -370,19 +381,20 @@ def finalize_isolated(docx: Path, pdf_out: Path, author: str, timeout: float = 3
     ctx = mp.get_context("spawn")
     q = ctx.Queue()
     p = ctx.Process(target=target or _child, args=(str(docx), str(pdf_out), author, q), daemon=True)
-    baseline = _automation_word_pids()  # Word для автоматизации, что уже были до нас (другой программы)
+    baseline = _automation_word_pids() or set()  # Word для автоматизации, что уже были до нас
     p.start()
     pids: set[int] = set()
+    reported = False
     result = None
     deadline = time.monotonic() + timeout
-    next_scan = time.monotonic() + 1.0
+    next_scan = time.monotonic() + SCAN_AFTER
     while time.monotonic() < deadline and result is None:
-        if time.monotonic() >= next_scan:  # Word завис при запуске (активация) — PID видим из родителя
-            new = _automation_word_pids() - baseline
+        if not reported and time.monotonic() >= next_scan:  # Word завис при запуске (активация): ищем из родителя
+            new = (_automation_word_pids() or set()) - baseline
             if new - pids:
                 pids |= new
                 _remember_pids(pids | _remembered_pids())
-            next_scan = time.monotonic() + 3.0
+            next_scan = time.monotonic() + 10.0
         try:
             msg = q.get(timeout=0.5)
         except queue_mod.Empty:
@@ -391,6 +403,8 @@ def finalize_isolated(docx: Path, pdf_out: Path, author: str, timeout: float = 3
             continue
         if msg[0] == "pids":
             pids |= set(msg[1])
+            reported = True
+            _remember_pids(pids | _remembered_pids())
         else:
             result = msg
     if result is None:

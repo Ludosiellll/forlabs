@@ -299,6 +299,8 @@ def write_lab(w: _Writer, doc: ReportDoc, bookmark: str | None = None) -> None:
                 keep_next(w.para("listing_caption", caption("listing", n, b.topic)))
                 w.code(b.code, bookmark=listing_bookmark(doc.lab_number, n))
             elif isinstance(b, Table):
+                if not any(b.rows):
+                    continue
                 keep_next(w.para("table_ref", table_intro(b.topic, n)))
                 keep_next(w.para("table_caption", caption("table", n, b.topic)))
                 w.table(b.rows, b.header_rows)

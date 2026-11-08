@@ -57,6 +57,7 @@ def test_word_hanging_at_startup_is_killed(tmp_path, monkeypatch, tmp_home):
     tmp_home.mkdir(parents=True, exist_ok=True)
     seen = iter([set(), {777}, {777}, {777}, {777}, {777}, {777}, {777}, {777}, {777}, {777}])
     monkeypatch.setattr(word_com, "_automation_word_pids", lambda: next(seen, {777}))
+    monkeypatch.setattr(word_com, "SCAN_AFTER", 0.0)
     killed = []
     monkeypatch.setattr(word_com, "_kill_pids", lambda pids: killed.extend(pids))
     with pytest.raises(TimeoutError):
@@ -186,3 +187,39 @@ def test_old_word_copies_are_cleaned(tmp_path, monkeypatch):
     fresh.write_bytes(b"x")
     fin._clean_old_copies(tmp_path)
     assert not old.exists() and fresh.exists()
+
+
+# Ревью: облако без входа — ключ из адреса окна должен стать cookie раньше перехода на страницу входа
+def test_signed_out_cloud_user_gets_in_with_token(tmp_home):
+    from fastapi.testclient import TestClient
+
+    from forlabs.core.settings import Settings
+    from forlabs.ui.app import create_app
+    from forlabs.ui.context import AppContext
+
+    tmp_home.mkdir(parents=True, exist_ok=True)
+    ctx = AppContext(settings=Settings(mode="cloud"), synchronous=True)
+    ctx.auth.session = None
+    client = TestClient(create_app(ctx, token="s3cret-token"), base_url="http://127.0.0.1:8765")
+    r = client.get("/?t=s3cret-token", follow_redirects=False)
+    assert r.status_code == 303 and "forlabs_token" in r.headers.get("set-cookie", "")
+    r = client.get("/", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"].startswith("/login")
+    assert client.get("/login").status_code == 200
+    assert client.get("/settings").status_code == 200
+    r = TestClient(client.app, base_url="http://127.0.0.1:8765").post(
+        "/focus", headers={"X-ForLabs-Token": "s3cret-token"})
+    assert r.status_code == 200
+
+
+# ревью 5: PowerShell недоступен — зависший Word всё равно завершается по PID от дочернего процесса
+def test_kill_falls_back_when_scan_unavailable(monkeypatch, tmp_home):
+    from forlabs.render import word_com
+
+    tmp_home.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(word_com.sys, "platform", "win32")
+    monkeypatch.setattr(word_com, "_automation_word_pids", lambda: None)
+    killed = []
+    monkeypatch.setattr(word_com, "_kill_pids", lambda pids: killed.extend(pids))
+    word_com._kill_ours({4242})
+    assert killed == [4242]

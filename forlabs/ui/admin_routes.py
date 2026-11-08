@@ -157,6 +157,8 @@ def register_admin(app: FastAPI, ctx, render, redirect) -> None:
             if e.offline:
                 raise AdminOffline(e.message_ru) from e
             return None
+        if getattr(ctx.store, "offline", False):  # участник из памяти — а сам раздел без связи не работает
+            raise AdminOffline("Нет связи с облаком.")
         return m if m and m.approved and m.role == "admin" else None
 
     def home():

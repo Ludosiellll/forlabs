@@ -434,7 +434,17 @@ class Pipeline:
             keep = [f for f in keep if f.stage == "spec"]
         st.findings = keep + verify_verbatim(st.spec, _SourceProxy(st.spec.source_text))
         same_tasks = old_tasks == [(t.n, t.text) for t in st.spec.tasks]
-        if st.report is not None and same_tasks and st.status in ("rendered", "final", "needs_manual"):
+        questions_changed = False
+        if st.report is not None and [qa.question for qa in st.report.questions] != list(st.spec.questions):
+            # прежние ответы — только на вопросы, что остались; новые спросим при «Продолжить»
+            known = {qa.question: qa for qa in st.report.questions}
+            st.report.questions = [known[q].model_copy(update={"n": i}) for i, q in enumerate(st.spec.questions, 1)
+                                   if q in known]
+            questions_changed = True
+        if st.report is not None and same_tasks and questions_changed:
+            st.status, st.error = "failed", "Вопросы изменились — нажми «Продолжить», чтобы ответить на новые."
+            st.docx_sha = None
+        elif st.report is not None and same_tasks and st.status in ("rendered", "final", "needs_manual"):
             # задания те же (поправили дату, вариант, вопросы): отчёт на месте, документ — пересобрать
             st.status = "needs_manual" if st.status == "needs_manual" else "rendered"
             st.docx_sha = None
@@ -621,7 +631,8 @@ class Pipeline:
             self._save(st)
         return self.render(st)
 
-    def execute(self, st: LabState, only: list[int] | None = None) -> LabState:
+    def execute(self, st: LabState, only: list[int] | None = None, full: bool = False) -> LabState:
+        """full — «Выполнить заново»: написать всё с чистого листа, даже если прошлый запуск упал на дописанной лабе."""
         with self.lock(st):
             try:
                 profile = self._profile(st)
@@ -629,7 +640,7 @@ class Pipeline:
                 enrollment = self._enrollment(profile, st.subject_id)
                 if not st.spec.tasks:
                     raise PipelineError("В разборе нет заданий — добавь их на вкладке «Разбор методички».")
-                if only is None and st.status in ("failed", "executing") and st.report is not None:
+                if not full and only is None and st.status in ("failed", "executing") and st.report is not None:
                     # прошлый запуск оборвался: дописываем только то, чего ещё нет (пустые задания — заново)
                     done = {s.n for s in st.report.sections if section_has_content(s)}
                     only = [t.n for t in st.spec.tasks if t.n not in done]
@@ -644,6 +655,7 @@ class Pipeline:
                 elif only is not None and st.report is not None:
                     push_version(st, f"до переписывания задания {', '.join(map(str, only))}")
                 st.status, st.error = "executing", None
+                st.docx_sha = None  # пока задания переписываются, прежний документ не выдаётся за готовый
                 self._save(st)
                 llm = self._llm(st)
                 assets = self.lab_dir(st) / "assets"
@@ -768,6 +780,7 @@ class Pipeline:
                            step="render")
             st.docx_path, st.pdf_path = str(docx), (str(rep.pdf) if rep.pdf else None)
             st.docx_sha = file_sha(docx)
+            st.render_inputs = render_inputs(profile, self._enrollment(profile, st.subject_id))
             st.pages = [str(p) for p in rep.pages]
             st.engine, st.warnings = rep.engine, rep.warnings
             st.status = "needs_manual" if self.slots(st) else "rendered"
@@ -789,8 +802,21 @@ class Pipeline:
             raise PipelineError(f"Остались замечания проверок ({len(left)}). Исправь или прими их явно.")
         if st.spec is not None and not lab_complete(st):
             raise PipelineError("Отчёт дописан не до конца — нажми «Продолжить».")
-        docx = self.lab_dir(st) / "report.docx"
-        if not docx_fresh(st, self.lab_dir(st)) or has_slots(docx):
+        d = self.lab_dir(st)
+        docx = d / "report.docx"
+        if st.docx_sha and docx.exists() and not docx_fresh(st, d):
+            # файл менялся вне ForLabs (открыли в Word и сохранили): не теряем эти правки молча
+            aside = d / f"report.manual-{datetime.now():%Y%m%d-%H%M%S}.docx"
+            try:
+                shutil.copyfile(docx, aside)
+                self._emit(st, f"Документ меняли вне ForLabs (в Word) — твой вариант сохранён как {aside.name} в "
+                               "папке лабы, в папку сдачи ушёл пересобранный. Правки надёжнее вносить чатом правок.",
+                           "warn")
+            except OSError:
+                pass
+        profile_now = self._profile(st)
+        stale_inputs = st.render_inputs != render_inputs(profile_now, self._enrollment(profile_now, st.subject_id))
+        if not docx_fresh(st, d) or has_slots(docx) or stale_inputs:
             # документ устарел: свёрстан на другом компьютере, вёрстку оборвали или до вставки скриншотов
             st = self.render(st)
             if st.status == "failed" or not docx.exists() or has_slots(docx):
@@ -863,8 +889,10 @@ class Pipeline:
             raise PipelineError("Нет готовых лаб для отчёта за семестр")
         out = Path(out)
         build_semester(docs, profile, enrollment, out)
-        rep = finalize(out, profile.doc_author or profile.full_name, out.parent / "render_semester", self.soffice,
-                       prefer_word=self.prefer_word)
+        from forlabs.core import paths
+
+        work = paths.data_home() / "render_semester" / safe_name(profile_id) / safe_name(subject_id)
+        rep = finalize(out, profile.doc_author or profile.full_name, work, self.soffice, prefer_word=self.prefer_word)
         return out, rep
 
 
@@ -896,9 +924,11 @@ def running_elsewhere(st: LabState) -> bool:
     if st.status != "executing" or not st.lease_machine or st.lease_machine == machine_id():
         return False
     try:
-        return datetime.fromisoformat(st.lease_until or "") > datetime.now(timezone.utc)
+        until, now = datetime.fromisoformat(st.lease_until or ""), datetime.now(timezone.utc)
     except ValueError:
         return False
+    # часы того компьютера могут спешить: аренда дальше обычного срока — не верим ей
+    return now < until <= now + LEASE + timedelta(minutes=10)
 
 
 def output_root(profile: Profile) -> Path:
@@ -933,6 +963,15 @@ def _keep_spec(old: list, new: list) -> list:
     return [f for f in old if f.stage == "spec"] + [f for f in new if f.stage != "spec"]
 
 
+def render_inputs(profile: Profile, enrollment) -> str:
+    """Отпечаток данных профиля, попадающих в документ (группа, ФИО, автор, преподаватель…): поменялись после
+    вёрстки — «Сдать» пересоберёт документ."""
+    import hashlib
+
+    raw = profile.model_dump_json() + (enrollment.model_dump_json() if enrollment is not None else "")
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
 def file_sha(path: Path) -> str:
     import hashlib
 
@@ -960,7 +999,7 @@ def lab_complete(st: LabState) -> bool:
     written = {s.n for s in st.report.sections if section_has_content(s)}
     if any(t.n not in written for t in st.spec.tasks):
         return False
-    if len(st.report.questions) < len(st.spec.questions):
+    if [qa.question for qa in st.report.questions] != list(st.spec.questions):
         return False
     return all(qa.answer.strip() for qa in st.report.questions)
 

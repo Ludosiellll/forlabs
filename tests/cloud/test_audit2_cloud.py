@@ -230,3 +230,44 @@ def test_wipe_local_copy(tmp_path):
     a.wipe_local()
     assert not any((tmp_path / "a").rglob("state.json"))
     assert UID  # кэш именно этого пользователя
+
+
+# ревью 6: без связи шапка (участник) не ждёт повторов на каждой странице
+def test_member_offline_uses_last_known(tmp_path, monkeypatch):
+    fake, a, _ = two_pcs(tmp_path)
+    a.retry_delays = (1.0, 3.0)
+    assert a.member() is not None
+    slept = []
+    monkeypatch.setattr("forlabs.cloud.store.time.sleep", slept.append)
+    fake.drop_next = 1000
+    m = a.member()
+    assert m is not None and slept == []
+
+
+# ревью: ответ на запись потерялся при всех повторах — следующая запись не «конфликт»
+def test_lost_reply_then_next_save_is_not_conflict(tmp_path):
+    fake, a, _ = two_pcs(tmp_path)
+    st = LabState(profile_id="ivan", subject_id="psip", number="3")
+    a.save_lab(st)
+    real = fake.__call__
+
+    def lose(req):
+        r = real(req)
+        if req.method == "PATCH":
+            raise httpx.ReadError("ответ потерялся")
+        return r
+
+    a.http = httpx.Client(transport=httpx.MockTransport(lose))
+    with pytest.raises(CloudError):
+        a.save_lab(st)  # запись дошла, ответы — нет
+    a.http = httpx.Client(transport=httpx.MockTransport(real))
+    a.save_lab(st)  # не «изменилась на другом компьютере»
+
+
+# ревью: «Выйти и стереть копию» не стирает файлы, не ушедшие в облако
+def test_wipe_refuses_with_pending_uploads(tmp_path):
+    fake, a, _ = two_pcs(tmp_path)
+    st = LabState(profile_id="ivan", subject_id="psip", number="3", pending_uploads=["assets/shot.png"])
+    a.save_lab(st)
+    with pytest.raises(CloudError):
+        a.wipe_local()

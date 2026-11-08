@@ -144,6 +144,15 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
     def busy_lab(p: str, s: str, n: str) -> bool:
         return f"{p}/{s}/{n}" in ctx.running
 
+    # Порядок: последний добавленный работает первым — имя хоста → ключ запуска → чужой сайт → вход.
+    @app.middleware("http")
+    async def require_login(request: Request, call_next):
+        path = request.url.path
+        open_paths = ("/login", "/register", "/static", "/settings", "/health", "/focus")
+        if ctx.cloud and not ctx.auth.session and not path.startswith(open_paths):
+            return RedirectResponse("/login", status_code=303)
+        return await call_next(request)
+
     @app.middleware("http")
     async def owner_only(request: Request, call_next):
         if token is None or request.url.path == "/health" or request.url.path.startswith("/static/"):
@@ -190,14 +199,6 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
     def health():
         return {"app": "forlabs"}
 
-    @app.middleware("http")
-    async def require_login(request: Request, call_next):
-        path = request.url.path
-        open_paths = ("/login", "/register", "/static", "/settings", "/health")
-        if ctx.cloud and not ctx.auth.session and not path.startswith(open_paths):
-            return RedirectResponse("/login", status_code=303)
-        return await call_next(request)
-
     @app.exception_handler(Exception)
     async def unexpected_error(request: Request, exc: Exception):
         import logging
@@ -243,7 +244,10 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         if ctx.running:
             return redirect("/", err=BUSY_MESSAGE)
         if wipe and ctx.cloud and hasattr(ctx.store, "wipe_local"):
-            ctx.store.wipe_local()  # общий компьютер: копию своих лаб не оставлять
+            try:
+                ctx.store.wipe_local()  # общий компьютер: копию своих лаб не оставлять
+            except CloudError as e:
+                return redirect("/", err=e.message_ru)
         ctx.auth.sign_out()
         ctx.reset()
         return redirect("/login")
@@ -510,24 +514,28 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         return redirect(lab_url(p, s, n), msg="Разбор сохранён")
 
     @app.post("/labs/{p}/{s}/{n}/execute")
-    def lab_execute(p: str, s: str, n: str):
+    def lab_execute(p: str, s: str, n: str, full: str = Form("")):
         st = load(p, s, n)
         if running_elsewhere(st):
             return redirect(lab_url(p, s, n), err=ELSEWHERE)
         if st.status in ("parsed",):
             st = ctx.pipeline.confirm(st, None)
-        ctx.run(ctx.pipeline.key(st), ctx.pipeline.execute, st)
+        ctx.run(ctx.pipeline.key(st), ctx.pipeline.execute, st, full=bool(full))
         return redirect(lab_url(p, s, n))
 
     @app.post("/labs/{p}/{s}/{n}/reparse")
     def lab_reparse(p: str, s: str, n: str):
         st = load(p, s, n)
+        if running_elsewhere(st):
+            return redirect(lab_url(p, s, n), err=ELSEWHERE)
         ctx.run(ctx.pipeline.key(st), ctx.pipeline.parse, st, st.spec.date if st.spec else today())
         return redirect(lab_url(p, s, n))
 
     @app.post("/labs/{p}/{s}/{n}/redo/{t}")
     def lab_redo(p: str, s: str, n: str, t: int):
         st = load(p, s, n)
+        if running_elsewhere(st):
+            return redirect(lab_url(p, s, n), err=ELSEWHERE)
         ctx.run(ctx.pipeline.key(st), ctx.pipeline.redo_task, st, t)
         return redirect(lab_url(p, s, n))
 

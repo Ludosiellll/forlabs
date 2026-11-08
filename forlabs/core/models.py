@@ -189,6 +189,7 @@ class LabState(BaseModel):
     accepted_rules: list[str] = Field(default_factory=list)
     docx_path: str | None = None
     docx_sha: str | None = None  # отпечаток report.docx последней удачной вёрстки; None — документ устарел
+    render_inputs: str | None = None  # отпечаток профиля на момент вёрстки
     pdf_path: str | None = None
     pages: list[str] = Field(default_factory=list)
     engine: str | None = None
@@ -206,6 +207,7 @@ class LabState(BaseModel):
     lease_until: str | None = None  # до какого времени (UTC) это считается правдой
     pending_uploads: list[str] = Field(default_factory=list)  # файлы, не ушедшие в облако из-за обрыва
     _offline_copy: bool = PrivateAttr(default=False)  # прочитана из копии без связи — только смотреть
+    _attempted: str | None = PrivateAttr(default=None)  # write_id записи, ответ на которую потерялся
 
 
 class LabSummary(BaseModel):

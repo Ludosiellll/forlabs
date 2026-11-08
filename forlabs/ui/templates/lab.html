@@ -41,7 +41,7 @@
           <div class="msg msg-{{ m.role }} k-{{ m.kind }}">
             <div class="who-said">{{ 'Ты' if m.role == 'user' else 'ForLabs' }}{% if m.role == 'user' and m.remember %} · запомнить{% endif %}</div>
             {% if m.text %}<div class="txt">{{ m.text }}</div>{% endif %}
-            {% if m.images %}<div class="thumbs">{% for img in m.images %}<a href="{{ base_url }}/{{ img }}" target="_blank" rel="noopener"><img src="{{ base_url }}/{{ img }}" alt="Фото к сообщению" loading="lazy"></a>{% endfor %}</div>{% endif %}
+            {% if m.images %}<div class="thumbs">{% for img in m.images %}<a href="{{ base_url }}/{{ img }}"><img src="{{ base_url }}/{{ img }}" alt="Фото к сообщению" loading="lazy"></a>{% endfor %}</div>{% endif %}
             {% if m.image_text %}<details class="read"><summary>Что прочитано с фото</summary><div class="txt">{{ m.image_text }}</div></details>{% endif %}
             {% if m.role == 'assistant' and m.version in version_ids %}
             <form method="post" action="{{ base_url }}/chat/revert/{{ m.version }}" onsubmit="return confirm('Вернуть отчёт к состоянию до этого сообщения? Правки после него тоже откатятся.')">
@@ -142,8 +142,13 @@
               Подробности — во вкладке «Журнал».</p>
             {% if not st.spec %}<form method="post" action="{{ base_url }}/reparse"><button class="btn primary" type="submit">Разобрать ещё раз</button></form>{% endif %}
           {% else %}
+            {% if docx_here %}
+            <h2>Документ готов</h2>
+            <p class="muted">Предпросмотра нет: на компьютере нет ни Word, ни LibreOffice. Документ можно скачать, открыть и сдать.</p>
+            {% else %}
             <h2>Документа пока нет</h2>
             <p class="muted">Посмотри журнал: там видно, на каком шаге остановилось.</p>
+            {% endif %}
           {% endif %}
         </div>
       {% else %}
@@ -181,7 +186,7 @@
           <div class="field"><label for="variant_text">Текст варианта из методички</label>
             <textarea id="variant_text" name="variant_text" rows="3">{{ st.spec.variant_text or '' }}</textarea></div>
           <div class="field"><label for="wishes">Пожелания и отклонения от методички</label>
-            {% if st.wish_images %}<div class="thumbs">{% for img in st.wish_images %}<a href="{{ base_url }}/{{ img }}" target="_blank" rel="noopener"><img src="{{ base_url }}/{{ img }}" alt="Фото к пожеланиям" loading="lazy"></a>{% endfor %}</div>{% endif %}
+            {% if st.wish_images %}<div class="thumbs">{% for img in st.wish_images %}<a href="{{ base_url }}/{{ img }}"><img src="{{ base_url }}/{{ img }}" alt="Фото к пожеланиям" loading="lazy"></a>{% endfor %}</div>{% endif %}
             <textarea id="wishes" name="wishes" rows="4" maxlength="4000" placeholder="Например: вариант мне дали 7; код на C# вместо Java">{{ st.spec.wishes or '' }}</textarea>
             <div class="hint">Учтутся при написании всех заданий — они важнее методички.</div></div>
           <div class="field"><label for="questions">Контрольные вопросы — по одному в строке</label>
@@ -190,6 +195,7 @@
           <div class="row"><button class="btn" type="submit">Сохранить разбор</button></div>
         </form>
         <form method="post" action="{{ base_url }}/execute" style="margin-top:10px"{% if st.report and not (st.status in ('failed', 'executing') and not complete) %} onsubmit="return confirm('Текст всех заданий будет написан заново, вставленные скриншоты нужно будет вставить снова. Нынешний отчёт сохранится в версиях — к нему можно вернуться из чата правок. Продолжить?')"{% endif %}>
+          {% if st.report and not (st.status in ('failed', 'executing') and not complete) %}<input type="hidden" name="full" value="1">{% endif %}
           <button class="btn primary" type="submit" {{ 'disabled' if busy }}>{{ 'Выполнить заново' if st.report else 'Выполнить' }}</button>
           {% if st.report %}<span class="small muted">{{ 'Допишу недостающие задания и ответы.' if st.status in ('failed', 'executing') and not complete else 'Текст всех заданий будет написан заново.' }}</span>{% endif %}
         </form>

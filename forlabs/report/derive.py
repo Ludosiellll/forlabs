@@ -29,6 +29,8 @@ def numbered_blocks(doc: ReportDoc) -> list[NumberedBlock]:
     for si, sec in enumerate(doc.sections):
         for bi, b in enumerate(sec.blocks):
             kind = {Figure: "figure", Listing: "listing", Table: "table"}.get(type(b))
+            if kind == "table" and not any(b.rows):
+                continue  # пустую таблицу не верстаем — и номер ей не нужен
             if kind:
                 counters[kind] += 1
                 out.append(NumberedBlock(si, bi, kind, counters[kind]))

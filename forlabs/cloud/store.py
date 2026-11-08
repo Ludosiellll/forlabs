@@ -246,23 +246,39 @@ class CloudStore:
         body = {"status": st.status, "state": st.model_dump(mode="json")}
         try:
             cond = {"state->>rev": f"eq.{expected}"} if expected else {"state->>rev": "is.null"}
-            hit = self._rest("PATCH", "labs", params={**self._lab_key(st), **cond}, json=body,
+            hit = self._rest("PATCH", "labs", params={**self._lab_key(st), **cond, "select": "number"}, json=body,
                              prefer="return=representation").json()
             if not hit:
                 rows = self._rest("GET", "labs", params={"select": "state", **self._lab_key(st)}).json()
+                cloud = (rows[0].get("state") or {}) if rows else {}
+                attempted = getattr(st, "_attempted", None)
                 if not rows:
                     r = self._rest("POST", "labs", json={"profile_id": st.profile_id, "subject_id": st.subject_id,
                                                          "number": st.number, **body},
                                    prefer="return=minimal", ok=(409,))
                     if r.status_code == 409:
-                        raise CloudError(CONFLICT_MESSAGE, "лаба создана на другом компьютере")
-                elif (rows[0].get("state") or {}).get("write_id") != st.write_id:
+                        again = self._rest("GET", "labs", params={"select": "state", **self._lab_key(st)}).json()
+                        if not again or (again[0].get("state") or {}).get("write_id") != st.write_id:
+                            raise CloudError(CONFLICT_MESSAGE, "лаба создана на другом компьютере")
+                elif attempted and cloud.get("write_id") == attempted:
+                    # прошлая наша запись дошла, хотя ответ потерялся: пишем поверх неё
+                    hit = self._rest("PATCH", "labs", params={**self._lab_key(st), "select": "number",
+                                                              "state->>rev": f"eq.{cloud.get('rev')}"},
+                                     json={**body, "state": {**body["state"], "rev": int(cloud.get("rev") or 0) + 1}},
+                                     prefer="return=representation").json()
+                    if not hit:
+                        raise CloudError(CONFLICT_MESSAGE, "версия сменилась при повторной записи")
+                    st.rev = int(cloud.get("rev") or 0) + 1
+                elif cloud.get("write_id") != st.write_id:
                     raise CloudError(CONFLICT_MESSAGE, f"в облаке версия {(rows[0].get('state') or {}).get('rev')}, "
                                                        f"у нас {expected}")
                 # иначе — это наша же запись, ответ на которую потерялся при обрыве
-        except CloudError:
+        except CloudError as e:
+            if e.offline:  # ответ не пришёл: запись могла дойти — следующая попытка это узнает
+                st._attempted = st.write_id
             st.rev, st.write_id = expected, prev_write
             raise
+        st._attempted = None
         self._cache_lab(st)
 
     def load_lab(self, profile_id: str, subject_id: str, number: str, strict: bool = False) -> LabState | None:
@@ -414,13 +430,23 @@ class CloudStore:
         """Стереть копию лаб и профилей этого пользователя на компьютере (общий компьютер в колледже)."""
         import shutil
 
-        for d in (self.local.home / "labs" / safe_name(self.auth.user_id), self._profiles_cache()):
+        labs = self.local.home / "labs" / safe_name(self.auth.user_id)
+        waiting = [f for f in labs.rglob("state.json") if (_read_model(LabState, f) or LabState(
+            profile_id="", subject_id="", number="")).pending_uploads] if labs.exists() else []
+        if waiting:
+            raise CloudError("Не все снимки ушли в облако (не было связи) — открой эти лабы и нажми «Пересобрать "
+                             "документ», когда появится интернет, потом стирай копию.")
+        for d in (labs, self._profiles_cache()):
             shutil.rmtree(d, ignore_errors=True)
 
     # участники (для администратора)
     def member(self) -> Member | None:
-        rows = self._rest("GET", "members", params={"select": "*", "user_id": f"eq.{self.auth.user_id}"}).json()
-        return Member.model_validate(rows[0]) if rows else None
+        """Нужен каждой странице (шапка, подписка): без связи — последнее известное значение, без пауз повторов."""
+        rows = self._read("members", {"select": "*", "user_id": f"eq.{self.auth.user_id}"})
+        if rows is None:
+            return getattr(self, "_member_cache", None)
+        self._member_cache = Member.model_validate(rows[0]) if rows else None
+        return self._member_cache
 
     def list_members(self) -> list[Member]:
         rows = self._rest("GET", "members", params={"select": "*", "order": "created_at.asc"}).json()

@@ -6,7 +6,7 @@ import uuid
 from pathlib import Path
 from typing import Callable, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from forlabs.core.models import (
     QA,
@@ -56,7 +56,6 @@ class BlockDraft(BaseModel):
 
 
 class SectionDraft(BaseModel):
-    model_config = ConfigDict(extra="forbid")
     blocks: list[BlockDraft] = Field(min_length=1)
 
 
@@ -66,7 +65,6 @@ class AnswerItem(BaseModel):
 
 
 class AnswersDraft(BaseModel):
-    model_config = ConfigDict(extra="forbid")
     answers: list[AnswerItem | str]
 
     def for_questions(self, numbers: list[int]) -> dict[int, str]:
