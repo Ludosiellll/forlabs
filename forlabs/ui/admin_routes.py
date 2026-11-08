@@ -232,7 +232,10 @@ def register_admin(app: FastAPI, ctx, render, redirect) -> None:
             subj = subjects.get(lab.subject_id)
             labs.append({"lab": lab, "subject": subj.short_name if subj else lab.subject_id, "tokens": tokens,
                          "calls": calls, "created": date_ru(lab.created_at)})
+        lab_keys = {lab.key for lab in card.labs}
+        unmatched = sum(t for k, (t, _) in card.usage_by_lab.items() if k not in lab_keys)
         return render(request, "admin_member.html", nav="admin", me=me, card=card, m=m, is_me=uid == me.user_id,
+                      unmatched=unmatched,
                       access=access_text(m), seen=ago(m.last_seen_at), joined=date_ru(m.created_at),
                       chart=bars([d.strftime("%d.%m") for d in days], values, color=color, name=m.name),
                       labs=labs, avg=avg, events=[(date_ru(e.created_at), event_text(e)) for e in card.events],

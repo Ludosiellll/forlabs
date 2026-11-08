@@ -78,6 +78,7 @@ def _extract_json(text: str) -> Any:
 
 
 class LLM:
+    accepts_lab_tag = False  # True только для прокси ForLabs в облаке
     def __init__(self, settings: Settings, api_key: "str | Callable[[], str]", http_client: httpx.Client | None = None,
                  base_url: str | None = None, timeout: float = 240.0,
                  retry_delays: tuple[float, ...] = (3.0, 10.0)):
@@ -193,6 +194,7 @@ class FakeLLM:
         self.usage = UsageCounter()
         self.model = "fake"
         self.headers: dict[str, str] = {}
+        self.accepts_lab_tag = True
 
     def with_headers(self, extra: dict[str, str]) -> "FakeLLM":
         self.headers = {**self.headers, **extra}

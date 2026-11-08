@@ -21,10 +21,12 @@
 
 ## 2. Данные (миграция `0003_admin.sql`)
 
-- `members`: новые столбцы `access_until timestamptz null` (null — бессрочно), `note text`,
+- `members`: новые столбцы `access_until timestamptz null` (null — бессрочно),
   `allow_shared_key boolean default true`, `last_seen_at timestamptz`.
   Действующий доступ к модели: `approved and (role = 'admin' or access_until is null or access_until > now())`.
   Подписка ограничивает только модель: свои лабы участник читает и скачивает и после окончания.
+- `member_notes(user_id, note)` — заметка администратора; читает и пишет только администратор (миграция 0004:
+  участник читает свою строку `members` целиком, поэтому заметке там не место).
 - `labs`: столбец `created_at timestamptz default now()` (для графика «лабы по неделям»).
 - `llm_usage`: столбцы `lab text` (ключ лабы `профиль/предмет/номер`) и `key_kind text`
   (`own` | `shared`).

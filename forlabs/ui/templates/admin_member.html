@@ -111,6 +111,7 @@
         {% else %}
           <p class="small muted">Лаб пока нет.</p>
         {% endif %}
+        {% if unmatched %}<p class="small muted" style="margin-top:8px">Без привязки к лабе: {{ fmt_tokens(unmatched) }} токенов — проверка связи, удалённые лабы, запросы до обновления.</p>{% endif %}
       </section>
 
       <section aria-labelledby="s-hist">

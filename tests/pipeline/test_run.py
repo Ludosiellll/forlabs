@@ -410,3 +410,21 @@ def test_pipeline_tags_llm_calls(tmp_home, tmp_path):
     st = pipe.create_lab("ivanov", "psip", [(FIXTURE.name, FIXTURE.read_bytes())], number="7")
     pipe.execute(pipe.confirm(pipe.parse(st, date="24.09.2026"), None))
     assert fake.headers == {"X-ForLabs-Lab": "ivanov%2Fpsip%2F7"}
+
+
+def test_draft_usage_is_retagged_after_renumber(tmp_home, tmp_path):
+    pipe, fake = setup(tmp_home, tmp_path, [RAW])
+    calls = []
+    pipe.store.retag_usage = lambda old, new: calls.append((old, new))
+    st = pipe.create_lab("ivanov", "psip", [(FIXTURE.name, FIXTURE.read_bytes())])
+    draft_key = pipe.key(st)
+    st = pipe.parse(st, date="24.09.2026")
+    assert st.number == "7" and calls == [(draft_key, "ivanov/psip/7")]
+
+
+def test_lab_tag_only_for_cloud_proxy(tmp_home, tmp_path):
+    pipe, fake = setup(tmp_home, tmp_path, [RAW, SEC, SEC2, ANS])
+    fake.accepts_lab_tag = False  # локальный режим: запросы идут прямо провайдеру
+    st = pipe.create_lab("ivanov", "psip", [(FIXTURE.name, FIXTURE.read_bytes())], number="7")
+    pipe.execute(pipe.confirm(pipe.parse(st, date="24.09.2026"), None))
+    assert fake.headers == {}

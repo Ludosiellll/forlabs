@@ -101,7 +101,11 @@ def test_admin_set_until_revoke_unlimited(store, fake):
 def test_admin_update_member_only_allowed_fields(store, fake):
     store.admin_update_member(M, note="оплатил за ноябрь", display_name="Анна И.", role="admin")
     row = fake.tables["members"][1]
-    assert row["note"] == "оплатил за ноябрь" and row["display_name"] == "Анна И." and row["role"] == "member"
+    assert row["display_name"] == "Анна И." and row["role"] == "member"
+    # заметка — в отдельной таблице, которую участник не читает
+    assert row["note"] == "" and fake.tables["member_notes"] == [{"user_id": M, "note": "оплатил за ноябрь"}]
+    assert store.admin_member(M).member.note == "оплатил за ноябрь"
+    assert {m.user_id: m.note for m in store.admin_overview().members}[M] == "оплатил за ноябрь"
 
 
 def test_admin_set_key_validates(store, fake):
@@ -161,3 +165,8 @@ def test_own_data_only_even_for_admin(store, fake):
     assert store.get_profile("ivanov").full_name == "Иванов Иван"
     assert store.load_lab("ivanov", "ssp", "4").status == "parsed"
     assert [s.status for s in store.list_labs("ivanov", "ssp")] == ["parsed"]
+
+
+def test_retag_usage_calls_rpc(store, fake):
+    store.retag_usage("anna/ssp/новая-abc123", "anna/ssp/4")
+    assert fake.rpc_calls[-1] == ("retag_my_usage", {"old_lab": "anna/ssp/новая-abc123", "new_lab": "anna/ssp/4"})

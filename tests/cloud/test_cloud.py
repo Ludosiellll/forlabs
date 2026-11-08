@@ -63,6 +63,8 @@ class FakeSupabase:
                 return httpx.Response(200, json=self.daily)
             if fn == "admin_usage_by_lab":
                 return httpx.Response(200, json=self.by_lab)
+            if fn == "retag_my_usage":
+                return httpx.Response(204)
             return httpx.Response(404, json={"message": f"нет функции {fn}"})
         if path == "/functions/v1/llm/balance":
             if self.functions_down:
@@ -81,7 +83,8 @@ class FakeSupabase:
                 for row in json.loads(req.content) if req.content.startswith(b"[") else [json.loads(req.content)]:
                     if table in ("student_profiles", "labs", "subject_memory", "rule_overrides", "custom_subjects"):
                         row.setdefault("owner", UID)  # в базе owner = auth.uid() по умолчанию
-                    keys = {"student_profiles": ("id",), "labs": ("profile_id", "subject_id", "number")}.get(table, ())
+                    keys = {"student_profiles": ("id",), "labs": ("profile_id", "subject_id", "number"),
+                            "member_notes": ("user_id",)}.get(table, ())
                     rows[:] = [r for r in rows if any(r.get(k) != row.get(k) for k in keys)] if keys else rows
                     rows.append(row)
                 return httpx.Response(201, json=[])

@@ -239,7 +239,7 @@ class CloudStore:
         return out
 
     # админ-панель
-    _MEMBER_FIELDS = {"display_name", "note", "approved", "access_until", "allow_shared_key"}
+    _MEMBER_FIELDS = {"display_name", "approved", "access_until", "allow_shared_key"}
     _LAB_COLUMNS = "owner,profile_id,subject_id,number,status,created_at,updated_at"
 
     def _rpc(self, fn: str, args: dict | None = None):
@@ -258,6 +258,9 @@ class CloudStore:
         profiles: dict[str, list[Profile]] = {}
         for r in self._rest("GET", "student_profiles", params={"select": "owner,data"}).json():
             profiles.setdefault(r["owner"], []).append(Profile.model_validate(r["data"]))
+        notes = self._notes()
+        for m in members:
+            m.note = notes.get(m.user_id, "")
         return AdminOverview(members=members, keys=keys, usage_30d=usage, daily=daily, labs=labs, profiles=profiles)
 
     def admin_member(self, uid: str) -> MemberCard | None:
@@ -277,13 +280,27 @@ class CloudStore:
         events = [MemberEvent.model_validate(r) for r in
                   self._rest("GET", "member_events", params={"select": "*", "user_id": f"eq.{uid}",
                                                              "order": "created_at.desc", "limit": "50"}).json()]
-        return MemberCard(member=Member.model_validate(rows[0]), key=key, profiles=profiles, labs=labs,
+        member = Member.model_validate(rows[0])
+        member.note = self._notes(uid).get(uid, "")
+        return MemberCard(member=member, key=key, profiles=profiles, labs=labs,
                           usage_by_lab=by_lab, daily=daily, events=events)
+
+    def retag_usage(self, old_lab: str, new_lab: str) -> None:
+        """Черновик получил номер: расход его разбора переносится на лабу (только свои строки)."""
+        self._rpc("retag_my_usage", {"old_lab": old_lab, "new_lab": new_lab})
 
     def admin_update_member(self, uid: str, **fields) -> None:
         data = {k: v for k, v in fields.items() if k in self._MEMBER_FIELDS}
         if data:
             self._rest("PATCH", "members", params={"user_id": f"eq.{uid}"}, json=data, prefer="return=minimal")
+        if "note" in fields:  # заметка администратора — в отдельной таблице, участнику не видна
+            self._upsert("member_notes", {"user_id": uid, "note": fields["note"]}, "user_id")
+
+    def _notes(self, uid: str | None = None) -> dict[str, str]:
+        params = {"select": "user_id,note"}
+        if uid:
+            params["user_id"] = f"eq.{uid}"
+        return {r["user_id"]: r["note"] for r in self._rest("GET", "member_notes", params=params).json()}
 
     def admin_extend(self, uid: str, days: int) -> None:
         """Продлить на N дней: от текущей даты окончания, если она ещё впереди, иначе от сегодня."""

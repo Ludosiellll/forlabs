@@ -91,7 +91,9 @@ class AppContext:
         if self.llm_override:
             return self.llm_override()
         if self.cloud:
-            return LLM(self.settings, api_key=self.auth.access_token, base_url=CLOUD.llm_base_url)
+            llm = LLM(self.settings, api_key=self.auth.access_token, base_url=CLOUD.llm_base_url)
+            llm.accepts_lab_tag = True
+            return llm
         key = get_api_key()
         if not key:
             raise CloudError("Не задан ключ API. Открой «Настройки» и вставь ключ.")

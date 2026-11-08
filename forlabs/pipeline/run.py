@@ -89,7 +89,7 @@ class Pipeline:
         from urllib.parse import quote
 
         llm = self.llm_factory()
-        if hasattr(llm, "with_headers"):
+        if getattr(llm, "accepts_lab_tag", False):  # только прокси ForLabs; провайдеру напрямую имя не шлём
             llm = llm.with_headers({"X-ForLabs-Lab": quote(self.key(st), safe="")})
         return llm
 
@@ -221,6 +221,11 @@ class Pipeline:
             candidate, k = f"{number}-{k}", k + 1
         st = st.model_copy(update={"number": candidate})
         self.renamed[old_key] = candidate
+        if hasattr(self.store, "retag_usage"):
+            try:  # расход разбора записан под номером черновика — переносим его на лабу
+                self.store.retag_usage(old_key, self.key(st))
+            except Exception:
+                pass
         new_dir = self.lab_dir(st)
         if old_dir.exists():
             new_dir.parent.mkdir(parents=True, exist_ok=True)

@@ -118,7 +118,8 @@ def test_admin_set_key_validates(admin, fake):
 def test_admin_note_and_name(admin, fake):
     admin.post(f"/admin/u/{M}/note", data={"display_name": "Анна И.", "note": "оплатила за ноябрь"})
     row = fake.tables["members"][1]
-    assert row["display_name"] == "Анна И." and row["note"] == "оплатила за ноябрь"
+    assert row["display_name"] == "Анна И." and fake.tables["member_notes"][0]["note"] == "оплатила за ноябрь"
+    assert "оплатила за ноябрь" in admin.get(f"/admin/u/{M}").text
 
 
 def test_admin_member_page(admin):
@@ -220,3 +221,11 @@ def test_member_settings_offline_is_not_no_key(fake, tmp_home):
 def test_admin_cannot_change_own_access(admin, fake):
     r = admin.post(f"/admin/u/{UID}/access", data={"action": "revoke"}, follow_redirects=False)
     assert "err=" in r.headers["location"] and fake.tables["members"][0]["access_until"] is None
+
+
+def test_card_shows_usage_not_tied_to_a_lab(admin, fake):
+    fake.by_lab = [{"lab": "anna/ssp/4", "tokens": 27584, "calls": 9, "last_at": "2026-11-07T11:00:00+00:00"},
+                   {"lab": "", "tokens": 1200, "calls": 1, "last_at": "2026-11-07T09:00:00+00:00"},
+                   {"lab": "anna/ssp/удалена", "tokens": 4000, "calls": 2, "last_at": "2026-11-06T09:00:00+00:00"}]
+    page = admin.get(f"/admin/u/{M}").text
+    assert "Без привязки к лабе" in page and "5 200" in page
