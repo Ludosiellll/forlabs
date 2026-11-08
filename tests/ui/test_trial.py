@@ -117,3 +117,47 @@ def test_trial_usage_counts_labs_and_chats():
     u = TrialUsage(labs_limit=3, chat_limit=5, rows=[TrialRow(lab="p/s/1", calls=9, chats=2), TrialRow(lab="", calls=4)])
     assert u.labs_used == 1 and u.labs_left == 2
     assert u.chats_used("p/s/1") == 2 and u.chats_used("p/s/9") == 0
+
+
+# ревью I7: без сети страницы у студента на пробном не висят на повторах запроса расхода
+def test_trial_usage_offline_single_attempt_and_cached(fake, tmp_home):
+    import time
+
+    import httpx
+
+    from forlabs.cloud.auth import CloudAuth
+    from forlabs.cloud.store import CloudStore, Member
+    from test_cloud import CFG, UID
+
+    auth = CloudAuth(CFG, http=httpx.Client(transport=httpx.MockTransport(fake)), use_keyring=False)
+    auth.sign_in("a@b.c", "верный")
+    store = CloudStore(auth)
+    m = Member(user_id=UID, trial_labs=3, trial_chat=5)
+    fake.trial = [{"lab": "p/s/1", "calls": 3, "chats": 1, "has_chat": False}]
+    assert store.trial_usage(m).labs_used == 1
+    calls = len([c for c in fake.rpc_calls if c[0] == "trial_usage"])
+    assert store.trial_usage(m).labs_used == 1  # из кэша
+    assert len([c for c in fake.rpc_calls if c[0] == "trial_usage"]) == calls
+    store._trial_cache.clear()
+    fake.drop_next = 10
+    t = time.monotonic()
+    assert store.trial_usage(m) is None
+    assert time.monotonic() - t < 0.5 and fake.drop_next == 9  # одна попытка, без пауз
+
+
+def test_settings_check_for_trial_user_is_not_update_prompt(fake, tmp_home, monkeypatch):
+    from forlabs.core.llm import LLMError
+
+    client = make_client(fake, tmp_home, me="member")
+    ctx = client.app.state.ctx
+
+    class L:
+        def check(self):
+            raise LLMError("access", "trial needs lab tag", "Обнови ForLabs до последней версии")
+
+    monkeypatch.setattr(ctx, "llm", lambda: L())
+    r = client.post("/settings/check", follow_redirects=False)
+    from urllib.parse import unquote
+
+    loc = unquote(r.headers["location"])
+    assert "msg=" in loc and "пробн" in loc and "Обнови" not in loc

@@ -70,8 +70,9 @@ async function send(req: Request): Promise<Response> {
     const r = await tg("sendMessage", { chat_id: cfg.owner_chat_id, text: forOwner(m.display_name || m.email, m.email, text, status) });
     const mid = (r?.result as { message_id?: number } | undefined)?.message_id;
     if (typeof mid === "number") {
-      delivered = true;
-      await admin.from("support_messages").update({ tg_message_id: mid }).eq("id", row.id);
+      const { error: upErr } = await admin.from("support_messages")
+        .update({ tg_message_id: mid, tg_chat_id: cfg.owner_chat_id }).eq("id", row.id);
+      delivered = !upErr;  // без связи с сообщением ответ реплаем не найдёт студента — честно говорим «не ушло»
     }
   }
   return json(200, { ok: true, id: row.id, telegram: delivered });
@@ -107,7 +108,8 @@ async function telegram(req: Request): Promise<Response> {
       await tg("sendMessage", { chat_id: action.chatId, text: "Готово: сюда будут приходить сообщения поддержки ForLabs. Отвечай на них реплаем." });
     }
   } else if (action.kind === "reply") {
-    const { data: orig } = await admin.from("support_messages").select("user_id").eq("tg_message_id", action.replyTo).maybeSingle();
+    const { data: orig } = await admin.from("support_messages").select("user_id")
+      .eq("tg_chat_id", cfg.owner_chat_id).eq("tg_message_id", action.replyTo).maybeSingle();
     if (orig) {
       await admin.from("support_messages").insert({ user_id: orig.user_id, from_admin: true, text: action.text });
       await admin.from("support_messages").update({ read_at: new Date().toISOString() })

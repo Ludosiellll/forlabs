@@ -845,6 +845,9 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         try:
             model = ctx.llm().check()
         except (LLMError, CloudError) as e:
+            if "trial needs lab tag" in (getattr(e, "detail", "") or ""):  # пробный: модель отвечает только в лабе
+                return redirect("/settings", msg="Связь с сервером есть. В пробном доступе модель отвечает только "
+                                                 "внутри лабы — проверка без лабы не считается.")
             return redirect("/settings", err=getattr(e, "message_ru", str(e)))
         return redirect("/settings", msg=f"Связь есть, модель отвечает: {model}")
 

@@ -584,16 +584,30 @@ class CloudStore:
     def admin_full_access(self, uid: str) -> None:
         self.admin_update_member(uid, trial_labs=None, trial_chat=None)
 
+    TRIAL_TTL = 20.0  # секунд: шапка не спрашивает расход на каждой странице
+
     def trial_usage(self, member: "Member") -> TrialUsage | None:
-        """Расход пробного периода участника (свой — для шапки, чужой — администратору); без связи — None."""
+        """Расход пробного периода участника (свой — для шапки, чужой — администратору). Одна попытка без пауз
+        и кэш на 20 с: без связи страницы не ждут повторов; без связи — None."""
         if member.trial_labs is None:
             return None
-        try:
-            rows = self._rpc("trial_usage", {"target": member.user_id}) or []
-        except CloudError:
+        cache = self.__dict__.setdefault("_trial_cache", {})
+        hit = cache.get(member.user_id)
+        if hit and time.monotonic() - hit[0] < self.TRIAL_TTL:
+            return hit[1]
+        if time.monotonic() < self._offline_until:
             return None
-        return TrialUsage(labs_limit=member.trial_labs, chat_limit=member.trial_chat or 0,
-                          rows=[TrialRow.model_validate(r) for r in rows])
+        try:
+            r = self._rest("POST", "rpc/trial_usage", json={"target": member.user_id}, retries=False)
+            rows = r.json() if r.content else []
+        except CloudError as e:
+            if e.offline:
+                self.offline, self._offline_until = True, time.monotonic() + OFFLINE_HOLD
+            return None
+        usage = TrialUsage(labs_limit=member.trial_labs, chat_limit=member.trial_chat or 0,
+                           rows=[TrialRow.model_validate(x) for x in rows or []])
+        cache[member.user_id] = (time.monotonic(), usage)
+        return usage
 
     def admin_revoke(self, uid: str) -> None:
         self.admin_update_member(uid, access_until=now_utc().isoformat())

@@ -58,26 +58,3 @@ export function ownKeyError(kind: "own" | "shared", status: number, body: string
   if (status === 401 || status === 403) return { status: 402, message: `member key rejected: ${status}` };
   return null;
 }
-
-export type TrialLimits = { trial_labs: number | null; trial_chat: number | null };
-/** Расход пробного периода по лабе: запросов к модели и разных сообщений чата правок. */
-export type TrialRow = { lab: string; calls: number; chats: number };
-
-/** Пробный доступ: не больше trial_labs разных лаб, trial_chat сообщений чата правок на лабу и (скрыто)
- *  maxCalls запросов на лабу — чтобы перезапусками не съесть лимиты. chatSeen — у этого сообщения уже были запросы. */
-export function decideTrial(m: TrialLimits, usage: TrialRow[], lab: string | null, chat: string | null,
-                            chatSeen: boolean, maxCalls: number): Decision {
-  if (m.trial_labs === null || m.trial_labs === undefined) return { ok: true };
-  if (!lab) return { ok: false, status: 403, message: "trial needs lab tag" };
-  const labs = usage.filter((r) => r.lab);
-  const cur = labs.find((r) => r.lab === lab);
-  if (!cur && labs.length >= m.trial_labs) {
-    return { ok: false, status: 403, message: `trial labs limit: ${m.trial_labs}` };
-  }
-  if (cur && cur.calls >= maxCalls) return { ok: false, status: 403, message: "trial lab calls limit" };
-  const chatLimit = m.trial_chat ?? 0;
-  if (chat && !chatSeen && (cur?.chats ?? 0) >= chatLimit) {
-    return { ok: false, status: 403, message: `trial chat limit: ${chatLimit}` };
-  }
-  return { ok: true };
-}

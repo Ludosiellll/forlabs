@@ -35,6 +35,10 @@ export function cleanText(v: unknown): string | null {
 
 /** Сообщение студента владельцу в Telegram. */
 export function forOwner(name: string, email: string, text: string, status: string): string {
-  const who = email ? `${name} (${email})` : name;
-  return `ForLabs · ${who}${status ? ` · ${status}` : ""}\n\n${text}\n\nОтветь на это сообщение (Reply) — ответ придёт студенту в ForLabs.`;
+  const who = (email ? `${name} (${email})` : name).slice(0, 200);
+  const head = `ForLabs · ${who}${status ? ` · ${status}` : ""}\n\n`;
+  const tail = "\n\nОтветь на это сообщение (Reply) — ответ придёт студенту в ForLabs.";
+  const room = 4096 - head.length - tail.length;  // лимит длины сообщения в Telegram
+  const body = text.length > room ? text.slice(0, room - 1) + "…" : text;
+  return head + body + tail;
 }

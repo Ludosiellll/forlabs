@@ -68,3 +68,52 @@ begin
     b_own_rows, b_chats_lab1, b_reads_a, b_trial_update, b_insert, b_reads_a_msgs, b_cfg, svc_has_chat,
     a_reads_b_msgs, a_reply, b_mark_read, a_status;
 end $$;
+
+-- Пробный лимит атомарно (trial_begin, миграция 0007) и защита переноса расхода (retag_my_usage).
+-- Ожидаемо: lab3=true lab4=trial labs limit: 3 old_lab=true chat5=true chat6=trial chat limit: 5 chat5_again=true
+--           calls_cap=trial lab calls limit no_tag=trial needs lab tag member_call=blocked admin=true
+--           to_empty=0 p_s_1_kept=1 draft_moved=1
+do $$
+declare
+  a uuid := '00000000-0000-4000-8000-0000000000a6';
+  b uuid := '00000000-0000-4000-8000-0000000000b6';
+  r record; lab3 text; lab4 text; old_lab text; chat5 text; chat6 text; chat5_again text; calls_cap text; no_tag text;
+  member_call text := 'ALLOWED'; adm text; to_empty int; kept int; moved int;
+begin
+  insert into auth.users (id, instance_id, aud, role, email) values
+    (a, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'tb-a@example.invalid'),
+    (b, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'tb-b@example.invalid');
+  update public.members set approved = true, role = 'admin', trial_labs = 1, trial_chat = 0 where user_id = a;
+  update public.members set approved = true, role = 'member', trial_labs = 3, trial_chat = 5,
+         trial_since = now() - interval '1 hour' where user_id = b;
+  insert into public.llm_usage (user_id, model, lab, chat) values
+    (b, 'm', 'p/s/1', null), (b, 'm', 'p/s/2', null), (b, 'm', 'p/s/2', 'c1'), (b, 'm', 'p/s/2', 'c2'),
+    (b, 'm', 'p/s/2', 'c3'), (b, 'm', 'p/s/2', 'c4');
+  perform set_config('request.jwt.claims', json_build_object('role', 'service_role')::text, true);
+  select * into r from public.trial_begin(b, 'p/s/3', null, 120, 'm'); lab3 := r.ok::text;
+  select * into r from public.trial_begin(b, 'p/s/4', null, 120, 'm'); lab4 := coalesce(nullif(r.message, ''), r.ok::text);
+  select * into r from public.trial_begin(b, 'p/s/1', null, 120, 'm'); old_lab := r.ok::text;
+  select * into r from public.trial_begin(b, 'p/s/2', 'c5', 120, 'm'); chat5 := r.ok::text;
+  select * into r from public.trial_begin(b, 'p/s/2', 'c6', 120, 'm'); chat6 := coalesce(nullif(r.message, ''), r.ok::text);
+  select * into r from public.trial_begin(b, 'p/s/2', 'c5', 120, 'm'); chat5_again := r.ok::text;
+  select * into r from public.trial_begin(b, 'p/s/2', null, 5, 'm'); calls_cap := coalesce(nullif(r.message, ''), r.ok::text);
+  select * into r from public.trial_begin(b, '', null, 120, 'm'); no_tag := coalesce(nullif(r.message, ''), r.ok::text);
+  select * into r from public.trial_begin(a, 'x/y/1', 'c', 120, 'm'); adm := r.ok::text;
+  insert into public.llm_usage (user_id, model, lab) values (b, 'm', 'p/s/новая-1');
+
+  perform set_config('request.jwt.claims', json_build_object('sub', b, 'role', 'authenticated')::text, true);
+  execute 'set local role authenticated';
+  begin
+    perform public.trial_begin(b, 'p/s/9', null, 120, 'm');
+  exception when others then member_call := 'blocked';
+  end;
+  perform public.retag_my_usage('p/s/1', '');           -- обнулить лабу — нельзя
+  perform public.retag_my_usage('p/s/1', 'p/s/2');      -- слить две лабы — нельзя
+  perform public.retag_my_usage('p/s/новая-1', 'p/s/7');  -- черновик → номер — можно
+  execute 'reset role';
+  select count(*) into to_empty from public.llm_usage where user_id = b and lab = '';
+  select count(*) into kept from public.llm_usage where user_id = b and lab = 'p/s/1';
+  select count(*) into moved from public.llm_usage where user_id = b and lab = 'p/s/7';
+  raise exception 'RESULT lab3=% lab4=% old_lab=% chat5=% chat6=% chat5_again=% calls_cap=% no_tag=% member_call=% admin=% to_empty=% p_s_1_kept=% draft_moved=%',
+    lab3, lab4, old_lab, chat5, chat6, chat5_again, calls_cap, no_tag, member_call, adm, to_empty, kept, moved;
+end $$;

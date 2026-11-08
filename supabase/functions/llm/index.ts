@@ -2,7 +2,7 @@
 // или общий секрет LLM_API_KEY. Пускает только вошедших, одобренных и с действующей подпиской (в пробном
 // доступе — в пределах лаб и сообщений чата правок), разрешает модели из списка, пишет расход по лабам. /balance — остаток на ключах у провайдера.
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
-import { decideAccess, decideTrial, labTag, ownKeyError, parseBalance, pickKey, type TrialRow } from "./logic.ts";
+import { decideAccess, labTag, ownKeyError, parseBalance, pickKey } from "./logic.ts";
 
 const BASE = (Deno.env.get("LLM_BASE_URL") ?? "https://api.aikeysforyou.com/v1").replace(/\/$/, "");
 const KEY = Deno.env.get("LLM_API_KEY") ?? "";
@@ -102,15 +102,6 @@ Deno.serve(async (req: Request) => {
 
   const lab = labTag(req.headers.get("x-forlabs-lab"));
   const chat = labTag(req.headers.get("x-forlabs-chat"));
-  if (member.role !== "admin" && member.trial_labs !== null && member.trial_labs !== undefined) {
-    const { data: rows, error: usageErr } = await admin.rpc("trial_usage", { target: user.id, cur_chat: chat });
-    if (usageErr) return err(500, `trial_usage: ${usageErr.message}`);
-    const usage = (rows ?? []) as (TrialRow & { has_chat: boolean })[];
-    const cur = usage.find((r) => r.lab === lab);
-    const trial = decideTrial(member as Member, usage.map((r) => ({ lab: r.lab, calls: Number(r.calls), chats: Number(r.chats) })),
-      lab, chat, Boolean(cur?.has_chat), TRIAL_CALLS_PER_LAB);
-    if (!trial.ok) return err(trial.status, trial.message);
-  }
 
   let own: string | null;
   try {
@@ -132,6 +123,21 @@ Deno.serve(async (req: Request) => {
   body.model = model;
   body.stream = false;
 
+  // пробный доступ: проверка лимитов и бронь запроса атомарно в базе (trial_begin, миграция 0007)
+  let reserved: number | null = null;
+  if (member.role !== "admin" && member.trial_labs !== null && member.trial_labs !== undefined) {
+    const { data: rows, error: trialErr } = await admin.rpc("trial_begin", {
+      target: user.id, cur_lab: lab, cur_chat: chat, max_calls: TRIAL_CALLS_PER_LAB, req_model: model,
+    });
+    if (trialErr) return err(500, `trial_begin: ${trialErr.message}`);
+    const t = ((rows ?? []) as { ok: boolean; message: string; usage_id: number | null }[])[0];
+    if (!t?.ok) return err(403, t?.message || "trial check failed");
+    reserved = t.usage_id;
+  }
+  const release = async () => {  // запрос не удался — бронь не съедает пробный лимит
+    if (reserved !== null) await admin.from("llm_usage").delete().eq("id", reserved);
+  };
+
   let upstream: Response;
   let text: string;
   try {
@@ -144,10 +150,12 @@ Deno.serve(async (req: Request) => {
     });
     text = await upstream.text();
   } catch (e) {
+    await release();
     const timeout = (e as Error)?.name === "TimeoutError" || (e as Error)?.name === "AbortError";
     return err(timeout ? 504 : 502, timeout ? "provider timeout" : "provider unreachable");
   }
   if (!upstream.ok) {
+    await release();
     const own = ownKeyError(picked.kind, upstream.status, text);
     if (own) return err(own.status, own.message);
   }
@@ -163,9 +171,10 @@ Deno.serve(async (req: Request) => {
         chat,
         key_kind: picked.kind,
       };
-      const { error: insertErr } = await admin.from("llm_usage").insert(row);
-      if (insertErr && chat !== null) {  // база ещё без столбца chat (миграция 0005 не применена) — без него
-        delete row.chat;
+      if (reserved !== null) {
+        delete row.user_id;
+        await admin.from("llm_usage").update(row).eq("id", reserved);
+      } else {
         await admin.from("llm_usage").insert(row);
       }
       await admin.from("members").update({ last_seen_at: new Date().toISOString() }).eq("user_id", user.id);

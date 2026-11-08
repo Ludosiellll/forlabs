@@ -46,3 +46,9 @@ test("сообщение владельцу: кто пишет и как отв�
   assert.match(s, /пробный: лаб 2 из 3/);
   assert.match(s, /Ответь на это сообщение/);
 });
+
+test("сообщение владельцу укладывается в лимит Telegram 4096", () => {
+  const s = forOwner("Анна".repeat(50), "a".repeat(200) + "@example.com", "я".repeat(4000), "пробный доступ");
+  assert.ok(s.length <= 4096, String(s.length));
+  assert.match(s, /Ответь на это сообщение/);
+});
