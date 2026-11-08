@@ -1,0 +1,12 @@
+# секреты и локальные данные никогда не коммитятся
+.env
+*.env
+*.secret
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+build/
+dist/
+*.egg-info/
+.forlabs-data/
