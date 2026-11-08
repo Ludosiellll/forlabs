@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib
-import shutil
 import sys
 
 
@@ -30,7 +29,9 @@ def main() -> int:
 
     lines.append(_line(browser_available(), "Браузер для схем", "Edge/Chromium найден" if browser_available()
                        else "не найден — схемы придётся вставлять картинкой"))
-    tess = s.tesseract_path or shutil.which("tesseract")
+    from forlabs.ingest.extract import find_tesseract
+
+    tess = find_tesseract(s.tesseract_path)
     lines.append(_line(bool(tess) or None, "Tesseract", tess or "нужен только для фото методичек"))
     lines.append(_line(True, "Режим", "облако (вход по e-mail)" if s.mode == "cloud" else "локальный"))
     if s.mode == "local":

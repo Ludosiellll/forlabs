@@ -115,12 +115,21 @@ Deno.serve(async (req: Request) => {
   body.model = model;
   body.stream = false;
 
-  const upstream = await fetch(`${BASE}/chat/completions`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${picked.key}`, "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  const text = await upstream.text();
+  let upstream: Response;
+  let text: string;
+  try {
+    // шлюз Supabase обрывает функцию на ~150 с: отвечаем раньше и понятно, а не обрывом соединения
+    upstream = await fetch(`${BASE}/chat/completions`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${picked.key}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(140_000),
+    });
+    text = await upstream.text();
+  } catch (e) {
+    const timeout = (e as Error)?.name === "TimeoutError" || (e as Error)?.name === "AbortError";
+    return err(timeout ? 504 : 502, timeout ? "provider timeout" : "provider unreachable");
+  }
   if (!upstream.ok) {
     const own = ownKeyError(picked.kind, upstream.status, text);
     if (own) return err(own.status, own.message);

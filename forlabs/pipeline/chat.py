@@ -7,7 +7,7 @@ import uuid
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from forlabs.core.models import (
     QA,
@@ -54,6 +54,14 @@ class QuestionEdit(BaseModel):
 
 class EditPlan(BaseModel):
     kind: Literal["edit", "answer", "question"] = "question"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _type_alias(cls, v):  # модель иногда пишет type вместо kind
+        if isinstance(v, dict) and "kind" not in v and "type" in v:
+            v = {**v, "kind": v["type"]}
+        return v
+
     reply: str = ""
     tasks: list[TaskEdit] = Field(default_factory=list)
     questions: list[QuestionEdit] = Field(default_factory=list)

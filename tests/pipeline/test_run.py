@@ -231,7 +231,7 @@ def test_lab_files_follow_to_another_computer(tmp_home, tmp_path, monkeypatch):
     assert st.status == "needs_manual", st.error
     st = pipe_a.attach_screenshot(st, section=1, block=3, image=png_bytes())
     assert st.status == "rendered", st.error
-    assert ("ivanov", "psip", "7", "assets/scheme_1_2.png") in shared["files"]
+    assert any(k[:3] == ("ivanov", "psip", "7") and k[3].startswith("assets/scheme_1_2") for k in shared["files"])
 
     # второй компьютер: те же данные в облаке, пустая папка лабы
     pipe_b, _ = setup(tmp_home, tmp_path, [])

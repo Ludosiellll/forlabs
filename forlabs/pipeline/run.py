@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
 
-from forlabs.core.fs import atomic_write_bytes, os_error_text
+from forlabs.core.fs import atomic_write_bytes, durable_replace, os_error_text
 from forlabs.core.models import (
     ChatMessage,
     Figure,
@@ -53,6 +53,35 @@ class PipelineError(Exception):
 DRAFT_PREFIX = "новая-"
 
 
+def error_text(e: BaseException) -> str:
+    """Текст ошибки для студента: по-русски; непредвиденное — с пометкой и ссылкой на журнал."""
+    import re
+    import zipfile
+
+    if getattr(e, "message_ru", None):
+        return e.message_ru
+    if isinstance(e, zipfile.BadZipFile):
+        return "Файл отчёта повреждён (запись оборвалась) — нажми «Пересобрать документ»."
+    if isinstance(e, OSError):
+        return os_error_text(e)
+    text = str(e).strip()
+    if text and re.search("[А-Яа-яЁё]", text):
+        return text
+    return (f"Непредвиденная ошибка ({type(e).__name__}{': ' + text[:200] if text else ''}). "
+            "Подробности — в журнале forlabs.log; попробуй ещё раз.")
+
+
+def normalize_number(raw: str) -> str:
+    """«№ 7», «ЛР 7.», «Лабораторная работа №3» → «7», «3»; «7/8» → «7-8» (косая черта ломает адрес страницы)."""
+    import re
+
+    s = re.sub(r"^\s*(лабораторная|практическая)\s+работа\s*", "", raw or "", flags=re.I)
+    s = re.sub(r"^\s*(лр|пр)\b\.?\s*", "", s, flags=re.I)
+    s = re.sub(r"^\s*(№|n|no\.?)\s*", "", s, flags=re.I)
+    s = re.sub(r"[\\/]+", "-", s).strip().rstrip(".").strip()
+    return re.sub(r"\s+", " ", s)
+
+
 def is_draft(number: str) -> bool:
     return number.startswith("новая")
 
@@ -70,7 +99,7 @@ def today() -> str:
 class Pipeline:
     def __init__(self, store, llm_factory: Callable[[], object], rules: RuleBook | None = None,
                  bus: EventBus | None = None, render_diagrams: bool = True, prefer_word: bool = True,
-                 soffice: str | None = None, memory=None):
+                 soffice: str | None = None, memory=None, tesseract: str | None = None):
         self.store = store
         self.llm_factory = llm_factory
         self.rules = rules or RuleBook()
@@ -78,6 +107,7 @@ class Pipeline:
         self.render_diagrams = render_diagrams
         self.prefer_word = prefer_word
         self.soffice = soffice
+        self.tesseract = tesseract  # путь из настроек: установщик Tesseract не добавляет его в PATH
         self.memory = memory
         self._locks: dict[str, threading.Lock] = {}
         self.renamed: dict[str, str] = {}
@@ -115,7 +145,7 @@ class Pipeline:
         if not f.exists():
             return []
         out = []
-        for i, line in enumerate(f.read_text(encoding="utf-8").splitlines(), start=1):
+        for i, line in enumerate(f.read_text(encoding="utf-8", errors="replace").splitlines(), start=1):
             kind, _, text = line.partition("\t")
             if text:
                 out.append(Event(seq=-i, text=text, kind=kind))
@@ -217,8 +247,7 @@ class Pipeline:
 
     def _fail(self, st: LabState, e: Exception) -> LabState:
         st.status = "failed"
-        st.error = (getattr(e, "message_ru", None) or (os_error_text(e) if isinstance(e, OSError) else None)
-                    or str(e) or type(e).__name__)
+        st.error = error_text(e)
         self._emit(st, st.error, "error")
         logging.getLogger("forlabs").warning("Лаба %s: %s", self.key(st), st.error, exc_info=e)
         try:
@@ -269,7 +298,7 @@ class Pipeline:
     def create_lab(self, profile_id: str, subject_id: str, files: list[tuple[str, bytes]],
                    number: str | None = None, pasted_text: str = "", wishes: str = "",
                    wish_images: list[tuple[str, bytes]] | None = None) -> LabState:
-        number = (number or "").strip()
+        number = normalize_number(number or "")
         if number and self.store.load_lab(profile_id, subject_id, number, strict=True) is not None:
             raise PipelineError(f"ЛР {number} уже есть. Открой её или удали, чтобы сделать заново.")
         if not number:
@@ -294,7 +323,7 @@ class Pipeline:
             src_dir = self.lab_dir(st) / "source"
             files = sorted(f for f in src_dir.iterdir() if f.is_file()) if src_dir.exists() else []
             if files:
-                src = extract_many(files)
+                src = extract_many(files, tesseract=self.tesseract)
             elif st.spec and st.spec.source_text.strip():
                 # методичка осталась на другом компьютере — её текст сохранён в разборе
                 src = SourceText(st.spec.source_text)
@@ -320,19 +349,32 @@ class Pipeline:
             wishes = st.wishes or (st.spec.wishes if st.spec else "") or ""
             if st.wish_images_text and st.wish_images_text not in wishes:
                 wishes = f"{wishes}\nС фото:\n{st.wish_images_text}".strip()
-            spec, findings = extract_spec(src, subject, enrollment, self._llm(st),
-                                          None if is_draft(st.number) else st.number, date or today(), wishes=wishes)
+            known = st.spec.number if st.spec else (None if is_draft(st.number) else st.number)
+            spec, findings = extract_spec(src, subject, enrollment, self._llm(st), known, date or today(),
+                                          wishes=wishes)
+            spec.number = normalize_number(spec.number) or "1"
             old_dir = self.lab_dir(st)
             old_key = moved_from = None
-            if st.number != spec.number:
+            if is_draft(st.number):
                 old_key, old_number = self.key(st), st.number
                 st = self._renumber(st, spec.number, old_dir)
-                spec.number = st.number
                 moved_from = old_number
+                if st.number != spec.number:  # номер в документе — из методички; «7-2» только для списка
+                    self._emit(st, f"ЛР {spec.number} уже есть — эта сохранена как «{st.number}». Лишнюю можно "
+                                   f"удалить; в документе номер останется {spec.number}.", "warn")
             st.spec, st.findings, st.status, st.error = spec, findings, "parsed", None
             # сначала лаба сохраняется под новым номером, потом удаляется черновик, потом страница переходит:
             # обрыв связи или выключение между шагами не теряют лабу
-            self._save(st)
+            try:
+                self._save(st)
+            except Exception:
+                if moved_from is not None:  # облако не приняло новую запись — черновик остаётся рабочим
+                    new_dir = self.lab_dir(st)
+                    if new_dir.exists() and not old_dir.exists():
+                        shutil.move(str(new_dir), str(old_dir))
+                    self.renamed.pop(old_key, None)
+                    st = st.model_copy(update={"number": moved_from, "source_path": str(old_dir / "source")})
+                raise
             if moved_from is not None:
                 try:
                     if is_draft(moved_from):
@@ -466,7 +508,12 @@ class Pipeline:
                 def remember_rule() -> str:
                     if not rule:
                         return note
-                    self.memory.add_teacher(st.profile_id, st.subject_id, rule)
+                    try:  # не запомнилось (нет связи) — удачная правка от этого не откатывается
+                        self.memory.add_teacher(st.profile_id, st.subject_id, rule)
+                    except Exception as e:
+                        logging.getLogger("forlabs").warning("Требование не запомнено: %s", e)
+                        return (f"\nНе получилось запомнить требование ({getattr(e, 'message_ru', e)}) — отметь "
+                                "«Запомнить» ещё раз, когда будет связь.")
                     return f"\nЗапомнил для следующих лаб: {rule.rstrip('.')}."
 
                 was_final = st.status == "final"
@@ -508,8 +555,13 @@ class Pipeline:
                                                          subject, llm, self.rules)
                     changed.append("ответы на вопросы " + ", ".join(str(q.n) for q in plan.questions))
                 self._emit(st, "Проверяю по стандарту и на признаки ИИ", step="check")
-                report, findings = check_and_repair(st.report, st.spec, profile, llm, self.rules, self._others(st),
-                                                    on_event=lambda t: self._emit(st, t, step="check"))
+                # чиним только то, что правили, и не трогаем принятые студентом замечания
+                touched = {f"Задание {e.n}," for e in plan.tasks} | {f"Вопрос {q.n}" for q in plan.questions}
+                accepted = set(st.accepted_rules)
+                report, findings = check_and_repair(
+                    st.report, st.spec, profile, llm, self.rules, self._others(st),
+                    on_event=lambda t: self._emit(st, t, step="check"),
+                    scope=lambda f: any(f.location.startswith(t) for t in touched) and not is_accepted(f, accepted))
                 st.report = _relative_images(report, self.lab_dir(st))
                 st.findings = _keep_spec(st.findings, findings)
                 self._sync_assets(st)
@@ -708,13 +760,14 @@ class Pipeline:
         subject = get_subject(st.subject_id)
         root = Path(profile.output_root) if profile.output_root else Path.home() / "Лабораторные"
         short = safe_name(subject.short_name)
-        out_dir = root / short / f"ЛР{safe_name(st.number)}"
-        target = out_dir / f"ЛР{safe_name(st.number)}_{short}.docx"
+        number = safe_name(st.spec.number if st.spec else st.number)  # номер из методички, а не «7-2»
+        out_dir = root / short / f"ЛР{number}"
+        target = out_dir / f"ЛР{number}_{short}.docx"
         tmp = target.with_name(target.name + ".tmp")
         try:
             out_dir.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(docx, tmp)  # сначала копия, потом замена — выключение не оставит обрезанный файл
-            os.replace(tmp, target)
+            durable_replace(tmp, target)
         except PermissionError as e:
             tmp.unlink(missing_ok=True)
             raise PipelineError(f"Не получилось записать {target.name}: файл открыт в Word. Закрой его и нажми ещё раз.") from e

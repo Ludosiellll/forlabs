@@ -8,7 +8,7 @@ from collections import defaultdict
 
 from pydantic import BaseModel, Field
 
-from forlabs.antiai.code import scan_code
+from forlabs.antiai.code import java_class_mismatch, scan_code
 from forlabs.antiai.similarity import scan_similarity
 from forlabs.antiai.text_ru import scan_paragraph_openings, scan_text
 from forlabs.core.models import (
@@ -59,6 +59,14 @@ def check_all(doc: ReportDoc, spec: LabSpec, profile: Profile, others: dict[str,
                     out += scan_text(item, loc)
             elif isinstance(b, Listing):
                 out += scan_code(b.code, b.language, loc)
+                if (b.language or "").lower() == "java":
+                    words = " ".join(getattr(x, "text", "") or getattr(x, "instruction", "") or ""
+                                     for x in s.blocks)
+                    bad = java_class_mismatch(b.code, words)
+                    if bad:
+                        out.append(Finding(stage="antiai", rule_id="code.java_class_name", location=loc, text=bad,
+                                           message="Имя публичного класса не совпадает с именем файла — javac не "
+                                                   "скомпилирует", suggestion="назвать класс как файл"))
     for q in doc.questions:
         out += scan_text(q.answer, f"Вопрос {q.n}")
     out += scan_paragraph_openings(paragraphs)
@@ -139,13 +147,15 @@ def repair(doc: ReportDoc, findings: list[Finding], llm, rules: RuleBook, spec: 
 
 
 def check_and_repair(doc: ReportDoc, spec: LabSpec, profile: Profile, llm, rules: RuleBook,
-                     others: dict[str, str], rounds: int = 3, on_event=None) -> tuple[ReportDoc, list[Finding]]:
+                     others: dict[str, str], rounds: int = 3, on_event=None,
+                     scope=None) -> tuple[ReportDoc, list[Finding]]:
+    """scope(finding) → чинить ли его (правка в чате: только изменённые места, без принятых замечаний)."""
     emit = on_event or (lambda s: None)
     findings = check_all(doc, spec, profile, others)
     for r in range(rounds):
         # чинить можно только то, что привязано к блоку или ответу; «Отчёт целиком» — только «Переписать»
         fixable = [f for f in findings if f.rule_id not in STRUCTURAL and
-                   (_LOC.match(f.location) or f.location.startswith("Вопрос "))]
+                   (_LOC.match(f.location) or f.location.startswith("Вопрос ")) and (scope is None or scope(f))]
         if not fixable:
             break
         emit(f"Проверка: {len(fixable)} замечаний, исправляю (круг {r + 1} из {rounds})")

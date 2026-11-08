@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 from typing import Callable, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from forlabs.core.models import (
     QA,
@@ -41,6 +42,18 @@ class BlockDraft(BaseModel):
     dot: str | None = None
     rows: list[list[str]] | None = None
 
+    @field_validator("rows", mode="before")
+    @classmethod
+    def _cells(cls, v):  # числа и null в ячейках — строки, а не повод для платной починки
+        if isinstance(v, list):
+            return [[("" if c is None else str(c)) for c in r] if isinstance(r, list) else [str(r)] for r in v]
+        return v
+
+    @field_validator("items", mode="before")
+    @classmethod
+    def _items(cls, v):
+        return [str(x) for x in v if x is not None] if isinstance(v, list) else v
+
 
 class SectionDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -66,6 +79,21 @@ class AnswersDraft(BaseModel):
             if isinstance(a, AnswerItem) and a.n in numbers:
                 got[a.n] = a.answer.strip()
         return got
+
+
+PREV_CODE_LIMIT = 1500  # символов кода каждого прежнего листинга в запросе
+
+
+def section_brief(sec: TaskSection) -> str:
+    """Прежнее задание для следующего запроса: текст и начало кода (имена, тема, палитра — чтобы не разъезжались)."""
+    out = []
+    for b in sec.blocks:
+        if isinstance(b, Listing):
+            code = b.code if len(b.code) <= PREV_CODE_LIMIT else b.code[:PREV_CODE_LIMIT] + "\n…"
+            out.append(f"[листинг: {b.topic}]\n{code}")
+        else:
+            out.append(section_text(TaskSection(n=sec.n, title=sec.title, blocks=[b])))
+    return "\n".join(x for x in out if x.strip())
 
 
 def section_has_content(sec: TaskSection) -> bool:
@@ -120,7 +148,7 @@ def draft_to_blocks(draft: SectionDraft, assets_dir: Path, sec_n: int, render_di
             if b.kind == "diagram" and b.dot:
                 png = None
                 if render_diagrams:
-                    png = render_dot(b.dot, assets_dir / f"scheme_{sec_n}_{i}{name_suffix}.png")
+                    png = render_dot(b.dot, assets_dir / f"scheme_{sec_n}_{i}{name_suffix}_{uuid.uuid4().hex[:6]}.png")
                 if png:
                     blocks.append(Figure(topic=topic, image_path=str(png)))
                 else:
@@ -157,7 +185,7 @@ def _context(spec: LabSpec, profile: Profile, subject: Subject, memory: str, pre
                      "В этой работе нет вариантов и приложений с вариантами: не упоминай вариант и приложение.\n")
     memory_block = f"Память предмета:\n{memory}\n" if memory.strip() else ""
     wishes_block = wishes_text(spec)
-    prev = "\n\n".join(f"Задание {s.n} (уже написано):\n{section_text(s)}" for s in previous)
+    prev = "\n\n".join(f"Задание {s.n} (уже написано):\n{section_brief(s)}" for s in previous)
     previous_block = f"Уже написанные задания этой работы — не повторяйся и будь последователен:\n{prev}\n" if prev else ""
     return dict(subject=subject.name, gender=_gender_ru(profile.gender), variant=spec.variant or "—",
                 workplace=spec.workplace or "не указан",

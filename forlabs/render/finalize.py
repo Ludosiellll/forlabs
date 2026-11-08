@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import re
 import shutil
 import uuid
@@ -12,6 +11,7 @@ from pathlib import Path
 
 from lxml import etree
 
+from forlabs.core.fs import durable_replace
 from forlabs.render import libreoffice, word_com
 from forlabs.render.conformance import q
 from forlabs.render.preview import heading_pages, pdf_to_pngs
@@ -62,7 +62,7 @@ def patch_toc_pages(docx: Path, pages: dict[str, int]) -> None:
     with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
         for info, data in out_items:
             zout.writestr(info, data)
-    tmp.replace(docx)
+    durable_replace(tmp, docx)
 
 
 def finalize(docx: Path, author: str, workdir: Path, soffice: str | None = None,
@@ -77,7 +77,7 @@ def finalize(docx: Path, author: str, workdir: Path, soffice: str | None = None,
         shutil.copyfile(docx, work)
         try:
             rep = word_com.finalize_isolated(work, pdf, author)
-            os.replace(work, docx)
+            durable_replace(work, docx)
             return FinalizeReport("word", pdf, pdf_to_pngs(pdf, workdir / "pages"), rep.continuations, rep.warnings)
         except Exception as e:  # Word завис или упал — доводим исходный документ через LibreOffice
             warnings.append(f"Word не справился ({e}). Документ доведён через LibreOffice; "

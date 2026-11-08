@@ -39,6 +39,22 @@ def atomic_write_text(path: Path | str, text: str, encoding: str = "utf-8") -> N
                 pass
 
 
+def durable_replace(src: Path | str, dst: Path | str) -> None:
+    """Заменить dst готовым файлом src так, чтобы после выключения питания был либо старый, либо новый файл целиком
+    (содержимое сброшено на диск до переименования); антивирус на миг держит файл — несколько попыток."""
+    src, dst = Path(src), Path(dst)
+    with open(src, "rb+") as f:
+        os.fsync(f.fileno())
+    for attempt in range(4):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if attempt == 3:
+                raise
+            time.sleep(0.15 * (attempt + 1))
+
+
 def atomic_write_bytes(path: Path | str, data: bytes) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)

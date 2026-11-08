@@ -14,6 +14,7 @@ from docx.shared import Cm
 from lxml import etree
 from PIL import Image
 
+from forlabs.core.fs import durable_replace
 from forlabs.core.models import (
     DashList,
     Enrollment,
@@ -41,7 +42,16 @@ MAX_IMAGE_HEIGHT_CM = 22.0
 SCREEN_DPI = 96
 
 
+_XML_BAD = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff\ud800-\udfff]")
+
+
+def xml_safe(text: str) -> str:
+    """Символы, которых не бывает в XML (мусор из PDF или ответа модели), — вон: иначе документ не соберётся."""
+    return _XML_BAD.sub("", text or "")
+
+
 def _run(text: str, rpr) -> etree._Element:
+    text = xml_safe(text)
     r = etree.Element(q("r"))
     if rpr is not None:
         r.append(rpr)
@@ -277,6 +287,7 @@ def _new_document():
 def _set_properties(document, author: str) -> None:
     now = datetime.now().replace(microsecond=0)
     cp = document.core_properties
+    author = xml_safe(author)
     cp.author = author
     cp.last_modified_by = author
     cp.created = now
@@ -293,7 +304,7 @@ def _save(document, out: Path, author: str) -> Path:
     try:  # выключение посреди записи не должно испортить прежний отчёт
         document.save(str(tmp))
         _set_total_time(tmp)
-        os.replace(tmp, out)
+        durable_replace(tmp, out)
     finally:
         tmp.unlink(missing_ok=True)
     return out

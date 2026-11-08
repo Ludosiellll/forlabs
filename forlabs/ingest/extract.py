@@ -45,7 +45,22 @@ def join_hyphenation(text: str) -> str:
     return _HYPHEN_BREAK.sub(_join_break, text)
 
 
+CONTROL_CHARS = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff\ud800-\udfff]")
+
+
+def read_text_file(path: Path) -> str:
+    """.txt из Блокнота: UTF-8 (с BOM или без), UTF-16 или ANSI Windows (cp1251)."""
+    data = Path(path).read_bytes()
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return data.decode("utf-16", errors="replace")
+    try:
+        return data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return data.decode("cp1251", errors="replace")
+
+
 def normalize(text: str) -> str:
+    text = CONTROL_CHARS.sub("", text.replace("\x0c", "\n").replace("\x0b", "\n"))
     text = text.replace("­", "").replace("\r\n", "\n").replace("\r", "\n").replace(" ", " ")
     text = join_hyphenation(text)
     lines = [ln.rstrip() for ln in text.split("\n")]
@@ -128,13 +143,32 @@ def _docx(path: Path) -> SourceText:
 OCR_TIMEOUT = 180  # секунд на одну картинку
 
 
+TESSERACT_WINDOWS = [r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+                     r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"]
+
+
+def find_tesseract(configured: str | None = None) -> str | None:
+    """Путь из настроек, PATH или обычная папка установки (установщик не добавляет Tesseract в PATH)."""
+    import sys
+
+    if configured and Path(configured.strip().strip('"')).exists():
+        return configured.strip().strip('"')
+    found = shutil.which("tesseract")
+    if found:
+        return found
+    if sys.platform == "win32":
+        return next((c for c in TESSERACT_WINDOWS if Path(c).exists()), None)
+    return None
+
+
 def _image(path: Path, tesseract: str | None) -> SourceText:
-    exe = tesseract or shutil.which("tesseract")
+    exe = find_tesseract(tesseract)
     if not exe:
         return SourceText("", warnings=["Для распознавания картинок нужен Tesseract (rus). Установи его или вставь текст."])
     try:
         res = subprocess.run([exe, str(path), "-", "-l", "rus+eng"], capture_output=True, text=True, encoding="utf-8",
-                             timeout=OCR_TIMEOUT)
+                             errors="replace", timeout=OCR_TIMEOUT,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))  # без мелькающего окна
     except subprocess.TimeoutExpired:
         return SourceText("", warnings=["Tesseract читал картинку слишком долго и был остановлен — вставь текст "
                                         "вручную или загрузи PDF."])
@@ -151,7 +185,7 @@ def extract_text(path: Path, tesseract: str | None = None) -> SourceText:
     if ext == ".docx":
         return _docx(path)
     if ext in TEXT_EXT:
-        return SourceText(normalize(path.read_text(encoding="utf-8", errors="replace")))
+        return SourceText(normalize(read_text_file(path)))
     if ext in IMAGE_EXT:
         return _image(path, tesseract)
     raise ValueError(f"Формат {ext or 'без расширения'} не поддерживается: нужен PDF, DOCX, TXT или картинка")

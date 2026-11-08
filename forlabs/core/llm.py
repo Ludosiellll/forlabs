@@ -36,6 +36,9 @@ _ACCESS = {
 }
 
 
+DEFAULT_MAX_TOKENS = 8000  # предел ответа: ни один вызов не растянется дольше лимита прокси (~150 с)
+TIMEOUT_MESSAGE = ("Модель не ответила за 2,5 минуты — сервер модели перегружен. Подожди пару минут и нажми ещё раз "
+                   "(написанное сохранено).")
 RATE_LIMIT_MESSAGE = "Сервер модели просит подождать: слишком много запросов подряд. Подожди минуту и нажми ещё раз."
 MAX_RETRY_AFTER = 60.0
 
@@ -93,7 +96,11 @@ class UsageCounter:
 
 def _extract_json(text: str) -> Any:
     text = text.strip()
-    fence = re.search(r"```(?:json)?\s*(.+?)```", text, re.S)
+    try:  # сначала как есть: ``` внутри строки (листинг) — не обёртка
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    fence = re.match(r"```(?:json)?\s*(.+?)```\s*$", text, re.S)
     if fence:
         text = fence.group(1).strip()
     try:
@@ -196,6 +203,9 @@ class LLM:
                     raise LLMError("quota", detail, RATE_LIMIT_MESSAGE, retryable=True,
                                    retry_after=_retry_after(r.headers.get("retry-after")))
                 raise LLMError("quota", detail)
+            if r.status_code in (504, 546) or "provider timeout" in low or "worker_limit" in low:
+                # прокси оборвал долгий запрос по времени: повтор того же запроса оборвётся так же и снова оплатится
+                raise LLMError("network", f"сервер ответил {r.status_code}: {detail}", TIMEOUT_MESSAGE)
             if r.status_code >= 500:
                 raise LLMError("network", f"сервер ответил {r.status_code}: {detail}", retryable=True)
             raise LLMError("bad_response", f"{r.status_code}: {detail}")
@@ -233,11 +243,12 @@ class LLM:
                            "Ответ модели не поместился в лимит длины — попробуй ещё раз или раздели задание на части.")
         return content
 
-    def json(self, messages: list[dict], schema: type[T], repairs: int = 3, temperature: float | None = None) -> T:
+    def json(self, messages: list[dict], schema: type[T], repairs: int = 3, temperature: float | None = None,
+             max_tokens: int = DEFAULT_MAX_TOKENS) -> T:
         msgs = list(messages)
         last_error = ""
         for _ in range(repairs + 1):
-            text = self.chat(msgs, temperature=temperature, json_mode=True)
+            text = self.chat(msgs, temperature=temperature, json_mode=True, max_tokens=max_tokens)
             try:
                 return schema.model_validate(_extract_json(text))
             except (json.JSONDecodeError, ValidationError, ValueError) as e:
@@ -264,6 +275,7 @@ class FakeLLM:
         self.model = "fake"
         self.headers: dict[str, str] = {}
         self.accepts_lab_tag = True
+        self.max_tokens: list[int | None] = []
 
     def with_headers(self, extra: dict[str, str]) -> "FakeLLM":
         self.headers = {**self.headers, **extra}
@@ -282,7 +294,8 @@ class FakeLLM:
         r = self._next(messages)
         return r if isinstance(r, str) else json.dumps(r, ensure_ascii=False)
 
-    def json(self, messages, schema, repairs=3, temperature=None):
+    def json(self, messages, schema, repairs=3, temperature=None, max_tokens=DEFAULT_MAX_TOKENS):
+        self.max_tokens.append(max_tokens)
         r = self._next(messages)
         return schema.model_validate(r if not isinstance(r, str) else _extract_json(r))
 

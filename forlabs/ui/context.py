@@ -118,7 +118,8 @@ class AppContext:
         if self._pipeline is None:
             self._pipeline = Pipeline(self.store, self.llm, rules=self.rules(), bus=self.bus,
                                       render_diagrams=self.render_diagrams, prefer_word=self.prefer_word,
-                                      soffice=self.settings.soffice_path, memory=self.memory())
+                                      soffice=self.settings.soffice_path, memory=self.memory(),
+                                      tesseract=self.settings.tesseract_path)
         return self._pipeline
 
     def busy(self) -> bool:

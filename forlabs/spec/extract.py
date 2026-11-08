@@ -21,6 +21,16 @@ class VariantPick(BaseModel):
     number: int | str | None = None
     text: str = ""
 
+    @field_validator("appendix", "text", mode="before")
+    @classmethod
+    def _str(cls, v):  # null вместо строки — не повод для платной починки ответа
+        return "" if v is None else str(v)
+
+    @field_validator("basis", mode="before")
+    @classmethod
+    def _basis(cls, v):
+        return v or "journal"
+
 
 class RawSpec(BaseModel):
     number: str | None = None
@@ -38,6 +48,16 @@ class RawSpec(BaseModel):
     @classmethod
     def _num(cls, v):
         return None if v is None else str(v)
+
+    @field_validator("topic", "goal", "assignment", mode="before")
+    @classmethod
+    def _str(cls, v):  # промпт разрешает null, когда поля нет в методичке
+        return "" if v is None else str(v)
+
+    @field_validator("main_tasks", "extra_tasks", "questions", mode="before")
+    @classmethod
+    def _list(cls, v):
+        return [str(x) for x in v if x is not None] if isinstance(v, list) else ([] if v is None else v)
 
     @field_validator("main_tasks", "extra_tasks", "questions", "variants", mode="before")
     @classmethod
@@ -110,13 +130,14 @@ def clean_field(s: str | None) -> str:
 
 def verify_verbatim(spec: LabSpec, src: SourceText) -> list[Finding]:
     hay = normalize_for_compare(src.text)
+    hay_tight = hay.replace(" ", "")  # PDF рвёт слова пробелами («Лич ные»): сверяем и без пробелов
     out = []
     checks = [(f"Задание {t.n}", t.text, "error") for t in spec.tasks]
     checks += [(f"Вопрос {i}", q, "error") for i, q in enumerate(spec.questions, start=1)]
     checks += [("Тема", spec.topic, "warn"), ("Цель", spec.goal, "warn")]
     for loc, text, severity in checks:
         n = normalize_for_compare(text)
-        if n and n not in hay:
+        if n and n not in hay and n.replace(" ", "") not in hay_tight:
             out.append(Finding(stage="spec", rule_id="spec.not_verbatim", severity=severity, location=loc, text=text,
                                message="Формулировки нет в методичке дословно — проверь и поправь"))
     return out
@@ -133,13 +154,15 @@ def extract_spec(src: SourceText, subject: Subject, enrollment: Enrollment, llm,
                  date: str, wishes: str = "") -> tuple[LabSpec, list[Finding]]:
     variant = enrollment.variant if enrollment.variant is not None else subject.default_variant
     workplace = enrollment.workplace if enrollment.workplace is not None else variant
-    hint = f" Номер работы: {lab_number}." if lab_number else ""
+    hint = (f" Номер работы: {lab_number}. Если в тексте несколько работ — разбирай только работу №{lab_number}."
+            if lab_number else "")
+    text, truncated = _cut_source(src.text, lab_number)
     messages = [
         {"role": "system", "content": SPEC_SYSTEM.format(variant=variant, workplace=workplace)},
         {"role": "user", "content": SPEC_USER.format(subject=subject.name, variant=variant, number_hint=hint,
                                                      workplace=enrollment.workplace or "не указан",
                                                      wishes_block=_wishes_block(wishes),
-                                                     text=src.text[:MAX_SOURCE_CHARS])},
+                                                     text=text)},
     ]
     raw: RawSpec = llm.json(messages, RawSpec, temperature=0.0)
     main = merge_subitems([t for t in raw.main_tasks if t.strip()])
@@ -174,4 +197,26 @@ def extract_spec(src: SourceText, subject: Subject, enrollment: Enrollment, llm,
     if not spec.tasks:
         findings.append(Finding(stage="spec", rule_id="spec.no_tasks", location="Задания",
                                 message="В методичке не нашлось заданий — добавь их вручную"))
+    if truncated:
+        findings.append(Finding(stage="spec", rule_id="spec.truncated", severity="warn", location="Методичка",
+                                message="Методичка очень длинная — модели отдана только часть рядом с этой работой. "
+                                        "Проверь, что задания и вопросы — из нужной лабы"))
+    if not spec.questions and re.search(r"контрольные\s+вопросы", src.text, re.I):
+        findings.append(Finding(stage="spec", rule_id="spec.questions_missing", severity="warn", location="Вопросы",
+                                message="В методичке есть «Контрольные вопросы», но прочитать их не удалось "
+                                        "(возможно, они картинкой) — впиши вопросы на этой вкладке"))
     return spec, findings
+
+
+def _cut_source(text: str, lab_number: str | None) -> tuple[str, bool]:
+    """Длинный сборник: кусок вокруг «Лабораторная работа №N» (последнее упоминание — не оглавление), а не начало."""
+    if len(text) <= MAX_SOURCE_CHARS:
+        return text, False
+    if lab_number:
+        pat = re.compile(rf"(лабораторн\w*\s+работ\w*|практическ\w*\s+работ\w*|\bЛР)\s*№?\s*{re.escape(lab_number)}"
+                         rf"(?![\d.])", re.I)
+        hits = [m.start() for m in pat.finditer(text)]
+        if hits:
+            start = max(0, hits[-1] - 500)
+            return text[start:start + MAX_SOURCE_CHARS], True
+    return text[:MAX_SOURCE_CHARS], True
