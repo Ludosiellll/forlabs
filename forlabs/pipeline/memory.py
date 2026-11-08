@@ -26,6 +26,13 @@ PROMPT = ("Сожми выполненную лабораторную работ
           "что уже сделано. Без оценок и воды, по-русски, обычным текстом без markdown.")
 
 
+def teacher_key(rule: str) -> str:
+    """Короткий ключ требования (по тексту): удаление не зависит от порядка в списке."""
+    import hashlib
+
+    return hashlib.sha1(rule.strip().encode("utf-8")).hexdigest()[:10]
+
+
 class SubjectMemory:
     def __init__(self, read_fn: Callable[[str, str], str] | None = None,
                  write_fn: Callable[[str, str, str], None] | None = None):
@@ -78,10 +85,8 @@ class SubjectMemory:
     def teacher_list(self, profile_id: str, subject_id: str) -> list[str]:
         return [ln.lstrip("- ").strip() for ln in self.teacher(profile_id, subject_id).splitlines() if ln.strip()]
 
-    def remove_teacher(self, profile_id: str, subject_id: str, index: int) -> str:
-        items = self.teacher_list(profile_id, subject_id)
-        if 0 <= index < len(items):
-            del items[index]
+    def remove_teacher(self, profile_id: str, subject_id: str, key: str) -> str:
+        items = [x for x in self.teacher_list(profile_id, subject_id) if teacher_key(x) != key]
         text = "\n".join(f"- {x}" for x in items)
         self._write(profile_id, f"{subject_id}.teacher", text)
         return text

@@ -179,10 +179,20 @@
   });
 })();
 
-// формы с data-once: кнопка отключается после отправки (двойной клик не создаёт вторую лабу)
-document.querySelectorAll("form[data-once]").forEach(function (form) {
-  form.addEventListener("submit", function () {
-    var b = form.querySelector("button[type=submit]");
-    if (b) { setTimeout(function () { b.disabled = true; b.textContent = "Отправляю…"; }, 0); }
+// любая отправка формы (form[method=post]): кнопка отключается — двойной клик не запускает действие дважды,
+// а долгое действие («Сдать», отчёт за семестр) видно сразу. Возврат кнопкой «Назад» включает кнопки обратно.
+document.querySelectorAll("form[method=post], form[method=POST]").forEach(function (form) {
+  form.addEventListener("submit", function (ev) {
+    if (ev.defaultPrevented) { return; }
+    var b = ev.submitter || form.querySelector("button[type=submit]");
+    if (b && !b.disabled) {
+      b.dataset.label = b.textContent;
+      setTimeout(function () { b.disabled = true; b.textContent = "Подожди…"; }, 0);
+    }
+  });
+});
+window.addEventListener("pageshow", function () {
+  document.querySelectorAll("form button[data-label]").forEach(function (b) {
+    b.disabled = false; b.textContent = b.dataset.label; delete b.dataset.label;
   });
 });

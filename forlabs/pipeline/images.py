@@ -19,12 +19,23 @@ DESCRIBE_SYSTEM = """Студент прикладывает фото к лаб�
 Каждое фото — с новой строки «Фото N: …». Без вступлений и выводов, по-русски."""
 
 
+MAX_PIXELS = 40_000_000  # больше — подозрительно (картинка-«бомба» распакуется в гигабайты памяти)
+
+
+def _check_size(im) -> None:
+    w, h = im.size
+    if w * h > MAX_PIXELS:
+        raise ValueError(f"Картинка {w}×{h} точек — слишком большая. Уменьши её или сделай снимок части экрана.")
+
+
 def prepare_image(data: bytes) -> bytes:
     """Проверяет, что это картинка, поворачивает по EXIF, уменьшает до MAX_SIDE и сохраняет в JPEG."""
     if len(data) > MAX_BYTES:
         raise ValueError("Фото больше 15 МБ")
     try:
         with Image.open(io.BytesIO(data)) as im:
+            _check_size(im)  # размер из заголовка — до распаковки
+            im.draft("RGB", (MAX_SIDE, MAX_SIDE))
             im = ImageOps.exif_transpose(im).convert("RGB")
             im.thumbnail((MAX_SIDE, MAX_SIDE))
             out = io.BytesIO()
@@ -56,6 +67,7 @@ def normalize_screenshot(data: bytes) -> tuple[bytes, str]:
         raise ValueError("Снимок больше 15 МБ")
     try:
         with Image.open(io.BytesIO(data)) as im:
+            _check_size(im)
             fmt = im.format
             im = ImageOps.exif_transpose(im)
             im.thumbnail((4000, 4000))

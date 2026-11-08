@@ -15,8 +15,17 @@ from forlabs.core.models import LabState, Profile
 _SAFE = re.compile(r"[^0-9A-Za-zА-Яа-яЁё._-]+")
 
 
+_RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+
+
 def safe_name(s: str) -> str:
-    return _SAFE.sub("_", s).strip("_") or "x"
+    """Имя папки: безопасные символы, без «.»/«..», без точек и пробелов на конце, не CON/PRN/COM1 (Windows)."""
+    out = _SAFE.sub("_", s).strip("_").rstrip(". ").strip("_")
+    if not out or set(out) <= {"."}:
+        return "x"
+    if out.split(".")[0].upper() in _RESERVED:
+        out = f"{out}_"
+    return out
 
 
 def safe_file_name(name: str, limit: int = 80) -> str:

@@ -45,7 +45,7 @@ def build_server(port: int, ctx=None):
 def _open_window(url: str, ctx=None) -> None:
     import webview  # pywebview
 
-    window = webview.create_window("ForLabs", url, width=1400, height=900, min_size=(900, 600))
+    window = webview.create_window("ForLabs", url, width=1280, height=800, min_size=(900, 600), maximized=True)
 
     def on_closing():  # закрытие во время работы: спросить, иначе работа оборвётся
         try:

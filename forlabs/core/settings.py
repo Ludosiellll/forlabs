@@ -57,6 +57,9 @@ def _settings_file():
     return paths.data_home() / "settings.json"
 
 
+SETTINGS_WERE_RESET = False  # файл настроек был повреждён и заменён настройками по умолчанию
+
+
 def load_settings() -> Settings:
     f = _settings_file()
     if f.exists():
@@ -64,6 +67,8 @@ def load_settings() -> Settings:
             return Settings.model_validate_json(f.read_text(encoding="utf-8"))
         except (ValueError, UnicodeDecodeError) as e:  # обрезан при выключении — настройки по умолчанию
             quarantine(f, str(e)[:120])
+            global SETTINGS_WERE_RESET
+            SETTINGS_WERE_RESET = True
     return Settings()
 
 

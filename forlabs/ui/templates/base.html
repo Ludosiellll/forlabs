@@ -30,6 +30,7 @@
     <form method="post" action="/logout" onsubmit="return confirm('Выйти и стереть с этого компьютера копию своих лаб и профилей? В облаке всё останется.')"><input type="hidden" name="wipe" value="1"><button class="btn link small" type="submit" title="Для общего компьютера в колледже">Выйти и стереть копию</button></form></div>
   {% elif not ctx.cloud %}<div class="who">Локальный режим</div>{% endif %}
 </header>
+{% if ctx.notice %}<div class="offline-banner" role="status">{{ ctx.notice }}</div>{% endif %}
 {% if ctx.cloud and ctx.store.offline %}
 <div class="offline-banner" role="status">Нет связи с облаком — показана копия с этого компьютера. Смотреть и скачивать
   лабы можно; выполнять и править — когда связь появится.</div>

@@ -37,6 +37,11 @@ class AppContext:
     def __init__(self, settings: Settings | None = None, llm_override: Callable[[], object] | None = None,
                  prefer_word: bool = True, render_diagrams: bool = True, synchronous: bool = False):
         self.settings = settings or load_settings()
+        from forlabs.core import settings as settings_mod
+
+        self.notice = ("Настройки были повреждены (например, при выключении) и сброшены: режим — облако, модель — по "
+                       "умолчанию. Если работал без облака — открой «Настройки» и выбери «Локально»."
+                       if settings is None and settings_mod.SETTINGS_WERE_RESET else "")
         self.llm_override = llm_override
         self.prefer_word = prefer_word
         self.render_diagrams = render_diagrams

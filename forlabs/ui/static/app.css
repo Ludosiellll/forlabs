@@ -292,3 +292,6 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .rules-mem li { margin-bottom: 3px; }
 .offline-banner { background: var(--warn-soft); border-bottom: 1px solid var(--warn-line); color: #4A3000;
   padding: 8px 20px; font-size: 13.5px; }
+
+/* длинные слова и пути (тема лабы, замечания, путь к файлу) не раздвигают страницу */
+.lab-left, .lab-right, .notice, td, .flash, .sheet-meta { overflow-wrap: anywhere; }

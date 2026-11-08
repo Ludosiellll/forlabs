@@ -179,8 +179,11 @@ def test_teacher_requirements_listed_and_removable(lab):
     client.post(url + "/execute", follow_redirects=False)
     ctx.memory().add_teacher("ivanov_ivan_petrovich", "psip", "Комментарии к каждому методу")
     page = client.get(url + "?tab=report").text
-    assert "Комментарии к каждому методу" in page and url + "/teacher/remove/0" in page
-    client.post(url + "/teacher/remove/0", follow_redirects=False)
+    from forlabs.pipeline.memory import teacher_key
+
+    key = teacher_key(ctx.memory().teacher_list("ivanov_ivan_petrovich", "psip")[0])
+    assert "Комментарии к каждому методу" in page and url + f"/teacher/remove/{key}" in page
+    client.post(url + f"/teacher/remove/{key}", follow_redirects=False)
     assert ctx.memory().teacher_list("ivanov_ivan_petrovich", "psip") == []
 
 

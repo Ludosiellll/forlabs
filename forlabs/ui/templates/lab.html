@@ -56,7 +56,7 @@
       <details class="rules-mem">
         <summary class="small">Требования преподавателя: {{ teacher_rules|length }}</summary>
         <ul>{% for r in teacher_rules %}<li>{{ r }}
-          <form method="post" action="{{ base_url }}/teacher/remove/{{ loop.index0 }}" style="display:inline"><button class="btn link small" type="submit" title="Больше не учитывать в следующих лабах">убрать</button></form></li>{% endfor %}</ul>
+          <form method="post" action="{{ base_url }}/teacher/remove/{{ r|teacher_key }}" style="display:inline"><button class="btn link small" type="submit" title="Больше не учитывать в следующих лабах">убрать</button></form></li>{% endfor %}</ul>
         <div class="hint">Учитываются во всех лабах этого предмета.</div>
       </details>
       {% endif %}
