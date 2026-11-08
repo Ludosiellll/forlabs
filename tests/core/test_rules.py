@@ -35,3 +35,19 @@ def test_custom_store_for_overrides(tmp_home):
 def test_list_rule_files():
     paths = [f.path for f in list_rule_files()]
     assert "common/standard.md" in paths and "subjects/1c.md" in paths
+
+
+import pytest
+
+
+@pytest.mark.parametrize("bad", ["../pyproject.toml", "../../evil.md", "common/../../x.md", "/etc/passwd",
+                                 "common/new.md"])
+def test_only_listed_rule_files_can_be_saved_or_reset(tmp_home, bad):
+    data = {}
+    book = RuleBook(get_overrides=lambda: data, save=lambda p, t: data.__setitem__(p, t),
+                    reset=lambda p: data.pop(p, None))
+    with pytest.raises(KeyError):
+        book.save_override(bad, "X")
+    with pytest.raises(KeyError):
+        book.reset_override(bad)
+    assert data == {}

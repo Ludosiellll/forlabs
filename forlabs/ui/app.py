@@ -12,6 +12,7 @@ from pathlib import Path
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.templating import Jinja2Templates
 
 from forlabs.cloud.auth import CloudError
@@ -26,6 +27,7 @@ from forlabs.report.morph import goal_to_conclusion
 from forlabs.ui.context import AppContext, slug
 
 HERE = Path(__file__).parent
+LOCAL_HOSTS = ["127.0.0.1", "localhost"]
 STATUS_RU = {"draft": "Черновик", "parsed": "Проверь разбор", "confirmed": "Готова к выполнению",
              "executing": "Выполняется", "needs_manual": "Нужны скриншоты", "rendered": "Свёрстана",
              "final": "Сдана", "failed": "Ошибка"}
@@ -39,7 +41,17 @@ def _q(s: str) -> str:
     return quote(s, safe="")
 
 
-def create_app(ctx: AppContext | None = None) -> FastAPI:
+def _same_origin(request: Request) -> bool:
+    """POST с чужого сайта (форма на странице в интернете, отправленная на 127.0.0.1) не принимаем."""
+    from urllib.parse import urlparse
+
+    source = request.headers.get("origin") or request.headers.get("referer")
+    if not source:
+        return True  # не браузер: браузер всегда шлёт Origin у межсайтового POST
+    return urlparse(source).netloc == request.headers.get("host", "")
+
+
+def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = None) -> FastAPI:
     ctx = ctx or AppContext()
     app = FastAPI(title="ForLabs", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.ctx = ctx
@@ -70,6 +82,15 @@ def create_app(ctx: AppContext | None = None) -> FastAPI:
 
     def lab_url(p: str, s: str, n: str) -> str:
         return f"/labs/{_q(p)}/{_q(s)}/{_q(n)}"
+
+    @app.middleware("http")
+    async def same_origin_only(request: Request, call_next):
+        if request.method not in ("GET", "HEAD", "OPTIONS") and not _same_origin(request):
+            return HTMLResponse("Запрос пришёл с другого сайта и отклонён.", status_code=403)
+        return await call_next(request)
+
+    # Последним добавлен — значит, срабатывает первым: чужое имя хоста (DNS rebinding) отсекается сразу.
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts or LOCAL_HOSTS)
 
     @app.middleware("http")
     async def require_login(request: Request, call_next):
@@ -476,13 +497,19 @@ def create_app(ctx: AppContext | None = None) -> FastAPI:
 
     @app.post("/rules/save")
     def rules_save(path: str = Form(...), text: str = Form(...)):
-        ctx.rules().save_override(path, text)
+        try:
+            ctx.rules().save_override(path, text)
+        except KeyError:
+            return redirect("/rules", err="Такого файла правил нет")
         ctx.reset()
         return redirect(f"/rules?file={_q(path)}", msg="Правило сохранено")
 
     @app.post("/rules/reset")
     def rules_reset(path: str = Form(...)):
-        ctx.rules().reset_override(path)
+        try:
+            ctx.rules().reset_override(path)
+        except KeyError:
+            return redirect("/rules", err="Такого файла правил нет")
         ctx.reset()
         return redirect(f"/rules?file={_q(path)}", msg="Возвращён исходный текст")
 

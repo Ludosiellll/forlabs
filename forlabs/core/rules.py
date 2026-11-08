@@ -113,10 +113,16 @@ class RuleBook:
                 out.append(rf)
         return out
 
-    def save_override(self, path: str, text: str) -> None:
-        if not (RULES_DIR / path).exists():
+    @staticmethod
+    def _check(path: str) -> None:
+        # Только файлы из списка правил: путь приходит из формы и не должен выходить за папку правил.
+        if path not in {rf.path for rf in list_rule_files()}:
             raise KeyError(f"Нет файла правил {path}")
+
+    def save_override(self, path: str, text: str) -> None:
+        self._check(path)
         self._save(path, text)
 
     def reset_override(self, path: str) -> None:
+        self._check(path)
         self._reset(path)

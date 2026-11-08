@@ -28,7 +28,7 @@ def client(tmp_home, tmp_path):
     fake = FakeLLM([RAW, SEC])
     ctx = AppContext(settings=Settings(mode="local"), llm_override=lambda: fake, prefer_word=False,
                      render_diagrams=False, synchronous=True)
-    return TestClient(create_app(ctx))
+    return TestClient(create_app(ctx), base_url="http://127.0.0.1:8765")
 
 
 def make_profile(client, tmp_path):
@@ -95,7 +95,8 @@ def test_journal_survives_restart(client, tmp_path, tmp_home):
                                        "text": ""},
                     files={"files": (FIXTURE.name, FIXTURE.read_bytes(), "text/plain")}, follow_redirects=False)
     lab_url = r.headers["location"]
-    fresh = TestClient(create_app(AppContext(settings=Settings(mode="local"), synchronous=True)))
+    fresh = TestClient(create_app(AppContext(settings=Settings(mode="local"), synchronous=True)),
+                       base_url="http://127.0.0.1:8765")
     page = fresh.get(lab_url + "?tab=journal").text
     assert "Разбор готов" in page
 
@@ -125,3 +126,28 @@ def test_non_infinitive_goal_warns_and_accepts_own_conclusion(client, tmp_path):
                                             "conclusion": "Сформировал навыки анимации."})
     page = client.get(lab_url + "?tab=spec").text
     assert "Сформировал навыки анимации." in page
+
+
+def test_foreign_host_rejected(client):
+    r = client.get("/rules", headers={"host": "evil.example"})
+    assert r.status_code == 400
+
+
+def test_cross_site_post_rejected(client):
+    r = client.post("/rules/reset", data={"path": "common/voice.md"},
+                    headers={"origin": "https://evil.example"}, follow_redirects=False)
+    assert r.status_code == 403
+    r = client.post("/rules/reset", data={"path": "common/voice.md"},
+                    headers={"referer": "https://evil.example/page"}, follow_redirects=False)
+    assert r.status_code == 403
+
+
+def test_same_origin_post_allowed(client):
+    r = client.post("/rules/reset", data={"path": "common/voice.md"},
+                    headers={"origin": "http://127.0.0.1:8765"}, follow_redirects=False)
+    assert r.status_code == 303
+
+
+def test_unknown_rule_path_is_a_message_not_a_crash(client):
+    r = client.post("/rules/save", data={"path": "../pyproject.toml", "text": "x"}, follow_redirects=False)
+    assert r.status_code == 303 and "err=" in r.headers["location"]
