@@ -46,6 +46,7 @@ class Settings(BaseModel):
     tesseract_path: str | None = None
     temperature: float = 0.4
     browser_channel: str | None = None
+    tour_done: bool = False  # обучение при первом запуске пройдено или пропущено
 
     @field_validator("model")
     @classmethod

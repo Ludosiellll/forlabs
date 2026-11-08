@@ -41,7 +41,6 @@ button,input{font:inherit;color:inherit}
 .step.past{color:var(--text2)}
 .step .n{width:16px;text-align:center;font-size:12px}
 .step.past .n{color:var(--ok)}
-.nav .ver{margin-top:auto;padding:0 12px;font-size:12px;color:var(--text3)}
 
 .main{flex-grow:1;min-width:0;display:flex;flex-direction:column;background:var(--layer);border-top-left-radius:8px;
   border-top:1px solid var(--stroke);border-left:1px solid var(--stroke)}
@@ -143,7 +142,6 @@ label.l{color:var(--text2)}
   <div class="body">
     <nav class="nav" aria-label="Шаги установки">
       <div class="steps" id="steps"><div class="pill" id="pill"></div></div>
-      <div class="ver" id="ver">ForLabs · x64</div>
     </nav>
     <div class="main">
       <main class="page" id="page" aria-live="polite"></main>
@@ -382,7 +380,6 @@ async function init() {
   S.d = await api.defaults();
   S.target = S.d.target || "";
   if (typeof S.d.desktop === "boolean") S.desktop = S.d.desktop;
-  $("ver").textContent = `ForLabs ${S.d.version || ""} · x64`;
   if (S.d.installed) $("wtitle").textContent = "Обновление ForLabs";
   movePill(0, 0);
   renderSteps();

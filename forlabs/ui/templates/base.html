@@ -11,11 +11,11 @@
 <header class="top">
   <a class="brand" href="/">ForLabs</a>
   <nav class="nav" aria-label="Разделы">
-    <a href="/" class="{{ 'on' if nav == 'home' }}">Лабы</a>
-    <a href="/profiles" class="{{ 'on' if nav == 'profiles' }}">Профили</a>
-    <a href="/semester" class="{{ 'on' if nav == 'semester' }}">Отчёт за семестр</a>
-    <a href="/rules" class="{{ 'on' if nav == 'rules' }}">Правила</a>
-    <a href="/settings" class="{{ 'on' if nav == 'settings' }}">Настройки</a>
+    <a data-tour="labs" href="/" class="{{ 'on' if nav == 'home' }}">Лабы</a>
+    <a data-tour="profiles" href="/profiles" class="{{ 'on' if nav == 'profiles' }}">Профили</a>
+    <a data-tour="semester" href="/semester" class="{{ 'on' if nav == 'semester' }}">Отчёт за семестр</a>
+    <a data-tour="rules" href="/rules" class="{{ 'on' if nav == 'rules' }}">Правила</a>
+    <a data-tour="settings" href="/settings" class="{{ 'on' if nav == 'settings' }}">Настройки</a>
     {% if member and member.role == 'admin' and member.approved %}<a href="/admin" class="{{ 'on' if nav == 'admin' }}">Админ</a>{% endif %}
   </nav>
   {% if ctx.cloud and user_email %}
@@ -42,6 +42,7 @@
 {% endblock %}
 {% block body %}{% endblock %}
 <script src="/static/app.js"></script>
+{% if show_tour %}<script src="/static/tour.js" defer></script>{% endif %}
 {% block scripts %}{% endblock %}
 </body>
 </html>

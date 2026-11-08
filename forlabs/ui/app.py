@@ -17,6 +17,7 @@ from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
     RedirectResponse,
+    Response,
     StreamingResponse,
 )
 from fastapi.staticfiles import StaticFiles
@@ -124,6 +125,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
                 base["member"] = ctx.store.member()
             except Exception:
                 base["member"] = None
+        base["show_tour"] = name == "home.html" and not ctx.settings.tour_done
         base.update(kw)
         return tpl.TemplateResponse(request, name, base)
 
@@ -815,6 +817,19 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
             os.environ["FORLABS_API_KEY"] = key
         ctx.reset()
         return redirect("/settings", msg="Настройки сохранены")
+
+    @app.post("/tour/done")
+    def tour_done():
+        if not ctx.settings.tour_done:
+            ctx.settings = ctx.settings.model_copy(update={"tour_done": True})
+            save_settings(ctx.settings)
+        return Response(status_code=204)
+
+    @app.post("/tour/restart")
+    def tour_restart():
+        ctx.settings = ctx.settings.model_copy(update={"tour_done": False})
+        save_settings(ctx.settings)
+        return redirect("/")
 
     @app.post("/settings/check")
     def settings_check():

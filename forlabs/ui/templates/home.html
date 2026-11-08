@@ -7,7 +7,7 @@
   <h1>Начнём с профиля</h1>
   <p class="muted">Профиль — это студент, для которого делаются лабы: ФИО, пол, группа, варианты и руководители по предметам.
     Можно завести несколько профилей.</p>
-  <a class="btn primary" href="/profiles/new">Создать профиль</a>
+  <a class="btn primary" data-tour="start" href="/profiles/new">Создать профиль</a>
 </main>
 {% else %}
 <div class="split">
@@ -38,7 +38,7 @@
         <h1>{{ subjects[subject_id].name }}</h1>
       </div>
       <span class="spacer"></span>
-      <a class="btn primary" href="/labs/new?profile={{ q(current.id) }}&subject={{ q(subject_id) }}">Новая лаба</a>
+      <a class="btn primary" data-tour="start" href="/labs/new?profile={{ q(current.id) }}&subject={{ q(subject_id) }}">Новая лаба</a>
     </div>
     {% if labs %}
     <div class="table-wrap">
