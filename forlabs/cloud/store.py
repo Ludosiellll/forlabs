@@ -5,12 +5,25 @@ from __future__ import annotations
 
 import hashlib
 import re
+from datetime import timedelta
 from pathlib import Path
 from urllib.parse import quote
 
 import httpx
 from pydantic import BaseModel
 
+from forlabs.cloud.admin import (
+    AdminOverview,
+    KeyInfo,
+    LabRow,
+    MemberCard,
+    MemberEvent,
+    access_state,
+    days_left,
+    end_of_day_minsk,
+    now_utc,
+    parse_ts,
+)
 from forlabs.cloud.auth import CloudAuth, CloudError
 from forlabs.core import paths
 from forlabs.core.models import LabState, Profile
@@ -26,6 +39,22 @@ class Member(BaseModel):
     role: str = "member"
     approved: bool = False
     created_at: str | None = None
+    access_until: str | None = None
+    note: str = ""
+    allow_shared_key: bool = True
+    last_seen_at: str | None = None
+
+    @property
+    def access_state(self) -> str:
+        return access_state(self.approved, self.role, self.access_until)
+
+    @property
+    def days_left(self) -> int | None:
+        return None if self.role == "admin" else days_left(self.access_until)
+
+    @property
+    def name(self) -> str:
+        return self.display_name or self.email.split("@")[0] or "Участник"
 
 
 def _ascii(s: str) -> str:
@@ -204,3 +233,108 @@ class CloudStore:
         for r in rows:
             out[r["user_id"]] = out.get(r["user_id"], 0) + int(r["prompt_tokens"]) + int(r["completion_tokens"])
         return out
+
+    # админ-панель
+    _MEMBER_FIELDS = {"display_name", "note", "approved", "access_until", "allow_shared_key"}
+    _LAB_COLUMNS = "owner,profile_id,subject_id,number,status,created_at,updated_at"
+
+    def _rpc(self, fn: str, args: dict | None = None):
+        r = self._rest("POST", f"rpc/{fn}", json=args or {})
+        return r.json() if r.content else None
+
+    def admin_overview(self) -> AdminOverview:
+        members = self.list_members()
+        keys = {r["user_id"]: KeyInfo.model_validate(r) for r in self._rpc("admin_keys") or []}
+        daily = [(str(r["day"]), r["user_id"], int(r["tokens"])) for r in self._rpc("admin_usage_daily", {"days": 30}) or []]
+        usage: dict[str, int] = {}
+        for _, uid, tokens in daily:
+            usage[uid] = usage.get(uid, 0) + tokens
+        labs = [LabRow.model_validate(r) for r in
+                self._rest("GET", "labs", params={"select": self._LAB_COLUMNS, "order": "created_at.desc"}).json()]
+        profiles: dict[str, list[Profile]] = {}
+        for r in self._rest("GET", "student_profiles", params={"select": "owner,data"}).json():
+            profiles.setdefault(r["owner"], []).append(Profile.model_validate(r["data"]))
+        return AdminOverview(members=members, keys=keys, usage_30d=usage, daily=daily, labs=labs, profiles=profiles)
+
+    def admin_member(self, uid: str) -> MemberCard | None:
+        rows = self._rest("GET", "members", params={"select": "*", "user_id": f"eq.{uid}"}).json()
+        if not rows:
+            return None
+        key = next((KeyInfo.model_validate(r) for r in self._rpc("admin_keys") or [] if r["user_id"] == uid), None)
+        profiles = [Profile.model_validate(r["data"]) for r in
+                    self._rest("GET", "student_profiles", params={"select": "owner,data", "owner": f"eq.{uid}"}).json()]
+        labs = [LabRow.model_validate(r) for r in
+                self._rest("GET", "labs", params={"select": self._LAB_COLUMNS, "owner": f"eq.{uid}",
+                                                  "order": "created_at.desc"}).json()]
+        by_lab = {r["lab"]: (int(r["tokens"]), int(r["calls"])) for r in
+                  self._rpc("admin_usage_by_lab", {"target": uid}) or []}
+        daily = [(str(r["day"]), int(r["tokens"])) for r in self._rpc("admin_usage_daily", {"days": 30}) or []
+                 if r["user_id"] == uid]
+        events = [MemberEvent.model_validate(r) for r in
+                  self._rest("GET", "member_events", params={"select": "*", "user_id": f"eq.{uid}",
+                                                             "order": "created_at.desc", "limit": "50"}).json()]
+        return MemberCard(member=Member.model_validate(rows[0]), key=key, profiles=profiles, labs=labs,
+                          usage_by_lab=by_lab, daily=daily, events=events)
+
+    def admin_update_member(self, uid: str, **fields) -> None:
+        data = {k: v for k, v in fields.items() if k in self._MEMBER_FIELDS}
+        if data:
+            self._rest("PATCH", "members", params={"user_id": f"eq.{uid}"}, json=data, prefer="return=minimal")
+
+    def admin_extend(self, uid: str, days: int) -> None:
+        """Продлить на N дней: от текущей даты окончания, если она ещё впереди, иначе от сегодня."""
+        rows = self._rest("GET", "members", params={"select": "access_until", "user_id": f"eq.{uid}"}).json()
+        current = parse_ts(rows[0].get("access_until")) if rows else None
+        start = max(current, now_utc()) if current else now_utc()
+        self.admin_update_member(uid, access_until=(start + timedelta(days=days)).isoformat())
+
+    def admin_set_until(self, uid: str, day: str | None) -> None:
+        """До конца выбранного дня (по Минску); None — бессрочно."""
+        self.admin_update_member(uid, access_until=end_of_day_minsk(day) if day else None)
+
+    def admin_revoke(self, uid: str) -> None:
+        self.admin_update_member(uid, access_until=now_utc().isoformat())
+
+    def admin_set_key(self, uid: str, api_key: str) -> str:
+        key = (api_key or "").strip()
+        if len(key) < 8 or any(c.isspace() for c in key):
+            raise ValueError("Ключ должен быть одной строкой без пробелов, не короче 8 символов.")
+        try:
+            return str(self._rpc("admin_set_key", {"target": uid, "api_key": key}))
+        except CloudError as e:
+            if "key too short" in (e.detail or ""):
+                raise ValueError("Ключ должен быть одной строкой без пробелов, не короче 8 символов.") from e
+            raise
+
+    def admin_clear_key(self, uid: str) -> None:
+        self._rpc("admin_clear_key", {"target": uid})
+
+    def _balance_call(self, body: dict) -> dict:
+        try:
+            r = self.http.post(f"{self.cfg.llm_base_url}/balance", json=body, headers=self._h(), timeout=30)
+        except httpx.TransportError:
+            return {}
+        if r.status_code >= 400:
+            return {}
+        return (r.json() or {}).get("balances") or {}
+
+    def balances(self, user_ids: list[str], shared: bool = False) -> dict[str, int | None]:
+        """Остаток токенов у провайдера по ключам участников (None — нет ключа или нет ответа)."""
+        return self._balance_call({"user_ids": list(user_ids), "shared": shared})
+
+    def my_balance(self) -> int | None:
+        return self._balance_call({}).get(self.auth.user_id)
+
+    def download_member_report(self, uid: str, profile_id: str, subject_id: str, number: str, local: Path) -> bool:
+        key = storage_key(uid, profile_id, subject_id, number, "report.docx")
+        try:
+            r = self.http.get(f"{self.cfg.url}/storage/v1/object/{BUCKET}/{quote(key)}", headers=self._h())
+        except httpx.TransportError as e:
+            raise CloudError("Нет связи с облаком. Проверь интернет.", str(e)) from e
+        if r.status_code in (400, 404):
+            return False
+        self._check(r)
+        Path(local).parent.mkdir(parents=True, exist_ok=True)
+        Path(local).write_bytes(r.content)
+        return True
+

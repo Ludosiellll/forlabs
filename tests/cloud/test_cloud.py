@@ -19,6 +19,12 @@ class FakeSupabase:
             {"user_id": UID, "email": "a@b.c", "display_name": "Аня", "role": "admin", "approved": True}]}
         self.objects = {}
         self.requests = []
+        self.keys = {}  # uid -> last4 (ключи участников; сами ключи сервер наружу не отдаёт)
+        self.balance = {}  # uid|"shared" -> остаток у провайдера
+        self.daily = []  # строки admin_usage_daily
+        self.by_lab = []  # строки admin_usage_by_lab
+        self.rpc_calls = []
+        self.functions_down = False
 
     def session(self, expires_in=3600):
         return {"access_token": f"tok{len(self.requests)}", "refresh_token": "ref", "expires_in": expires_in,
@@ -36,6 +42,36 @@ class FakeSupabase:
         if path == "/auth/v1/signup":
             return httpx.Response(200, json={"id": UID, "email": "a@b.c", "confirmation_sent_at": "now"})
         assert req.headers["authorization"].startswith("Bearer tok")
+        if path.startswith("/rest/v1/rpc/"):
+            fn = path.rsplit("/", 1)[-1]
+            args = json.loads(req.content or b"{}")
+            self.rpc_calls.append((fn, args))
+            if fn == "admin_set_key":
+                k = args["api_key"].strip()
+                if len(k) < 8:
+                    return httpx.Response(400, json={"code": "22023", "message": "key too short"})
+                self.keys[args["target"]] = k[-4:]
+                return httpx.Response(200, json=k[-4:])
+            if fn == "admin_clear_key":
+                self.keys.pop(args["target"], None)
+                return httpx.Response(204)
+            if fn == "admin_keys":
+                return httpx.Response(200, json=[{"user_id": u, "last4": v, "set_at": "2026-11-01T10:00:00+00:00"}
+                                                 for u, v in self.keys.items()])
+            if fn == "admin_usage_daily":
+                return httpx.Response(200, json=self.daily)
+            if fn == "admin_usage_by_lab":
+                return httpx.Response(200, json=self.by_lab)
+            return httpx.Response(404, json={"message": f"нет функции {fn}"})
+        if path == "/functions/v1/llm/balance":
+            if self.functions_down:
+                raise httpx.ConnectError("нет связи")
+            body = json.loads(req.content or b"{}")
+            ids = body.get("user_ids") or [UID]
+            out = {i: self.balance.get(i) for i in ids}
+            if body.get("shared"):
+                out["shared"] = self.balance.get("shared")
+            return httpx.Response(200, json={"balances": out, "errors": {}})
         if path.startswith("/rest/v1/"):
             table = path.split("/")[-1]
             rows = self.tables.setdefault(table, [])
