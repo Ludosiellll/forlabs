@@ -69,3 +69,16 @@ def test_wrong_gender_verbs():
     assert wrong_gender_verbs("Я создала форму. Затем проверил вывод.", "f") == ["проверил"]
     assert wrong_gender_verbs("Сервер вернул ответ 200.", "f") == []
     assert wrong_gender_verbs("Создала таблицу.", "m") == ["Создала"]
+
+
+@pytest.mark.parametrize("text,gender,expected", [
+    ("Была создана форма входа.", "m", []),
+    ("Был создан файл программы.", "f", []),
+    ("В окне появилась надпись.", "m", []),
+    ("На экране отобразилась таблица.", "m", []),
+    ("Сначала был написан код, затем я его запустил.", "f", ["запустил"]),
+    ("Затем проверил вывод программы.", "f", ["проверил"]),
+    ("Создала таблицу, затем заполнила её.", "m", ["Создала", "заполнила"]),
+])
+def test_wrong_gender_verbs_precision(text, gender, expected):
+    assert wrong_gender_verbs(text, gender) == expected

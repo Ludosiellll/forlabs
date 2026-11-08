@@ -101,23 +101,49 @@ def agree_short_participle(base: str, topic: str) -> str:
 _SENT = re.compile(r"[^.!?]+[.!?]?")
 
 
+_CLAUSE_SPLIT = re.compile(r"[,;:()—–]")
+_SERVICE_POS = {"ADVB", "CONJ", "PRCL", "INTJ"}
+
+
+def _is_past_singular_verb(p) -> bool:
+    return p.tag.POS == "VERB" and "past" in p.tag and "sing" in p.tag
+
+
+def _agreeing_subject_after(words: list[str], verb_gender: str) -> bool:
+    """«появилась надпись»: подлежащее стоит после глагола и согласовано с ним по роду."""
+    for w in words[:2]:
+        for p in _morph().parse(w)[:3]:
+            if p.tag.POS in ("NOUN", "NPRO") and "nomn" in p.tag and "sing" in p.tag and p.tag.gender == verb_gender:
+                return True
+        if _morph().parse(w)[0].tag.POS not in ("ADJF", "PRTF", "NUMR"):
+            break
+    return False
+
+
 def wrong_gender_verbs(text: str, gender: Gender) -> list[str]:
-    """Глаголы прошедшего времени ед. ч. «от первого лица» с родом, не совпадающим с профилем."""
+    """Глаголы прошедшего времени ед. ч. от первого лица, род которых не совпадает с профилем.
+
+    Глагол считается «от первого лица», если в его части предложения перед ним стоит «я» или только
+    служебные слова («Затем проверил…»). Пассив «был создан» и инверсия «появилась надпись» не считаются."""
     wrong_tag = "femn" if gender == "m" else "masc"
     found: list[str] = []
     for sent in _SENT.findall(text):
-        has_subject = False
-        for m in _WORD.finditer(sent):
-            w = m.group()
-            low = w.lower()
-            top = _morph().parse(low)[0]
-            if top.tag.POS == "VERB" and "past" in top.tag and "sing" in top.tag:
-                if not has_subject and wrong_tag in top.tag:
+        for clause in _CLAUSE_SPLIT.split(sent):
+            words = _WORD.findall(clause)
+            lows = [w.lower() for w in words]
+            for i, (w, low) in enumerate(zip(words, lows)):
+                top = _morph().parse(low)[0]
+                if not _is_past_singular_verb(top) or wrong_tag not in top.tag:
+                    continue
+                after = lows[i + 1:i + 3]
+                if top.normal_form == "быть" and any(_morph().parse(a)[0].tag.POS == "PRTS" for a in after):
+                    continue
+                # Инверсия бывает у непереходных глаголов («появилась надпись»); у переходного
+                # существительное после глагола — дополнение («проверил вывод»).
+                intransitive = "intr" in top.tag or low.endswith(("ся", "сь"))
+                if intransitive and _agreeing_subject_after(after, top.tag.gender):
+                    continue
+                before = lows[:i]
+                if "я" in before or all(_morph().parse(b)[0].tag.POS in _SERVICE_POS for b in before):
                     found.append(w)
-                continue
-            if low == "я" or top.tag.POS in ("ADVB", "CONJ", "PRCL", "PREP"):
-                continue
-            # у неодушевлённых существительных им. и вин. падежи совпадают — смотрим все разборы
-            if any(p.tag.POS in ("NOUN", "NPRO") and "nomn" in p.tag for p in _morph().parse(low)[:3]):
-                has_subject = True
     return found
