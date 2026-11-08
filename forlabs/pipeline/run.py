@@ -9,11 +9,14 @@ from datetime import date as _date
 from pathlib import Path
 from typing import Callable
 
-from forlabs.core.models import Figure, LabSpec, LabState, Profile, ReportDoc, is_accepted
+from forlabs.core.models import (
+    ChatMessage, Figure, LabSpec, LabState, Profile, ReportDoc, is_accepted, push_version,
+)
 from forlabs.core.rules import RuleBook
 from forlabs.core.store import safe_name
 from forlabs.core.subjects import get_subject
 from forlabs.ingest.extract import SourceText, extract_many
+from forlabs.pipeline.chat import plan_edit, revise_answers, revise_section
 from forlabs.pipeline.events import EventBus
 from forlabs.pipeline.repair import check_all, check_and_repair, report_text
 from forlabs.pipeline.write import refresh_derived, write_report
@@ -32,6 +35,12 @@ DRAFT_PREFIX = "новая-"
 
 def is_draft(number: str) -> bool:
     return number.startswith("новая")
+
+
+def _now() -> str:
+    from datetime import datetime
+
+    return datetime.now().isoformat(timespec="seconds")
 
 
 def today() -> str:
@@ -260,13 +269,124 @@ class Pipeline:
             pass
         return out
 
+    def _teacher_text(self, st: LabState) -> str:
+        if self.memory is None:
+            return ""
+        try:
+            return self.memory.teacher(st.profile_id, st.subject_id)
+        except Exception:
+            return ""
+
     def _memory_text(self, st: LabState) -> str:
+        text = ""
         if self.memory is not None:
             try:
-                return self.memory.read(st.profile_id, st.subject_id)
+                text = self.memory.read(st.profile_id, st.subject_id)
             except Exception:
-                return ""
-        return ""
+                text = ""
+        teacher = self._teacher_text(st)
+        if teacher:
+            text = f"Требования преподавателя (соблюдай всегда):\n{teacher}\n\n{text}".strip()
+        return text
+
+    # чат правок
+    def chat(self, st: LabState, message: str, remember: bool = False) -> LabState:
+        """Сообщение студента о правке: план → точечная правка → проверка → вёрстка; сбой — всё как было."""
+        message = (message or "").strip()
+        if not message:
+            raise PipelineError("Напиши, что поменять в отчёте")
+        if not st.report or not st.spec:
+            raise PipelineError("Чат правок работает после выполнения лабы")
+        with self.lock(st):
+            st.chat.append(ChatMessage(id=uuid.uuid4().hex[:8], role="user", text=message[:4000], at=_now(),
+                                       remember=remember))
+            self._save(st)
+            backup_spec, backup_report = st.spec.model_copy(deep=True), st.report.model_copy(deep=True)
+            vid = None
+            try:
+                profile = self._profile(st)
+                subject = get_subject(st.subject_id)
+                llm = self._llm(st)
+                self._emit(st, "Разбираю правку", step="write")
+                plan = plan_edit(st, message, profile, subject, llm, self.rules, self._teacher_text(st))
+                remembered = None
+                if remember and self.memory is not None:
+                    remembered = plan.remember or message[:300]
+                    self.memory.add_teacher(st.profile_id, st.subject_id, remembered)
+                note = f"\nЗапомнил для следующих лаб: {remembered.rstrip('.')}." if remembered else ""
+                if plan.kind != "edit":
+                    st.chat.append(ChatMessage(id=uuid.uuid4().hex[:8], role="assistant", text=plan.reply + note,
+                                               at=_now(), kind=plan.kind))
+                    self._emit(st, "Ответ в чате правок", "done", step="write")
+                    return self._save(st)
+                vid = push_version(st, message)
+                changed: list[str] = []
+                if plan.variant is not None and plan.variant != st.spec.variant:
+                    st.spec.variant = plan.variant
+                    changed.append(f"вариант {plan.variant}")
+                if plan.variant_text and plan.variant_text.strip() != (st.spec.variant_text or ""):
+                    st.spec.variant_text = plan.variant_text.strip()
+                    changed.append("текст варианта")
+                if plan.conclusion:
+                    text = " ".join(plan.conclusion.split()).rstrip(".") + "."
+                    st.spec.conclusion = text
+                    changed.append("вывод")
+                memory = self._memory_text(st)
+                assets = self.lab_dir(st) / "assets"
+                assets.mkdir(parents=True, exist_ok=True)
+                retake: list[str] = []
+                for edit in plan.tasks:
+                    idx = next((i for i, s in enumerate(st.report.sections) if s.n == edit.n), None)
+                    if idx is None:
+                        continue
+                    self._emit(st, f"Правлю задание {edit.n}", step="write")
+                    section, again = revise_section(st.spec, st.report.sections[idx], edit.instruction, profile,
+                                                    subject, llm, self.rules, assets, memory, self.render_diagrams)
+                    st.report.sections[idx] = section
+                    retake += again
+                    changed.append(f"задание {edit.n}")
+                if plan.questions:
+                    self._emit(st, "Правлю ответы на вопросы", step="write")
+                    st.report.questions = revise_answers(st.spec, st.report.questions, plan.questions, profile,
+                                                         subject, llm, self.rules)
+                    changed.append("ответы на вопросы " + ", ".join(str(q.n) for q in plan.questions))
+                self._emit(st, "Проверяю по стандарту и на признаки ИИ", step="check")
+                report, findings = check_and_repair(st.report, st.spec, profile, llm, self.rules, self._others(st),
+                                                    on_event=lambda t: self._emit(st, t, step="check"))
+                st.report = _relative_images(report, self.lab_dir(st))
+                st.findings = findings
+                self._sync_assets(st)
+                text = plan.reply or "Готово."
+                if changed:
+                    text += "\nИзменено: " + ", ".join(changed) + "."
+                if retake:
+                    text += "\nПересними: " + "; ".join(retake) + " — места появились в «Нужно от тебя»."
+                st.chat.append(ChatMessage(id=uuid.uuid4().hex[:8], role="assistant", text=text + note, at=_now(),
+                                           kind="edit", changed=changed, retake=retake, version=vid))
+            except Exception as e:  # сбой посреди правки: разбор и отчёт — как до неё
+                st.spec, st.report = backup_spec, backup_report
+                if vid is not None:
+                    st.versions = [v for v in st.versions if v.id != vid]
+                reason = getattr(e, "message_ru", None) or str(e) or type(e).__name__
+                st.chat.append(ChatMessage(id=uuid.uuid4().hex[:8], role="assistant", at=_now(), kind="failed",
+                                           text=f"Не получилось: {reason} Отчёт не изменён — попробуй ещё раз."))
+                self._emit(st, f"Правка не удалась: {reason}", "error", step="write")
+                return self._save(st)
+        return self.render(st)
+
+    def revert(self, st: LabState, version_id: int) -> LabState:
+        """Вернуть разбор и отчёт к версии; текущее состояние тоже сохраняется версией — откат можно отменить."""
+        target = next((v for v in st.versions if v.id == version_id), None)
+        if target is None:
+            raise PipelineError("Этой версии уже нет: хранятся только 10 последних правок")
+        with self.lock(st):
+            current = push_version(st, f"до отката к «{target.label}»")
+            st.spec, st.report = target.spec.model_copy(deep=True), target.report.model_copy(deep=True)
+            st.chat.append(ChatMessage(id=uuid.uuid4().hex[:8], role="assistant", at=_now(), kind="revert",
+                                       version=current,
+                                       text=f"Вернул отчёт к состоянию до правки «{target.label[:80]}»."))
+            self._save(st)
+        return self.render(st)
 
     def execute(self, st: LabState, only: list[int] | None = None) -> LabState:
         with self.lock(st):

@@ -53,3 +53,19 @@ class SubjectMemory:
         text = "\n".join(lines)
         self.write(st.profile_id, st.subject_id, text)
         return text
+
+    # требования преподавателя: отдельная запись, не обрезается вместе с выжимками лаб
+    MAX_TEACHER = 30
+
+    def teacher(self, profile_id: str, subject_id: str) -> str:
+        return self._read(profile_id, f"{subject_id}.teacher")
+
+    def add_teacher(self, profile_id: str, subject_id: str, rule: str) -> str:
+        rule = " ".join(rule.split()).strip(" -—–").rstrip(".") + "."
+        lines = [ln for ln in self.teacher(profile_id, subject_id).splitlines() if ln.strip()]
+        if rule.lower() not in {ln.lstrip("- ").lower() for ln in lines}:
+            lines.append(f"- {rule}")
+        text = "\n".join(lines[-self.MAX_TEACHER:])
+        self._write(profile_id, f"{subject_id}.teacher", text)
+        return text
+
