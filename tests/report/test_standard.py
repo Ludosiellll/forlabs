@@ -15,6 +15,7 @@ def spec() -> LabSpec:
         tasks=[Task(n=1, text="По данному натуральному n ≤ 30 выведите лесенку из n ступенек."),
                Task(n=2, text="Напишите программу согласно приведенному перечню в приложении А.")],
         questions=["Что называется функцией?", "Дайте определение понятию сигнатура?"],
+        variant_text="Приложение А (по журналу, вариант 14): двумерный массив 5 х 5",
     )
 
 
@@ -126,3 +127,12 @@ def test_text_gender():
     d = clean_doc(); d.sections[1].blocks[0] = Paragraph(text="Разработал программу поиска экстремумов.")
     d.conclusion = "Сформировала умения создавать простейшие программы работы со ссылочными типами данных."
     assert ids(check_standard(d, spec(), "f")) == ["text.gender"]
+
+
+def test_phantom_variant_when_spec_has_none():
+    d = clean_doc(); d.sections[1].blocks[0] = Paragraph(text="Согласно варианту 2 из приложения А необходимо собрать данные.")
+    s = spec()
+    s.variant_text = None
+    assert ids(check_standard(d, s, "m")) == ["text.phantom_variant"]
+    s.variant_text = "Приложение А (по журналу, вариант 14): Организация"
+    assert check_standard(d, s, "m") == []

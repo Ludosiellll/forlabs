@@ -21,6 +21,7 @@ _EMOJI = re.compile("[\U0001F300-\U0001FAFF\U00002600-\U000027BF\U0001F000-\U000
 _CURLY_QUOTES = re.compile(r"[“”„‟]")
 _STRAIGHT_RU = re.compile(r"\"[^\"]*[А-Яа-яЁё][^\"]*\"")
 _REF_IN_ITEM = re.compile(r"(на\s+рисунк|в\s+листинг|в\s+таблиц)", re.IGNORECASE)
+_VARIANT_MENTION = re.compile(r"вариант\w*\s+\d+|приложени[еяи]\s+[А-ЯA-Z]\b", re.IGNORECASE)
 
 
 def _f(rule: str, msg: str, location: str = "", text: str = "", severity: str = "error") -> Finding:
@@ -105,6 +106,8 @@ def check_standard(doc: ReportDoc, spec: LabSpec, gender: Gender) -> list[Findin
         out.append(_f("conclusion.formula", f"Вывод должен быть: «{expected_conclusion}»", "Вывод", doc.conclusion))
 
     for loc, text in text_items(doc):
+        if not spec.variant_text and _VARIANT_MENTION.search(text):
+            out.append(_f("text.phantom_variant", "В методичке нет вариантов и приложений — не упоминай их", loc, text))
         if _MARKDOWN.search(text):
             out.append(_f("text.markdown", "Без markdown-разметки", loc, text))
         if _EMOJI.search(text):

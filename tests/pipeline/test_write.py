@@ -98,3 +98,12 @@ def test_same_opening_points_to_blocks_and_gets_repaired():
                     {"blocks": [{"index": 1, "text": "Результат выведен в консоль."}]}])
     fixed = repair(doc, fs, fake, RuleBook(), SPEC, PROFILE)
     assert not [f for f in check_all(fixed, SPEC, PROFILE, {}) if f.rule_id == "ai.same_opening"]
+
+
+def test_prompt_says_no_variants_when_none():
+    fake = FakeLLM([SECTION1, SECTION2, ANSWERS])
+    spec = SPEC.model_copy(update={"variant_text": None})
+    write_report(spec, PROFILE, PROFILE.enrollment("ssp"), SUBJECTS["ssp"], fake, RuleBook(),
+                 assets_dir=Path("/tmp"), render_diagrams=False)
+    prompt = "\n".join(m["content"] for m in fake.calls[0])
+    assert "В этой работе нет вариантов" in prompt

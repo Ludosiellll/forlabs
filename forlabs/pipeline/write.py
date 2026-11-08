@@ -88,7 +88,8 @@ def draft_to_blocks(draft: SectionDraft, assets_dir: Path, sec_n: int, render_di
 
 def _context(spec: LabSpec, profile: Profile, subject: Subject, memory: str, previous: list[TaskSection]) -> dict:
     all_tasks = "\n".join(f"{t.n}. {t.text}" for t in spec.tasks)
-    variant_block = f"Варианты из методички:\n{spec.variant_text}\n" if spec.variant_text else ""
+    variant_block = (f"Варианты из методички:\n{spec.variant_text}\n" if spec.variant_text else
+                     "В этой работе нет вариантов и приложений с вариантами: не упоминай вариант и приложение.\n")
     memory_block = f"Что было в прошлых лабах этого предмета (продолжай ту же тему):\n{memory}\n" if memory.strip() else ""
     prev = "\n\n".join(f"Задание {s.n} (уже написано):\n{section_text(s)}" for s in previous)
     previous_block = f"Уже написанные задания этой работы — не повторяйся и будь последователен:\n{prev}\n" if prev else ""
