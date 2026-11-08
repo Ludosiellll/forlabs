@@ -16,7 +16,8 @@ MAX_ANSWER_CHARS = 165
 _DATE = re.compile(r"^\d{2}\.\d{2}\.\d{4}$")
 _MANUAL_REF = re.compile(r"(на\s+рисунк\w*|в\s+листинг\w*|в\s+таблиц\w*)\s+\d+|^(Рисунок|Листинг|Таблица)\s+\d+\s*[–—-]",
                          re.IGNORECASE)
-_MARKDOWN = re.compile(r"\*\*|__|^#{1,6}\s|`|\|\s*-{3,}")
+# «__» — только как жирный markdown (__слово__), а не имена вроде __init__
+_MARKDOWN = re.compile(r"\*\*|(?<![\w.])__(?=[А-Яа-яЁё\s])|^#{1,6}\s|`|\|\s*-{3,}")
 _EMOJI = re.compile("[\U0001F300-\U0001FAFF\U00002600-\U000027BF\U0001F000-\U0001F2FF⭐✅❌]")
 _CURLY_QUOTES = re.compile(r"[“”„‟]")
 _STRAIGHT_RU = re.compile(r"\"[^\"]*[А-Яа-яЁё][^\"]*\"")

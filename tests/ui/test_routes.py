@@ -237,3 +237,37 @@ def test_new_lab_with_taken_number_shows_message(client, tmp_path):
                                        "text": "Лабораторная работа №7"}, follow_redirects=False)
     assert r.status_code == 303 and "err=" in r.headers["location"]
     assert "/labs/new" in r.headers["location"]
+
+
+def test_renamed_lab_gets_idle_event(client, tmp_path):
+    _new_lab(client, tmp_path)
+    ctx = client.app.state.ctx
+    kinds = [e.kind for e in ctx.bus.history("ivanov_ivan_petrovich/psip/7")]
+    assert kinds and kinds[-1] == "idle"
+
+
+def test_semester_build_does_not_block_other_pages(client, tmp_path):
+    import threading
+
+    from forlabs.pipeline.run import PipelineError
+
+    make_profile(client, tmp_path)
+    ctx = client.app.state.ctx
+    release = threading.Event()
+
+    def slow_build(*a, **k):
+        release.wait(5)
+        raise PipelineError("стоп")
+
+    ctx.pipeline.build_semester = slow_build
+    with TestClient(client.app, base_url="http://127.0.0.1:8765") as shared:  # один цикл событий на все запросы
+        t = threading.Thread(target=lambda: shared.post("/semester", data={
+            "profile_id": "ivanov_ivan_petrovich", "subject_id": "psip", "numbers": ["7"]}, follow_redirects=False))
+        t.start()
+        time.sleep(0.3)
+        t0 = time.monotonic()
+        r = shared.get("/rules")
+        elapsed = time.monotonic() - t0
+        release.set()
+        t.join(5)
+    assert r.status_code == 200 and elapsed < 2

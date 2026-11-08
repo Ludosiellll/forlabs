@@ -389,3 +389,17 @@ def test_accepting_one_finding_does_not_accept_the_rule_everywhere(tmp_home, tmp
         pipe.mark_final(st, accept_rules=[finding_key(a)])
     st = pipe.mark_final(st, accept_rules=[finding_key(a), finding_key(b)])
     assert st.status == "final"
+
+
+def test_semester_refuses_labs_without_screenshots(tmp_home, tmp_path):
+    import pytest
+
+    from forlabs.pipeline.run import PipelineError
+
+    pipe, _ = setup(tmp_home, tmp_path, [RAW, SEC, SEC2, ANS])
+    st = pipe.create_lab("ivanov", "psip", [(FIXTURE.name, FIXTURE.read_bytes())], number="7")
+    st = pipe.execute(pipe.confirm(pipe.parse(st, date="24.09.2026"), None))
+    assert pipe.slots(st)
+    with pytest.raises(PipelineError) as e:
+        pipe.build_semester("ivanov", "psip", ["7"], tmp_path / "sem.docx")
+    assert "ЛР 7" in str(e.value)

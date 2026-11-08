@@ -122,6 +122,9 @@ class AppContext:
                 with self._lock:
                     self.running.discard(key)
                 self.bus.publish(key, "", "idle")
+                moved = self.pipeline.renamed.get(key) if self._pipeline is not None else None
+                if moved:  # лабу перенесли под номер из методички — её страница ждёт конца работы по новому ключу
+                    self.bus.publish(f"{key.rsplit('/', 1)[0]}/{moved}", "", "idle")
 
         if self.synchronous:
             job()

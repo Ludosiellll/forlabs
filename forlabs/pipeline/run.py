@@ -399,6 +399,8 @@ class Pipeline:
         for n in numbers:
             st = self.store.load_lab(profile_id, subject_id, n)
             if st and st.report:
+                if self.slots(st):
+                    raise PipelineError(f"В ЛР {n} не вставлены скриншоты — вставь их или убери лабу из отчёта")
                 self._fetch_missing(st)
                 docs.append(_absolute_images(st.report, self.store.lab_dir(profile_id, subject_id, n)))
         if not docs:

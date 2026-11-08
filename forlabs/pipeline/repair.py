@@ -136,7 +136,9 @@ def check_and_repair(doc: ReportDoc, spec: LabSpec, profile: Profile, llm, rules
     emit = on_event or (lambda s: None)
     findings = check_all(doc, spec, profile, others)
     for r in range(rounds):
-        fixable = [f for f in findings if f.rule_id not in STRUCTURAL]
+        # чинить можно только то, что привязано к блоку или ответу; «Отчёт целиком» — только «Переписать»
+        fixable = [f for f in findings if f.rule_id not in STRUCTURAL and
+                   (_LOC.match(f.location) or f.location.startswith("Вопрос "))]
         if not fixable:
             break
         emit(f"Проверка: {len(fixable)} замечаний, исправляю (круг {r + 1} из {rounds})")

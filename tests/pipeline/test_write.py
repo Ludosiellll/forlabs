@@ -157,3 +157,29 @@ def test_colored_diagram_renders_light(tmp_path):
         px = im.convert("L").tobytes()
     dark = sum(1 for v in px if v < 100) / len(px)
     assert dark < 0.08, f"слишком много тёмного: {dark:.0%}"
+
+
+def test_report_level_findings_do_not_spin_repair_rounds():
+    from forlabs.core.models import ReportDoc, TaskSection
+    from forlabs.pipeline.repair import check_and_repair, report_text
+
+    doc = ReportDoc(lab_number="8", header={}, conclusion="Изучила.", sections=[
+        TaskSection(n=1, title=SPEC.tasks[0].text, blocks=[Paragraph(text="Массив заполнен числами с клавиатуры.")]),
+        TaskSection(n=2, title=SPEC.tasks[1].text, blocks=[Paragraph(text="Сумма выводится после цикла.")])])
+    events = []
+    fake = FakeLLM([])  # модель не должна вызываться: такое замечание правится только «Переписать»
+    doc2, findings = check_and_repair(doc, SPEC, PROFILE, fake, RuleBook(), {"Петров": report_text(doc)},
+                                      on_event=events.append)
+    assert any(f.rule_id == "ai.similar_profile" for f in findings)
+    assert fake.calls == [] and not any("исправляю" in e for e in events)
+
+
+def test_markdown_rule_ignores_python_dunder_names():
+    from forlabs.report.standard import check_standard
+    from forlabs.core.models import ReportDoc, TaskSection
+
+    doc = ReportDoc(lab_number="8", header={}, conclusion="x", sections=[TaskSection(
+        n=1, title=SPEC.tasks[0].text, blocks=[Paragraph(text="Конструктор __init__ заполняет поля name и age.")])])
+    assert not [f for f in check_standard(doc, SPEC, "f") if f.rule_id == "text.markdown"]
+    doc.sections[0].blocks[0] = Paragraph(text="Это **важно** для работы.")
+    assert [f for f in check_standard(doc, SPEC, "f") if f.rule_id == "text.markdown"]

@@ -200,7 +200,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
                     variant=int(v) if v.isdigit() else subj.default_variant,
                     workplace=int(w) if w.isdigit() else None,
                     header_style="short" if f.get(f"enr_{sid}_style") == "short" else "long"))
-        old = ctx.store.get_profile(pid)
+        old = await asyncio.to_thread(ctx.store.get_profile, pid)
         base = old.model_dump() if old else Profile(id=pid, full_name=full_name, title_name="").model_dump()
         for key in ("full_name", "title_name", "gender", "group", "specialty_code", "city", "doc_author",
                     "output_root"):
@@ -217,7 +217,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         if not base.get("doc_author"):
             parts = full_name.split()
             base["doc_author"] = " ".join(parts[:2])
-        ctx.store.save_profile(Profile.model_validate(base))
+        await asyncio.to_thread(ctx.store.save_profile, Profile.model_validate(base))
         return redirect(f"/?profile={_q(pid)}", msg="Профиль сохранён")
 
     @app.post("/profiles/{pid}/delete")
@@ -507,11 +507,11 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         out_dir = ctx.store.local.home if hasattr(ctx.store, "local") else ctx.store.home
         out = Path(out_dir) / "semester" / f"{pid}_{sid}.docx"
         try:
-            path, rep = ctx.pipeline.build_semester(pid, sid, numbers, out)
+            path, rep = await asyncio.to_thread(ctx.pipeline.build_semester, pid, sid, numbers, out)
         except PipelineError as e:
             return redirect(f"/semester?profile={_q(pid)}&subject={_q(sid)}", err=str(e))
         subj = get_subject(sid)
-        profile = ctx.store.get_profile(pid)
+        profile = await asyncio.to_thread(ctx.store.get_profile, pid)
         name = f"{subj.short_name}_{(profile.full_name.split() or ['отчёт'])[0]}_семестр.docx"
         return FileResponse(path, filename=name,
                             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
