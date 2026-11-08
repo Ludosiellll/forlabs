@@ -35,10 +35,10 @@ jobs:
       - name: Тесты
         shell: pwsh
         run: |
-          python -m pytest -q -p no:cacheprovider 2>&1 | Tee-Object -FilePath pytest.txt
+          python -m pytest -q -p no:cacheprovider -rfE --tb=line 2>&1 | Tee-Object -FilePath pytest.txt
           $code = $LASTEXITCODE
           if ($code -ne 0) {
-            Get-Content pytest.txt | Select-String -Pattern "FAILED|Error" | Select-Object -First 40 |
+            Get-Content pytest.txt | Select-String -Pattern "^(FAILED|ERROR) |^[A-Z]:\\.*:\d+: " | Select-Object -First 50 |
               ForEach-Object { Write-Output "::error title=pytest::$($_.Line)" }
           }
           exit $code
