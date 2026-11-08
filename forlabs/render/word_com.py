@@ -31,7 +31,14 @@ class WordReport:
     warnings: list[str] = field(default_factory=list)
 
 
+_failed = False  # Word в этом запуске уже зависал/падал — до перезапуска доводим через LibreOffice
+
+
 def available() -> bool:
+    return not _failed and _installed()
+
+
+def _installed() -> bool:
     if sys.platform != "win32":
         return False
     try:
@@ -114,17 +121,16 @@ def _fix_listing_once(doc, name: str) -> bool:
 
 
 def insert_listing_continuations(doc) -> int:
-    count = 0
-    for _ in range(MAX_INSERTS):
-        changed = False
-        for name in listing_bookmarks(doc):
-            if _fix_listing_once(doc, name):
-                doc.Repaginate()
-                count += 1
-                changed = True
-                break
-        if not changed:
-            break
+    """Правка в листинге k сдвигает только то, что после него: прежние листинги заново не проверяем
+    (иначе отчёт за семестр с десятками листингов не успевал за 5 минут)."""
+    count, k = 0, 0
+    names = listing_bookmarks(doc)
+    while k < len(names) and count < MAX_INSERTS:
+        if _fix_listing_once(doc, names[k]):
+            doc.Repaginate()
+            count += 1
+            continue  # тот же листинг: ниже может понадобиться ещё одна правка
+        k += 1
     return count
 
 

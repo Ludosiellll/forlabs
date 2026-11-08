@@ -103,6 +103,14 @@ def render_dot(dot: str, out_png: Path, scale: float = 2.0) -> Path | None:
             out_png = Path(out_png)
             out_png.parent.mkdir(parents=True, exist_ok=True)
             page.locator("#out").screenshot(path=str(out_png))
+            try:  # снято с масштабом scale: отметить плотность, чтобы в отчёте схема была своего размера
+                from PIL import Image
+
+                with Image.open(out_png) as im:
+                    im.load()
+                    im.save(out_png, dpi=(96 * scale, 96 * scale))
+            except Exception:
+                pass
             browser.close()
         return out_png
     except Exception:

@@ -49,6 +49,7 @@ from forlabs.pipeline.run import (
     PipelineError,
     docx_fresh,
     lab_complete,
+    output_root,
     running_elsewhere,
     today,
 )
@@ -733,7 +734,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         profile = await asyncio.to_thread(ctx.store.get_profile, pid)
         if profile is None:
             return redirect(back, err="Профиль не найден")
-        root = Path(profile.output_root) if profile.output_root else Path.home() / "Лабораторные"
+        root = output_root(profile)
         name = f"{subj.short_name}_{(profile.full_name.split() or ['отчёт'])[0]}_семестр.docx"
         out = root / safe_name(subj.short_name) / safe_file_name(name)  # рядом со сданными лабами, путь виден
         try:

@@ -16,14 +16,17 @@ from forlabs.render import libreoffice, word_com
 from forlabs.render.conformance import q
 from forlabs.render.preview import heading_pages, pdf_to_pngs
 
-NO_WORD_WARNING = ("Word на этом компьютере не найден, поэтому «Продолжение листинга» не расставлено. "
+NO_OFFICE_WARNING = ("Нет ни Word, ни LibreOffice: документ собран, но без предпросмотра и без «Продолжения листинга». "
+                     "Поставь бесплатный LibreOffice (libreoffice.org) и нажми «Пересобрать документ».")
+NO_WORD_WARNING = ("Word на этом компьютере не найден, поэтому «Продолжение листинга» и «Продолжение таблицы» не "
+                   "расставлены. "
                    "Открой лабу в ForLabs на ПК с Word и нажми «Пересобрать документ».")
 
 
 @dataclass
 class FinalizeReport:
     engine: str
-    pdf: Path
+    pdf: Path | None
     pages: list[Path]
     continuations: int = 0
     warnings: list[str] = field(default_factory=list)
@@ -93,8 +96,10 @@ def finalize(docx: Path, author: str, workdir: Path, soffice: str | None = None,
             durable_replace(work, docx)
             return FinalizeReport("word", pdf, pdf_to_pngs(pdf, workdir / "pages"), rep.continuations, rep.warnings)
         except Exception as e:  # Word завис или упал — доводим исходный документ через LibreOffice
-            warnings.append(f"Word не справился ({e}). Документ доведён через LibreOffice; "
-                            f"«Продолжение листинга» не расставлено — нажми «Пересобрать документ» ещё раз.")
+            word_com._failed = True  # следующая вёрстка не ждёт его снова по 5 минут
+            warnings.append(f"Word не справился ({e}). Документ доведён без Word; «Продолжение листинга» и "
+                            "«Продолжение таблицы» не расставлены. Закрой окна Word и перезапусти ForLabs, потом "
+                            "нажми «Пересобрать документ».")
         finally:
             try:
                 work.unlink(missing_ok=True)
@@ -103,7 +108,13 @@ def finalize(docx: Path, author: str, workdir: Path, soffice: str | None = None,
     else:
         warnings.append(NO_WORD_WARNING)
 
-    pdf = libreoffice.to_pdf(docx, workdir, soffice)
+    if not libreoffice.find_soffice(soffice):
+        # ни Word, ни LibreOffice: документ уже собран и годится для сдачи — только без предпросмотра
+        return FinalizeReport("none", None, [], 0, warnings + [NO_OFFICE_WARNING])
+    try:
+        pdf = libreoffice.to_pdf(docx, workdir, soffice)
+    except Exception as e:
+        return FinalizeReport("none", None, [], 0, warnings + [f"Предпросмотр не получился ({e}). Документ готов."])
     marks = toc_bookmarks(docx)
     if marks:
         hp = heading_pages(pdf, list(marks.values()))

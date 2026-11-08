@@ -12,9 +12,11 @@ def _line(ok: bool | None, name: str, detail: str) -> str:
 
 
 def main() -> int:
+    from forlabs.core.netcert import use_system_certificates
     from forlabs.core.settings import get_api_key, load_settings
     from forlabs.render import libreoffice, word_com
 
+    use_system_certificates()  # как в приложении: сеть колледжа и антивирус с проверкой HTTPS
     s = load_settings()
     lines = [_line(sys.version_info >= (3, 11), "Python", sys.version.split()[0])]
     missing = [m for m in ("docx", "lxml", "pymorphy3", "pymupdf", "fastapi", "uvicorn", "httpx", "playwright", "PIL")

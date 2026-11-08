@@ -240,6 +240,16 @@ class Pipeline:
             for b in sec.blocks:
                 if isinstance(b, Figure) and b.image_path:
                     f = Path(b.image_path) if Path(b.image_path).is_absolute() else d / b.image_path
+                    if f.exists() and image_ok(f) and not _word_image(f):
+                        try:  # снимок из старой версии (WebP, CMYK): Word его не примет — перекодировать
+                            data, suffix = normalize_screenshot(f.read_bytes())
+                            new = f.with_name(f"{f.stem}_{uuid.uuid4().hex[:4]}{suffix}")
+                            new.write_bytes(data)
+                            b.image_path = new.relative_to(d).as_posix() if new.is_relative_to(d) else str(new)
+                            self._sync(st, [b.image_path])
+                            continue
+                        except Exception:
+                            pass
                     if f.exists() and not image_ok(f):
                         b.image_path = None
                         b.slot = "Картинка повреждена или в неподходящем формате — вставь снимок ещё раз."
@@ -684,6 +694,17 @@ class Pipeline:
             image, suffix = normalize_screenshot(image)
         except ValueError as e:
             raise PipelineError(str(e)) from e
+        try:
+            import io as _io
+
+            from PIL import Image as _Img
+
+            with _Img.open(_io.BytesIO(image)) as im:
+                if im.size[1] > im.size[0] * 3:
+                    self._emit(st, "Снимок очень высокий — в отчёте он будет узкой полосой. Лучше снять только нужную "
+                                   "часть окна или разделить на два снимка.", "warn")
+        except Exception:
+            pass
         rel = f"assets/fig_{section}_{block}_{uuid.uuid4().hex[:6]}{suffix}"  # новый файл: старые снимки целы
         f = self.lab_dir(st) / rel
         f.parent.mkdir(parents=True, exist_ok=True)
@@ -721,13 +742,16 @@ class Pipeline:
             # последний шлюз: готовый документ (после доводки) сверяется с эталоном абзац за абзацем
             canon = compare(docx)
             for f in canon:
-                if f.location == "continuation":
-                    f.severity = "warn"  # вставлено Word при доводке — показываем, но сдачу не держим
+                # шрифт и его размер одинаковы у всех ролей текста — их расхождение настоящее (держит сдачу);
+                # остальное (отступы, интервалы) сверка выводит из роли абзаца, угаданной по тексту, и ошибается
+                # на обычных фразах («… на рисунке 1», «Цель:») — показываем, но сдачу не держим
+                if f.location == "continuation" or not _font_mismatch(f.message):
+                    f.severity = "warn"
             st.findings = [f for f in st.findings if f.rule_id != "render.canon_mismatch"] + canon
             if canon:
                 self._emit(st, f"Оформление отличается от эталона в {len(canon)} местах — смотри замечания", "warn",
                            step="render")
-            st.docx_path, st.pdf_path = str(docx), str(rep.pdf)
+            st.docx_path, st.pdf_path = str(docx), (str(rep.pdf) if rep.pdf else None)
             st.docx_sha = file_sha(docx)
             st.pages = [str(p) for p in rep.pages]
             st.engine, st.warnings = rep.engine, rep.warnings
@@ -758,7 +782,7 @@ class Pipeline:
                 raise PipelineError(st.error or "Не удалось свёрстать отчёт без мест для скриншотов")
         profile = self._profile(st)
         subject = get_subject(st.subject_id)
-        root = Path(profile.output_root) if profile.output_root else Path.home() / "Лабораторные"
+        root = output_root(profile)
         short = safe_name(subject.short_name)
         number = safe_name(st.spec.number if st.spec else st.number)  # номер из методички, а не «7-2»
         out_dir = root / short / f"ЛР{number}"
@@ -770,7 +794,8 @@ class Pipeline:
             durable_replace(tmp, target)
         except PermissionError as e:
             tmp.unlink(missing_ok=True)
-            raise PipelineError(f"Не получилось записать {target.name}: файл открыт в Word. Закрой его и нажми ещё раз.") from e
+            raise PipelineError(f"Не получилось записать {target.name}: файл открыт в Word или его держит OneDrive "
+                                "либо антивирус. Закрой файл (или подожди синхронизацию OneDrive) и нажми ещё раз.") from e
         except OSError as e:
             try:
                 tmp.unlink(missing_ok=True)
@@ -812,6 +837,9 @@ class Pipeline:
         for n in numbers:
             st = self.store.load_lab(profile_id, subject_id, n)
             if st and st.report:
+                if st.spec is not None and not lab_complete(st):
+                    raise PipelineError(f"ЛР {n} дописана не до конца — нажми в ней «Продолжить» или убери её из "
+                                        "отчёта")
                 if self.slots(st):
                     raise PipelineError(f"В ЛР {n} не вставлены скриншоты — вставь их или убери лабу из отчёта")
                 self._fetch_missing(st)
@@ -855,6 +883,33 @@ def running_elsewhere(st: LabState) -> bool:
     try:
         return datetime.fromisoformat(st.lease_until or "") > datetime.now(timezone.utc)
     except ValueError:
+        return False
+
+
+def output_root(profile: Profile) -> Path:
+    """Папка сдачи профиля: кавычки от «Копировать как путь» убираются, относительный путь — от папки пользователя
+    (а не от папки программы, куда в Program Files писать нельзя)."""
+    raw = (profile.output_root or "").strip().strip('"').strip("'").strip()
+    if not raw:
+        return Path.home() / "Лабораторные"
+    p = Path(raw).expanduser()
+    return p if p.is_absolute() else Path.home() / p
+
+
+def _font_mismatch(message: str) -> bool:
+    import re
+
+    return bool(re.search(r"(^|[;:]\s*)(size|font|sz|bold|italic)\w*:", message))
+
+
+def _word_image(f: Path) -> bool:
+    """Картинка, которую вставит python-docx: PNG, JPEG, GIF, BMP — и не CMYK."""
+    try:
+        from PIL import Image
+
+        with Image.open(f) as im:
+            return im.format in ("PNG", "JPEG", "GIF", "BMP") and im.mode != "CMYK"
+    except Exception:
         return False
 
 

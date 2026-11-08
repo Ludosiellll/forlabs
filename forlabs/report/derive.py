@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Literal
 
@@ -38,7 +39,12 @@ def clean_topic(topic: str) -> str:
     return " ".join(topic.split()).rstrip(" .;:")
 
 
+_FILE_START = re.compile(r"^[a-z0-9_.-]+\.[a-z0-9]{1,5}\b")
+
+
 def upper_first(s: str) -> str:
+    if _FILE_START.match(s):  # «index.html …» — имя файла, его регистр не трогаем
+        return s
     return s[:1].upper() + s[1:]
 
 
