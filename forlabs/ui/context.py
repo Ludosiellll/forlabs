@@ -128,6 +128,7 @@ class AppContext:
             self.running.add(key)
 
         def job():
+            pipe = self._pipeline  # настройки могут сброситься посреди работы — перенос лабы помнит этот конвейер
             try:
                 fn(*args, **kwargs)
             except Exception as e:  # ошибка должна дойти до журнала, а не потеряться в потоке
@@ -137,7 +138,7 @@ class AppContext:
                 with self._lock:
                     self.running.discard(key)
                 self.bus.publish(key, "", "idle")
-                moved = self.pipeline.renamed.get(key) if self._pipeline is not None else None
+                moved = pipe.renamed.get(key) if pipe is not None else None
                 if moved:  # лабу перенесли под номер из методички — её страница ждёт конца работы по новому ключу
                     self.bus.publish(f"{key.rsplit('/', 1)[0]}/{moved}", "", "idle")
 

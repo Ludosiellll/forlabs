@@ -6,10 +6,9 @@ import io
 import pytest
 from PIL import Image
 from test_chat_run import PLAN_T2, REVISE_T2, ready
-from test_run import ANS, FIXTURE, RAW, SEC, SEC2, setup
+from test_run import FIXTURE, RAW, SEC, setup
 
-from forlabs.core.llm import FakeLLM, LLMError
-from forlabs.core.rules import RuleBook
+from forlabs.core.llm import LLMError
 from forlabs.pipeline.run import PipelineError
 
 

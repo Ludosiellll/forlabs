@@ -28,8 +28,8 @@ from forlabs.cloud.admin import (
 from forlabs.cloud.auth import CloudAuth, CloudError
 from forlabs.core import paths
 from forlabs.core.fs import atomic_write_text
-from forlabs.core.netcert import is_cert_error, offline_message
 from forlabs.core.models import LabState, LabSummary, Profile, summarize
+from forlabs.core.netcert import is_cert_error, offline_message
 from forlabs.core.store import Store, _number_key, _read_model, safe_name
 
 BUCKET = "labs"
@@ -99,21 +99,34 @@ class CloudStore:
     def _rest(self, method: str, table: str, params: dict | None = None, json=None, prefer: str | None = None):
         """Запрос к базе; обрыв связи и 5xx повторяются (все наши записи — upsert/patch/delete по ключу,
         повтор безопасен)."""
-        for attempt in range(len(self.retry_delays) + 1):
+        refreshed = False
+        attempt = 0
+        while True:
             try:
                 r = self.http.request(method, f"{self.cfg.url}/rest/v1/{table}", params=params, json=json,
                                       headers=self._h({"Prefer": prefer} if prefer else None))
+            except CloudError as e:  # обрыв при обновлении входа — повторяется, как и сам запрос
+                if not e.offline or attempt == len(self.retry_delays) or is_cert_error(e.detail):
+                    raise
+                time.sleep(self.retry_delays[attempt])
+                attempt += 1
+                continue
             except httpx.TransportError as e:
-                if attempt == len(self.retry_delays) or is_cert_error(e):
+                if attempt == len(self.retry_delays) or is_cert_error(str(e)):
                     raise CloudError(offline_message(e), str(e), offline=True) from e
                 time.sleep(self.retry_delays[attempt])
+                attempt += 1
                 continue
             if r.status_code >= 500 and attempt < len(self.retry_delays):
                 time.sleep(self.retry_delays[attempt])
+                attempt += 1
+                continue
+            if r.status_code == 401 and not refreshed:  # часы компьютера сбиты: сервер считает вход просроченным
+                refreshed = True
+                self.auth.refresh()
                 continue
             self.offline = False
             return self._check(r)
-        raise AssertionError("недостижимо")
 
     def _mine(self) -> dict:
         """Только свои строки: администратор по политикам видит и чужие, но работает со своими."""

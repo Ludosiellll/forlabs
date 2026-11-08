@@ -7,7 +7,7 @@ CERT_MESSAGE = ("Защищённое соединение не прошло п�
 OFFLINE_MESSAGE = "Нет связи с облаком. Проверь интернет."
 
 
-def is_cert_error(e: BaseException) -> bool:
+def is_cert_error(e: BaseException | str) -> bool:
     text = str(e).lower()
     return "certificate_verify_failed" in text or "certificate verify failed" in text
 

@@ -27,6 +27,8 @@ class FakeSupabase:
         self.functions_down = False
         self.balance_errors = {}  # uid -> текст ошибки, как в ответе функции
         self.drop_next = 0  # сколько следующих запросов к REST оборвать (как пропавший Wi-Fi)
+        self.drop_auth_next = 0  # то же для обновления входа
+        self.expired = set()  # токены, которые сервер уже считает просроченными (часы ноутбука спешат)
 
     def session(self, expires_in=3600):
         return {"access_token": f"tok{len(self.requests)}", "refresh_token": "ref", "expires_in": expires_in,
@@ -37,6 +39,9 @@ class FakeSupabase:
         assert req.headers["apikey"] == "sb_publishable_x"
         path = req.url.path
         if path == "/auth/v1/token":
+            if self.drop_auth_next:
+                self.drop_auth_next -= 1
+                raise httpx.ConnectError("Wi-Fi пропал")
             body = json.loads(req.content)
             if req.url.params["grant_type"] == "password" and body["password"] != "верный":
                 return httpx.Response(400, json={"error": "invalid_grant", "error_description": "Invalid login credentials"})
@@ -44,6 +49,8 @@ class FakeSupabase:
         if path == "/auth/v1/signup":
             return httpx.Response(200, json={"id": UID, "email": "a@b.c", "confirmation_sent_at": "now"})
         assert req.headers["authorization"].startswith("Bearer tok")
+        if req.headers["authorization"][7:] in self.expired and path.startswith("/rest/v1/"):
+            return httpx.Response(401, json={"code": "PGRST301", "message": "JWT expired"})
         if self.drop_next and path.startswith("/rest/v1/"):
             self.drop_next -= 1
             raise httpx.ConnectError("Wi-Fi пропал")

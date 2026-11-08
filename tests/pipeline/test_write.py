@@ -3,7 +3,15 @@ from pathlib import Path
 import pytest
 
 from forlabs.core.llm import FakeLLM
-from forlabs.core.models import Enrollment, Figure, LabSpec, Listing, Paragraph, Profile, Task
+from forlabs.core.models import (
+    Enrollment,
+    Figure,
+    LabSpec,
+    Listing,
+    Paragraph,
+    Profile,
+    Task,
+)
 from forlabs.core.rules import RuleBook
 from forlabs.core.subjects import SUBJECTS
 from forlabs.executors.diagrams import browser_available, render_dot
@@ -55,7 +63,7 @@ def test_write_report_fake_llm(tmp_path):
 
 
 def test_repair_fixes_cliche():
-    from forlabs.core.models import ReportDoc, TaskSection, QA
+    from forlabs.core.models import QA, ReportDoc, TaskSection
     doc = ReportDoc(lab_number="8", header={}, sections=[TaskSection(n=1, title=SPEC.tasks[0].text, blocks=[
         Paragraph(text="Срез играет важную роль в программе."), Paragraph(text="Цикл выводит числа.")]),
         TaskSection(n=2, title=SPEC.tasks[1].text, blocks=[Paragraph(text="Схема составлена.")])],
@@ -175,8 +183,8 @@ def test_report_level_findings_do_not_spin_repair_rounds():
 
 
 def test_markdown_rule_ignores_python_dunder_names():
-    from forlabs.report.standard import check_standard
     from forlabs.core.models import ReportDoc, TaskSection
+    from forlabs.report.standard import check_standard
 
     doc = ReportDoc(lab_number="8", header={}, conclusion="x", sections=[TaskSection(
         n=1, title=SPEC.tasks[0].text, blocks=[Paragraph(text="Конструктор __init__ заполняет поля name и age.")])])

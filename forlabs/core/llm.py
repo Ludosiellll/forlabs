@@ -36,6 +36,17 @@ _ACCESS = {
 }
 
 
+RATE_LIMIT_MESSAGE = "Сервер модели просит подождать: слишком много запросов подряд. Подожди минуту и нажми ещё раз."
+MAX_RETRY_AFTER = 60.0
+
+
+def _retry_after(value: str | None) -> float | None:
+    try:
+        return max(0.0, float(value)) if value else None
+    except ValueError:  # дата вместо секунд — обычная пауза
+        return None
+
+
 def _minsk_date(iso: str) -> str:
     """Дата окончания подписки так же, как в шапке приложения: по Минску (UTC+3)."""
     from datetime import datetime, timedelta, timezone
@@ -50,10 +61,12 @@ def _minsk_date(iso: str) -> str:
 
 
 class LLMError(Exception):
-    def __init__(self, kind: Kind, detail: str = "", message_ru: str | None = None, retryable: bool = False):
+    def __init__(self, kind: Kind, detail: str = "", message_ru: str | None = None, retryable: bool = False,
+                 retry_after: float | None = None):
         self.kind = kind
         self.detail = detail
         self.retryable = retryable  # временный сбой: сеть, перегрузка сервера, частые запросы
+        self.retry_after = retry_after  # сколько секунд просит подождать сервер (заголовок Retry-After)
         self.message_ru = message_ru or _MESSAGES[kind]
         super().__init__(f"{self.message_ru} ({detail})" if detail else self.message_ru)
 
@@ -129,7 +142,7 @@ class LLM:
             except LLMError as e:
                 if not e.retryable or attempt == len(self.retry_delays):
                     raise
-                time.sleep(self.retry_delays[attempt])
+                time.sleep(max(self.retry_delays[attempt], min(e.retry_after or 0, MAX_RETRY_AFTER)))
         raise AssertionError("недостижимо")
 
     def _post_once(self, payload: dict) -> dict:
@@ -165,8 +178,10 @@ class LLM:
             if r.status_code == 403:
                 raise LLMError("model" if "model" in low else "auth", detail)
             if r.status_code in (402, 429) or "balance" in low or "quota" in low:
-                rate_limited = r.status_code == 429 and not ("balance" in low or "quota" in low)
-                raise LLMError("quota", detail, retryable=rate_limited)
+                if r.status_code == 429 and not ("balance" in low or "quota" in low):  # просто часто — не баланс
+                    raise LLMError("quota", detail, RATE_LIMIT_MESSAGE, retryable=True,
+                                   retry_after=_retry_after(r.headers.get("retry-after")))
+                raise LLMError("quota", detail)
             if r.status_code >= 500:
                 raise LLMError("network", f"сервер ответил {r.status_code}: {detail}", retryable=True)
             raise LLMError("bad_response", f"{r.status_code}: {detail}")

@@ -11,6 +11,7 @@ from datetime import date as _date
 from pathlib import Path
 from typing import Callable
 
+from forlabs.core.fs import atomic_write_bytes, os_error_text
 from forlabs.core.models import (
     ChatMessage,
     Figure,
@@ -40,6 +41,8 @@ from forlabs.render.conformance import compare
 from forlabs.render.docx_builder import build_lab, build_semester
 from forlabs.render.finalize import finalize, has_slots
 from forlabs.spec.extract import extract_spec, verify_verbatim
+
+JOURNAL_MAX = 256_000  # байт журнала на одну лабу
 
 
 class PipelineError(Exception):
@@ -90,8 +93,12 @@ class Pipeline:
         try:
             d = self.lab_dir(st)
             d.mkdir(parents=True, exist_ok=True)
-            with open(d / "journal.log", "a", encoding="utf-8") as f:
-                f.write(f"{kind}\t{text}\n")
+            f = d / "journal.log"
+            with open(f, "a", encoding="utf-8") as fh:
+                fh.write(f"{kind}\t{text}\n")
+            if f.stat().st_size > JOURNAL_MAX:  # хранится только свежая половина
+                tail = f.read_bytes()[-(JOURNAL_MAX // 2):]
+                atomic_write_bytes(f, tail[tail.find(b"\n") + 1:])
         except OSError:
             pass
 
@@ -187,7 +194,8 @@ class Pipeline:
 
     def _fail(self, st: LabState, e: Exception) -> LabState:
         st.status = "failed"
-        st.error = getattr(e, "message_ru", None) or str(e) or type(e).__name__
+        st.error = (getattr(e, "message_ru", None) or (os_error_text(e) if isinstance(e, OSError) else None)
+                    or str(e) or type(e).__name__)
         self._emit(st, st.error, "error")
         logging.getLogger("forlabs").warning("Лаба %s: %s", self.key(st), st.error, exc_info=e)
         try:

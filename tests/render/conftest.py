@@ -2,7 +2,17 @@ import pytest
 from PIL import Image
 
 from forlabs.core.models import (
-    QA, DashList, Enrollment, Figure, Listing, NumberedList, Paragraph, Profile, ReportDoc, Table, TaskSection,
+    QA,
+    DashList,
+    Enrollment,
+    Figure,
+    Listing,
+    NumberedList,
+    Paragraph,
+    Profile,
+    ReportDoc,
+    Table,
+    TaskSection,
 )
 
 

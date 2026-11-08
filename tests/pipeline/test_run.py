@@ -135,9 +135,10 @@ def test_renumber_collision_never_deletes_existing(tmp_home, tmp_path):
 
 def test_create_lab_with_existing_number_refuses(tmp_home, tmp_path):
     import pytest
+
     from forlabs.pipeline.run import PipelineError
     pipe, fake = setup(tmp_home, tmp_path, [RAW])
-    st = pipe.parse(pipe.create_lab("ivanov", "psip", [(FIXTURE.name, FIXTURE.read_bytes())], number="7"),
+    pipe.parse(pipe.create_lab("ivanov", "psip", [(FIXTURE.name, FIXTURE.read_bytes())], number="7"),
                     date="24.09.2026")
     with pytest.raises(PipelineError):
         pipe.create_lab("ivanov", "psip", [("x.txt", b"other")], number="7")

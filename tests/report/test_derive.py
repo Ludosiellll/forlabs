@@ -1,4 +1,13 @@
-from forlabs.core.models import Figure, LabSpec, Listing, Paragraph, ReportDoc, Table, TaskSection, Task
+from forlabs.core.models import (
+    Figure,
+    LabSpec,
+    Listing,
+    Paragraph,
+    ReportDoc,
+    Table,
+    Task,
+    TaskSection,
+)
 from forlabs.report.derive import (
     build_header,
     caption,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import os
 import random
 import re
 from datetime import datetime
@@ -288,8 +289,13 @@ def _save(document, out: Path, author: str) -> Path:
     _set_properties(document, author)
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    document.save(str(out))
-    _set_total_time(out)
+    tmp = out.with_name(f".{out.stem}.{os.getpid()}.tmp.docx")
+    try:  # выключение посреди записи не должно испортить прежний отчёт
+        document.save(str(tmp))
+        _set_total_time(tmp)
+        os.replace(tmp, out)
+    finally:
+        tmp.unlink(missing_ok=True)
     return out
 
 

@@ -7,8 +7,6 @@ import threading
 import time
 from pathlib import Path
 
-import uvicorn
-
 ROOT = Path(__file__).parents[2]
 
 

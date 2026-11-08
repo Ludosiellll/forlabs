@@ -125,11 +125,19 @@ def _docx(path: Path) -> SourceText:
     return SourceText(normalize("\n".join(lines)))
 
 
+OCR_TIMEOUT = 180  # секунд на одну картинку
+
+
 def _image(path: Path, tesseract: str | None) -> SourceText:
     exe = tesseract or shutil.which("tesseract")
     if not exe:
         return SourceText("", warnings=["Для распознавания картинок нужен Tesseract (rus). Установи его или вставь текст."])
-    res = subprocess.run([exe, str(path), "-", "-l", "rus+eng"], capture_output=True, text=True, encoding="utf-8")
+    try:
+        res = subprocess.run([exe, str(path), "-", "-l", "rus+eng"], capture_output=True, text=True, encoding="utf-8",
+                             timeout=OCR_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return SourceText("", warnings=["Tesseract читал картинку слишком долго и был остановлен — вставь текст "
+                                        "вручную или загрузи PDF."])
     if res.returncode != 0:
         return SourceText("", warnings=[f"Tesseract не смог прочитать картинку: {res.stderr.strip()[:200]}"])
     return SourceText(normalize(res.stdout), warnings=["Текст распознан с картинки — проверь его на экране подтверждения."])

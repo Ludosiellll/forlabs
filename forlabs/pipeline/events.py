@@ -38,11 +38,11 @@ class EventBus:
             return [e for e in self._events.get(key, []) if e.seq > after]
 
     def wait(self, key: str, after: int, timeout: float = 15.0) -> list[Event]:
-        deadline = time.time() + timeout
+        deadline = time.monotonic() + timeout  # не зависит от перевода часов и сна ноутбука
         with self._cond:
             while True:
                 evs = [e for e in self._events.get(key, []) if e.seq > after]
-                left = deadline - time.time()
+                left = deadline - time.monotonic()
                 if evs or left <= 0:
                     return evs
                 self._cond.wait(left)

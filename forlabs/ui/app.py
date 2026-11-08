@@ -24,6 +24,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from forlabs.cloud.auth import CloudError
+from forlabs.core.fs import os_error_text
 from forlabs.core.llm import LLMError
 from forlabs.core.models import (
     Enrollment,
@@ -65,6 +66,9 @@ STATUS_RU = {"draft": "Черновик", "parsed": "Проверь разбор
              "final": "Сдана", "failed": "Ошибка"}
 STEPS = [("parse", "Разбор методички"), ("write", "Текст отчёта"), ("check", "Проверка"), ("render", "Вёрстка"),
          ("finalize", "Доводка и предпросмотр")]
+
+
+BUSY_MESSAGE = "Сейчас идёт работа над лабой — дождись её окончания, потом меняй настройки или выходи."
 
 
 def _q(s: str) -> str:
@@ -147,9 +151,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         import logging
 
         logging.getLogger("forlabs").error("Ошибка на %s %s", request.method, request.url.path, exc_info=exc)
-        text = str(exc) or type(exc).__name__
-        if isinstance(exc, OSError) and getattr(exc, "errno", None) == 28:
-            text = "Диск заполнен — освободи место и попробуй ещё раз."
+        text = os_error_text(exc) if isinstance(exc, OSError) else (str(exc) or type(exc).__name__)
         response = render(request, "error.html", message="Что-то пошло не так. Подробности записаны в журнал "
                                                          "forlabs.log в папке данных.", detail=text[:300])
         response.status_code = 500
@@ -186,6 +188,8 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
 
     @app.post("/logout")
     def logout():
+        if ctx.running:
+            return redirect("/", err=BUSY_MESSAGE)
         ctx.auth.sign_out()
         ctx.reset()
         return redirect("/login")
@@ -698,6 +702,8 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
 
     @app.post("/settings")
     async def settings_save(request: Request):
+        if ctx.running:  # смена режима или модели посреди работы над лабой
+            return redirect("/settings", err=BUSY_MESSAGE)
         f = await request.form()
         data = ctx.settings.model_dump()
         for key in ("mode", "base_url", "model", "soffice_path", "tesseract_path", "browser_channel"):

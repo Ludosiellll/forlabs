@@ -177,7 +177,7 @@ class CloudAuth:
     def sign_out(self) -> None:
         if self.session:
             try:
-                self.http.post(f"{self.config.url}/auth/v1/logout",
+                self.http.post(f"{self.config.url}/auth/v1/logout", params={"scope": "local"},  # другие компьютеры не трогаем
                                headers={**self._headers(), "Authorization": f"Bearer {self.session.access_token}"})
             except httpx.TransportError:
                 pass

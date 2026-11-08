@@ -1,14 +1,26 @@
 """Движок чата правок: план, точечная переделка задания, ответы на вопросы."""
 
 import pytest
-
 from test_write import PROFILE, SPEC
 
 from forlabs.core.llm import FakeLLM
-from forlabs.core.models import QA, Figure, LabState, Listing, Paragraph, ReportDoc, TaskSection
+from forlabs.core.models import (
+    QA,
+    Figure,
+    LabState,
+    Listing,
+    Paragraph,
+    ReportDoc,
+    TaskSection,
+)
 from forlabs.core.rules import RuleBook
 from forlabs.core.subjects import SUBJECTS
-from forlabs.pipeline.chat import QuestionEdit, plan_edit, revise_answers, revise_section
+from forlabs.pipeline.chat import (
+    QuestionEdit,
+    plan_edit,
+    revise_answers,
+    revise_section,
+)
 
 SSP = SUBJECTS["ssp"]
 
