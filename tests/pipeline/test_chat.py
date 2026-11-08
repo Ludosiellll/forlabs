@@ -92,3 +92,20 @@ def test_revise_answers_only_listed():
     fake = FakeLLM([{"answers": [{"n": 2, "answer": "Многократное выполнение блока кода."}, {"n": 7, "answer": "?"}]}])
     out = revise_answers(SPEC, qas, [QuestionEdit(n=2, instruction="подробнее")], PROFILE, SSP, fake, RuleBook())
     assert out[0].answer == "Блок кода." and out[1].answer == "Многократное выполнение блока кода."
+
+
+def test_methodology_text_only_when_variant_is_mentioned():
+    st = state()
+    st.spec = st.spec.model_copy(update={"source_text": "ПРИЛОЖЕНИЕ А. Вариант 7: страница о Гомеле"})
+    fake = FakeLLM([{"kind": "answer", "reply": "Так проще."}, {"kind": "answer", "reply": "Ок."}])
+    plan_edit(st, "почему тут for?", PROFILE, SSP, fake, RuleBook(), teacher="")
+    assert "ПРИЛОЖЕНИЕ А" not in fake.calls[0][-1]["content"]
+    plan_edit(st, "поменяй вариант на 7", PROFILE, SSP, fake, RuleBook(), teacher="")
+    assert "ПРИЛОЖЕНИЕ А" in fake.calls[1][-1]["content"]
+
+
+def test_prompts_ask_for_honest_reply_and_careful_retake():
+    from forlabs.pipeline.prompts import CHAT_PLAN_SYSTEM, CHAT_REVISE_SYSTEM
+
+    assert "только то, что перечислено" in CHAT_PLAN_SYSTEM
+    assert "только вывод программы" in CHAT_REVISE_SYSTEM

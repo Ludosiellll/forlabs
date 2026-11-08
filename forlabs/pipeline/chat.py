@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from pathlib import Path
 from typing import Literal
@@ -17,6 +18,7 @@ from forlabs.pipeline.prompts import CHAT_ANSWERS_SYSTEM, CHAT_PLAN_SYSTEM, CHAT
 from forlabs.pipeline.write import SectionDraft, _gender_ru, draft_to_blocks
 
 SOURCE_LIMIT = 30_000
+_NEEDS_SOURCE = re.compile(r"вариант|приложени|методичк|по заданию|из задания|дословно", re.IGNORECASE)
 HISTORY = 6
 
 
@@ -93,7 +95,8 @@ def plan_edit(st: LabState, message: str, profile: Profile, subject: Subject, ll
     spec, report = st.spec, st.report
     qa = "\n".join(f"{q.n}. {q.question}\n   Ответ: {q.answer}" for q in report.questions) or "нет"
     history = "\n".join(f"{'Студент' if m.role == 'user' else 'Помощник'}: {m.text}" for m in st.chat[-HISTORY:])
-    source = (spec.source_text or "")[:SOURCE_LIMIT]
+    # методичка нужна, только когда речь о варианте или заданиях из неё — иначе это лишние тысячи токенов
+    source = (spec.source_text or "")[:SOURCE_LIMIT] if _NEEDS_SOURCE.search(message) else "не нужен для этого сообщения"
     user = (f"Предмет: {subject.name}. Пол студента: {_gender_ru(profile.gender)}.\n"
             f"Тема: {spec.topic}\nЦель: {spec.goal}\n"
             f"Вариант по журналу: {spec.variant or '—'}. Номер рабочего места: {spec.workplace or '—'}.\n"
