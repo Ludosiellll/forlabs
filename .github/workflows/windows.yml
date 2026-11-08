@@ -12,7 +12,7 @@ permissions:
 
 concurrency:
   group: windows-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false  # сборка долгая: новый прогон ждёт текущий, а не обрывает его
 
 env:
   PYTHONUTF8: "1"
