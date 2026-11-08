@@ -11,20 +11,15 @@
     <p class="muted">Напиши, что случилось или что нужно: продлить доступ, не получается лаба, вопрос по оформлению.
       Администратор ответит здесь.</p>
     {% if load_error %}<div class="flash err" role="alert">{{ load_error }}</div>{% endif %}
-    <section class="chat support" aria-label="Переписка с поддержкой">
-      {% if messages %}
-      <div class="chat-log" data-chat-log>
-        {% for m in messages %}
-          <div class="msg {{ 'msg-assistant' if m.from_admin else 'msg-user' }}">
-            <div class="who-said">{{ 'Поддержка' if m.from_admin else 'Ты' }} · {{ m.created_at[:16].replace('T', ' ') }}</div>
-            <div class="txt">{{ m.text }}</div>
-          </div>
-        {% endfor %}
-      </div>
-      {% endif %}
-      <form method="post" action="/support" class="chat-form">
+    <section class="chat support" aria-label="Переписка с поддержкой" data-support-refresh="/support/log">
+      {% include "_support_log.html" %}
+      <form method="post" action="/support" class="chat-form" data-chat-form enctype="multipart/form-data">
         <label class="visually-hidden" for="support-text">Сообщение</label>
-        <textarea id="support-text" name="text" rows="4" maxlength="4000" placeholder="Сообщение администратору…" required></textarea>
+        <textarea id="support-text" name="text" rows="4" maxlength="4000" placeholder="Сообщение администратору… Снимок экрана можно вставить через Ctrl+V" data-paste-images="support-images"></textarea>
+        <div class="row attach-row">
+          <label class="btn link small">Прикрепить фото<input id="support-images" class="visually-hidden" type="file" name="images" accept="image/png,image/jpeg,image/webp" multiple data-images-input></label>
+          <span class="small muted" data-images-picked="support-images"></span>
+        </div>
         <div class="row"><button class="btn primary small" type="submit">Отправить</button><span class="hint">Ctrl+Enter</span></div>
       </form>
     </section>

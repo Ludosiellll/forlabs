@@ -3,15 +3,26 @@
 export type Action =
   | { kind: "ignore" }
   | { kind: "bind"; code: string; chatId: number }
-  | { kind: "reply"; replyTo: number; text: string }
+  | { kind: "reply"; replyTo: number; text: string; photo: string | null }
   | { kind: "hint"; chatId: number };
 
 type TgMessage = {
   message_id?: number;
   chat?: { id?: number };
   text?: string;
+  caption?: string;
+  photo?: { file_id?: string; file_size?: number; width?: number; height?: number }[];
   reply_to_message?: { message_id?: number };
 };
+
+/** Самый крупный вариант фото из сообщения Telegram. */
+function largestPhoto(m: TgMessage): string | null {
+  const sizes = (m.photo ?? []).filter((p) => typeof p?.file_id === "string");
+  if (!sizes.length) return null;
+  const area = (p: { file_size?: number; width?: number; height?: number }) =>
+    p.file_size ?? (p.width ?? 0) * (p.height ?? 0);
+  return sizes.reduce((a, b) => (area(b) >= area(a) ? b : a)).file_id as string;
+}
 
 /** Что делать с обновлением Telegram: привязать владельца по коду, передать его ответ студенту, подсказать. */
 export function telegramAction(update: { message?: TgMessage } & Record<string, unknown>, ownerChatId: number | null): Action {
@@ -23,7 +34,12 @@ export function telegramAction(update: { message?: TgMessage } & Record<string, 
   if (start) return { kind: "bind", code: start[1], chatId };
   if (chatId !== ownerChatId) return { kind: "ignore" };
   const replyTo = m.reply_to_message?.message_id;
-  if (text && typeof replyTo === "number") return { kind: "reply", replyTo, text: text.slice(0, 4000) };
+  const photo = largestPhoto(m);
+  const body = (text || (typeof m.caption === "string" ? m.caption.trim() : "")).slice(0, 4000);
+  if ((body || photo) && typeof replyTo === "number") {
+    if (photo) return { kind: "reply", replyTo, text: body, photo };
+    return { kind: "reply", replyTo, text: body, photo: null };
+  }
   return { kind: "hint", chatId };
 }
 

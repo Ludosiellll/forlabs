@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import io
+import re
+import uuid
+from urllib.parse import quote
+
 import httpx
 from pydantic import BaseModel
 
@@ -23,11 +28,45 @@ def _not_ready(e: CloudError) -> bool:
     return not e.offline and ("support_messages" in d or "42p01" in d or "404" in e.message_ru or "not found" in d)
 
 
+MAX_IMAGES = 4
+MAX_IMAGE_BYTES = 15_000_000
+BUCKET = "support"
+_PATH = re.compile(r"^[0-9a-fA-F-]{36}/[A-Za-z0-9._-]{1,80}$")
+
+
+def to_jpeg(data: bytes) -> bytes:
+    """Снимок экрана или фото → JPEG не больше 2560 px (Telegram принимает как фото, места меньше)."""
+    from PIL import Image, ImageOps, UnidentifiedImageError
+
+    try:
+        img = Image.open(io.BytesIO(data))
+        img.load()
+    except (UnidentifiedImageError, OSError, ValueError) as e:
+        raise ValueError("Это не картинка — прикрепи снимок экрана или фото (PNG, JPEG)") from e
+    img = ImageOps.exif_transpose(img)
+    if img.mode in ("RGBA", "LA", "P"):
+        img = img.convert("RGBA")
+        bg = Image.new("RGB", img.size, (255, 255, 255))
+        bg.paste(img, mask=img.split()[-1])
+        img = bg
+    elif img.mode != "RGB":
+        img = img.convert("RGB")
+    img.thumbnail((2560, 2560))
+    out = io.BytesIO()
+    img.save(out, format="JPEG", quality=85, optimize=True)
+    return out.getvalue()
+
+
+def valid_path(path: str) -> bool:
+    return bool(_PATH.match(path or "")) and ".." not in path
+
+
 class SupportMessage(BaseModel):
     id: int
     user_id: str
     from_admin: bool = False
-    text: str
+    text: str = ""
+    images: list[str] = []
     created_at: str = ""
     read_at: str | None = None
 
@@ -64,9 +103,36 @@ class Support:
             raise
         return [SupportMessage.model_validate(r) for r in rows]
 
-    def send(self, text: str) -> bool:
-        """Отправить администратору; True — ушло и в Telegram."""
-        r = self._fn("send", {"text": text})
+    def _upload(self, owner_uid: str, images: list[bytes], prefix: str) -> list[str]:
+        if len(images) > MAX_IMAGES:
+            raise ValueError(f"Можно прикрепить не больше {MAX_IMAGES} фото")
+        paths = []
+        for data in images:
+            if len(data) > MAX_IMAGE_BYTES:
+                raise ValueError("Фото слишком большое — больше 15 МБ")
+            jpeg = to_jpeg(data)
+            path = f"{owner_uid}/{prefix}{uuid.uuid4().hex[:12]}.jpg"
+            r = self.s._storage("POST", f"object/{BUCKET}/{quote(path)}", content=jpeg,
+                                headers={"Content-Type": "image/jpeg", "x-upsert": "false"})
+            if r.status_code == 404 or (r.status_code == 400 and "bucket" in r.text.lower()):
+                raise CloudError(NOT_READY, r.text[:200])
+            self.s._check(r)
+            paths.append(path)
+        return paths
+
+    def image(self, path: str) -> bytes | None:
+        if not valid_path(path):
+            return None
+        r = self.s._storage("GET", f"object/{BUCKET}/{quote(path)}")
+        if r.status_code in (400, 404):
+            return None
+        self.s._check(r)
+        return r.content
+
+    def send(self, text: str, images: list[bytes] | None = None) -> bool:
+        """Отправить администратору (с фото — сначала в хранилище); True — ушло и в Telegram."""
+        paths = self._upload(self.s.auth.user_id, images or [], "") if images else []
+        r = self._fn("send", {"text": text, "images": paths})
         if r.status_code == 429:
             raise CloudError(RATE_LIMIT_MESSAGE, r.text[:200])
         self.s._check(r)
@@ -103,8 +169,10 @@ class Support:
                 t.unread += 1
         return sorted(out.values(), key=lambda t: t.last.created_at, reverse=True)
 
-    def reply(self, uid: str, text: str) -> None:
-        self.s._rest("POST", "support_messages", json={"user_id": uid, "from_admin": True, "text": text},
+    def reply(self, uid: str, text: str, images: list[bytes] | None = None) -> None:
+        paths = self._upload(uid, images or [], "admin-") if images else []
+        self.s._rest("POST", "support_messages", json={"user_id": uid, "from_admin": True, "text": text,
+                                                       "images": paths},
                      prefer="return=minimal", retries=False)  # повтор вставки после обрыва задвоил бы ответ
 
     def admin_mark_read(self, uid: str) -> None:

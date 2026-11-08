@@ -55,6 +55,11 @@ class FakeSupabase:
         self.support_bound = False  # владелец привязал Telegram
         self.support_secrets = True  # секреты бота заданы в Supabase
         self.no_support = False  # сервер без миграции 0006 и функции support
+        self.support_objects = {}  # бакет support: путь → байты
+
+    def _is_admin(self) -> bool:
+        me = self.tables["members"][0]
+        return me.get("role") == "admin" and bool(me.get("approved"))
 
     def session(self, expires_in=3600):
         return {"access_token": f"tok{len(self.requests)}", "refresh_token": "ref", "expires_in": expires_in,
@@ -125,13 +130,17 @@ class FakeSupabase:
         if self.no_support and ("support" in path):
             return httpx.Response(404, json={"code": "42P01", "message": 'relation "public.support_messages" does not exist'})
         if path == "/functions/v1/support/send":
-            text = (json.loads(req.content or b"{}").get("text") or "").strip()
-            if not text:
+            body = json.loads(req.content or b"{}")
+            text = (body.get("text") or "").strip()
+            images = body.get("images") or []
+            if any(not str(p).startswith(UID + "/") or p not in self.support_objects for p in images):
+                return httpx.Response(400, json={"error": {"message": "bad image"}})
+            if not text and not images:
                 return httpx.Response(400, json={"error": {"message": "empty message"}})
             rows = self.tables.setdefault("support_messages", [])
             if sum(1 for r in rows if r["user_id"] == UID and not r["from_admin"]) >= 20:
                 return httpx.Response(429, json={"error": {"message": "support rate limit"}})
-            rows.append({"id": len(rows) + 1, "user_id": UID, "from_admin": False, "text": text[:4000],
+            rows.append({"id": len(rows) + 1, "user_id": UID, "from_admin": False, "text": text[:4000], "images": images,
                          "created_at": f"2026-11-08T12:{len(rows):02d}:00+00:00", "read_at": None})
             return httpx.Response(200, json={"ok": True, "id": len(rows), "telegram": self.support_bound})
         if path == "/functions/v1/support/setup":
@@ -188,6 +197,15 @@ class FakeSupabase:
             for key in json.loads(req.content)["prefixes"]:
                 self.objects.pop(key, None)
             return httpx.Response(200, json=[])
+        if path.startswith("/storage/v1/object/support/"):
+            key = path[len("/storage/v1/object/support/"):]
+            if req.method == "POST":
+                self.support_objects[key] = req.content
+                return httpx.Response(200, json={"Key": key})
+            if req.method == "GET":
+                ok = key in self.support_objects and (key.startswith(UID + "/") or self._is_admin())
+                return httpx.Response(200, content=self.support_objects[key]) if ok else httpx.Response(400, json={
+                    "statusCode": "404", "error": "not_found", "message": "Object not found"})
         if path.startswith("/storage/v1/object/labs/"):
             key = path[len("/storage/v1/object/labs/"):]
             if req.method == "POST":

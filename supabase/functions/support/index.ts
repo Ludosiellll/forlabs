@@ -34,6 +34,43 @@ async function tg(method: string, body: unknown): Promise<Record<string, unknown
   }
 }
 
+async function sendPhoto(chatId: number, blob: Blob, replyTo: number | null): Promise<number | null> {
+  if (!BOT) return null;
+  const form = new FormData();
+  form.append("chat_id", String(chatId));
+  if (replyTo !== null) form.append("reply_to_message_id", String(replyTo));
+  form.append("photo", blob, "photo.jpg");
+  try {
+    const r = await fetch(`https://api.telegram.org/bot${BOT}/sendPhoto`, { method: "POST", body: form,
+      signal: AbortSignal.timeout(30_000) });
+    const j = await r.json().catch(() => null) as { result?: { message_id?: number } } | null;
+    return typeof j?.result?.message_id === "number" ? j.result.message_id : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Фото владельца из Telegram → бакет support в папку студента; путь для сообщения. */
+async function savePhoto(fileId: string, userId: string, tgMessageId: number): Promise<string | null> {
+  const f = await tg("getFile", { file_id: fileId });
+  const filePath = (f?.result as { file_path?: string } | undefined)?.file_path;
+  if (!filePath) return null;
+  try {
+    const r = await fetch(`https://api.telegram.org/file/bot${BOT}/${filePath}`, { signal: AbortSignal.timeout(30_000) });
+    if (!r.ok) return null;
+    const path = `${userId}/tg-${tgMessageId}.jpg`;
+    const { error } = await admin.storage.from("support").upload(path, await r.blob(),
+      { contentType: "image/jpeg", upsert: true });
+    return error ? null : path;
+  } catch {
+    return null;
+  }
+}
+
+async function remember(chatId: number, messageId: number, userId: string) {
+  await admin.from("support_tg").upsert({ tg_chat_id: chatId, tg_message_id: messageId, user_id: userId });
+}
+
 async function config(): Promise<Config> {
   const { data } = await admin.rpc("support_config_get");
   return ((data ?? [])[0] ?? { owner_chat_id: null, bot_username: null, bind_code: null, bind_expires: null }) as Config;
@@ -52,27 +89,40 @@ async function signedIn(req: Request) {
 async function send(req: Request): Promise<Response> {
   const who = await signedIn(req);
   if (!who) return err(401, "not signed in");
-  const body = await req.json().catch(() => ({})) as { text?: unknown };
-  const text = cleanText(body.text);
-  if (!text) return err(400, "empty message");
+  const body = await req.json().catch(() => ({})) as { text?: unknown; images?: unknown };
+  const text = cleanText(body.text) ?? "";
+  const images = Array.isArray(body.images) ? body.images.filter((p): p is string => typeof p === "string") : [];
+  if (images.length > 4 || images.some((p) => !p.startsWith(`${who.user.id}/`) || p.includes(".."))) {
+    return err(400, "bad image");
+  }
+  if (!text && !images.length) return err(400, "empty message");
   const since = new Date(Date.now() - 3600_000).toISOString();
   const { count } = await admin.from("support_messages").select("id", { count: "exact", head: true })
     .eq("user_id", who.user.id).eq("from_admin", false).gte("created_at", since);
   if ((count ?? 0) >= PER_HOUR) return err(429, "support rate limit");
   const { data: row, error } = await admin.from("support_messages")
-    .insert({ user_id: who.user.id, from_admin: false, text }).select("id").single();
+    .insert({ user_id: who.user.id, from_admin: false, text, images }).select("id").single();
   if (error) return err(500, `insert: ${error.message}`);
   const cfg = await config();
   let delivered = false;
   if (cfg.owner_chat_id) {
     const m = who.member as { email: string; display_name: string; approved: boolean; trial_labs: number | null };
     const status = !m.approved ? "ждёт одобрения" : m.trial_labs !== null ? "пробный доступ" : "";
-    const r = await tg("sendMessage", { chat_id: cfg.owner_chat_id, text: forOwner(m.display_name || m.email, m.email, text, status) });
+    const shown = text || (images.length ? `(фото: ${images.length})` : "");
+    const st = images.length && text ? `${status ? status + " · " : ""}фото: ${images.length}` : status;
+    const r = await tg("sendMessage", { chat_id: cfg.owner_chat_id, text: forOwner(m.display_name || m.email, m.email, shown, st) });
     const mid = (r?.result as { message_id?: number } | undefined)?.message_id;
     if (typeof mid === "number") {
       const { error: upErr } = await admin.from("support_messages")
         .update({ tg_message_id: mid, tg_chat_id: cfg.owner_chat_id }).eq("id", row.id);
+      await remember(cfg.owner_chat_id, mid, who.user.id);
       delivered = !upErr;  // без связи с сообщением ответ реплаем не найдёт студента — честно говорим «не ушло»
+      for (const path of images) {  // фото — ответом на текст: реплай на любое из них тоже дойдёт студенту
+        const { data: blob } = await admin.storage.from("support").download(path);
+        if (!blob) continue;
+        const pid = await sendPhoto(cfg.owner_chat_id, blob, mid);
+        if (pid !== null) await remember(cfg.owner_chat_id, pid, who.user.id);
+      }
     }
   }
   return json(200, { ok: true, id: row.id, telegram: delivered });
@@ -108,10 +158,21 @@ async function telegram(req: Request): Promise<Response> {
       await tg("sendMessage", { chat_id: action.chatId, text: "Готово: сюда будут приходить сообщения поддержки ForLabs. Отвечай на них реплаем." });
     }
   } else if (action.kind === "reply") {
-    const { data: orig } = await admin.from("support_messages").select("user_id")
+    const { data: mapped } = await admin.from("support_tg").select("user_id")
       .eq("tg_chat_id", cfg.owner_chat_id).eq("tg_message_id", action.replyTo).maybeSingle();
+    const { data: legacy } = mapped ? { data: null } : await admin.from("support_messages").select("user_id")
+      .eq("tg_chat_id", cfg.owner_chat_id).eq("tg_message_id", action.replyTo).maybeSingle();
+    const orig = mapped ?? legacy;
     if (orig) {
-      await admin.from("support_messages").insert({ user_id: orig.user_id, from_admin: true, text: action.text });
+      const ownMid = (update as { message: { message_id: number } }).message.message_id;
+      const images: string[] = [];
+      if (action.photo) {
+        const path = await savePhoto(action.photo, orig.user_id, ownMid);
+        if (path) images.push(path);
+        else await tg("sendMessage", { chat_id: cfg.owner_chat_id, text: "Фото не сохранилось — пришли ещё раз." });
+      }
+      if (!action.text && !images.length) return json(200, { ok: true });
+      await admin.from("support_messages").insert({ user_id: orig.user_id, from_admin: true, text: action.text, images });
       await admin.from("support_messages").update({ read_at: new Date().toISOString() })
         .eq("user_id", orig.user_id).eq("from_admin", false).is("read_at", null);
       await tg("setMessageReaction", { chat_id: cfg.owner_chat_id, message_id: (update as { message: { message_id: number } }).message.message_id,

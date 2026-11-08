@@ -196,3 +196,24 @@ window.addEventListener("pageshow", function () {
     b.disabled = false; b.textContent = b.dataset.label; delete b.dataset.label;
   });
 });
+
+// поддержка: пока страница открыта, новые сообщения подгружаются сами (набранный текст не трогается)
+(function () {
+  var box = document.querySelector("[data-support-refresh]");
+  if (!box) return;
+  var url = box.getAttribute("data-support-refresh");
+  function tick() {
+    if (document.visibilityState !== "visible") return;
+    fetch(url, { credentials: "same-origin" }).then(function (r) { return r.ok ? r.text() : null; }).then(function (html) {
+      if (!html) return;
+      var cur = box.querySelector("[data-chat-log]");
+      var tmp = document.createElement("div");
+      tmp.innerHTML = html;
+      var next = tmp.querySelector("[data-chat-log]");
+      if (!cur || !next || cur.getAttribute("data-count") === next.getAttribute("data-count")) return;
+      cur.replaceWith(next);
+      next.scrollTop = next.scrollHeight;
+    }).catch(function () {});
+  }
+  setInterval(tick, 10000);
+})();

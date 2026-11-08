@@ -33,19 +33,16 @@
       <p class="hint">Бот создаётся в @BotFather; его токен и секрет вебхука хранятся в Supabase (Edge Functions → Secrets), не в программе.</p>
     </section>
     {% if thread %}{% set m = members.get(thread) %}
-    <section class="chat support" aria-label="Переписка">
+    <section class="chat support" aria-label="Переписка" data-support-refresh="/admin/support/{{ thread }}/log">
       <h2>{{ m.name if m else thread }}{% if m %} <span class="small muted">{{ m.email }}</span>{% endif %}</h2>
-      <div class="chat-log">
-        {% for msg in messages %}
-          <div class="msg {{ 'msg-assistant' if msg.from_admin else 'msg-user' }}">
-            <div class="who-said">{{ 'Ты' if msg.from_admin else (m.name if m else 'Студент') }} · {{ msg.created_at[:16].replace('T', ' ') }}</div>
-            <div class="txt">{{ msg.text }}</div>
-          </div>
-        {% endfor %}
-      </div>
-      <form method="post" action="/admin/support/{{ thread }}" class="chat-form">
+      {% with admin_view=True, who=m %}{% include "_support_log.html" %}{% endwith %}
+      <form method="post" action="/admin/support/{{ thread }}" class="chat-form" data-chat-form enctype="multipart/form-data">
         <label class="visually-hidden" for="reply">Ответ</label>
-        <textarea id="reply" name="text" rows="3" maxlength="4000" placeholder="Ответ студенту…" required></textarea>
+        <textarea id="reply" name="text" rows="3" maxlength="4000" placeholder="Ответ студенту… Снимок можно вставить через Ctrl+V" data-paste-images="reply-images"></textarea>
+        <div class="row attach-row">
+          <label class="btn link small">Прикрепить фото<input id="reply-images" class="visually-hidden" type="file" name="images" accept="image/png,image/jpeg,image/webp" multiple data-images-input></label>
+          <span class="small muted" data-images-picked="reply-images"></span>
+        </div>
         <div class="row"><button class="btn primary small" type="submit">Ответить</button>
           {% if m %}<a class="btn link small" href="/admin/u/{{ thread }}">Карточка участника</a>{% endif %}</div>
       </form>

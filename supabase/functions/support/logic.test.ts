@@ -13,7 +13,7 @@ test("привязка владельца: /start с кодом", () => {
 
 test("ответ владельца реплаем — студенту", () => {
   assert.deepEqual(telegramAction(msg({ text: "Открою доступ вечером", reply_to_message: { message_id: 42 } }), OWNER),
-    { kind: "reply", replyTo: 42, text: "Открою доступ вечером" });
+    { kind: "reply", replyTo: 42, text: "Открою доступ вечером", photo: null });
 });
 
 test("владелец написал не реплаем — подсказка", () => {
@@ -51,4 +51,16 @@ test("сообщение владельцу укладывается в лими
   const s = forOwner("Анна".repeat(50), "a".repeat(200) + "@example.com", "я".repeat(4000), "пробный доступ");
   assert.ok(s.length <= 4096, String(s.length));
   assert.match(s, /Ответь на это сообщение/);
+});
+
+test("ответ владельца фото с подписью — студенту (самое большое фото)", () => {
+  const photo = [{ file_id: "small", width: 90, height: 60 }, { file_id: "big", width: 1280, height: 853 }];
+  assert.deepEqual(telegramAction(msg({ photo, caption: "вот так", reply_to_message: { message_id: 42 } }), OWNER),
+    { kind: "reply", replyTo: 42, text: "вот так", photo: "big" });
+  assert.deepEqual(telegramAction(msg({ photo, reply_to_message: { message_id: 42 } }), OWNER),
+    { kind: "reply", replyTo: 42, text: "", photo: "big" });
+});
+
+test("фото не реплаем — подсказка", () => {
+  assert.deepEqual(telegramAction(msg({ photo: [{ file_id: "x" }] }), OWNER), { kind: "hint", chatId: OWNER });
 });

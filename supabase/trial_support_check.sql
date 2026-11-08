@@ -160,3 +160,46 @@ begin
   raise exception 'RESULT day_ok=% day_over=% own_limit=% lab_cap=% no_tag_full=% trial_lab4=% member_call=% admin=% reserved=%',
     day_ok, day_over, own_limit, lab_cap, no_tag_full, trial_lab4, member_call, adm, reserved;
 end $$;
+
+-- Фото в поддержке (миграция 0009): студент кладёт файлы только в свою папку и видит только свои,
+-- администратор видит все; сообщение только с фото (без текста) допустимо, пустое — нет.
+-- Ожидаемо: b_own_insert=ok b_foreign_insert=blocked b_sees_own=1 b_sees_foreign=0 a_sees_all=2 photo_only=ok empty=blocked
+do $$
+declare
+  a uuid := '00000000-0000-4000-8000-0000000000a8';
+  b uuid := '00000000-0000-4000-8000-0000000000b8';
+  c uuid := '00000000-0000-4000-8000-0000000000c8';
+  b_own text := 'failed'; b_foreign text := 'ALLOWED'; b_sees_own int; b_sees_foreign int; a_sees int;
+  photo_only text := 'failed'; empty text := 'ALLOWED';
+begin
+  insert into auth.users (id, instance_id, aud, role, email) values
+    (a, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'ph-a@example.invalid'),
+    (b, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'ph-b@example.invalid'),
+    (c, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'ph-c@example.invalid');
+  update public.members set approved = true, role = 'admin' where user_id = a;
+  update public.members set approved = true, role = 'member' where user_id in (b, c);
+  insert into storage.objects (bucket_id, name, owner) values ('support', c::text || '/c1.jpg', c);
+  perform set_config('request.jwt.claims', json_build_object('sub', b, 'role', 'authenticated')::text, true);
+  execute 'set local role authenticated';
+  insert into storage.objects (bucket_id, name, owner) values ('support', b::text || '/b1.jpg', b);
+  b_own := 'ok';
+  begin
+    insert into storage.objects (bucket_id, name, owner) values ('support', c::text || '/evil.jpg', b);
+  exception when others then b_foreign := 'blocked';
+  end;
+  select count(*) into b_sees_own from storage.objects where bucket_id = 'support' and name like b::text || '/%';
+  select count(*) into b_sees_foreign from storage.objects where bucket_id = 'support' and name like c::text || '/%';
+  execute 'reset role';
+  perform set_config('request.jwt.claims', json_build_object('sub', a, 'role', 'authenticated')::text, true);
+  execute 'set local role authenticated';
+  select count(*) into a_sees from storage.objects where bucket_id = 'support' and (name like b::text || '/%' or name like c::text || '/%');
+  insert into public.support_messages (user_id, from_admin, text, images) values (b, true, '', array[b::text || '/b1.jpg']);
+  photo_only := 'ok';
+  begin
+    insert into public.support_messages (user_id, from_admin, text, images) values (b, true, '', '{}');
+  exception when others then empty := 'blocked';
+  end;
+  execute 'reset role';
+  raise exception 'RESULT b_own_insert=% b_foreign_insert=% b_sees_own=% b_sees_foreign=% a_sees_all=% photo_only=% empty=%',
+    b_own, b_foreign, b_sees_own, b_sees_foreign, a_sees, photo_only, empty;
+end $$;
