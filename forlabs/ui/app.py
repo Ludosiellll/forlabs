@@ -128,6 +128,12 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
             m = base["member"]
             if m is not None and m.on_trial and m.approved:
                 base["trial"] = ctx.store.trial_usage(m)
+            try:
+                from forlabs.cloud.support import Support
+
+                base["support_unread"] = Support(ctx.store).unread()
+            except Exception:  # без связи или без таблицы поддержки — без значка
+                base["support_unread"] = 0
         base["show_tour"] = name == "home.html" and not ctx.settings.tour_done
         base.update(kw)
         return tpl.TemplateResponse(request, name, base)
@@ -843,6 +849,9 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         return redirect("/settings", msg=f"Связь есть, модель отвечает: {model}")
 
     register_admin(app, ctx, render, redirect)
+    from forlabs.ui.support_routes import register_support
+
+    register_support(app, ctx, render, redirect)
 
     return app
 

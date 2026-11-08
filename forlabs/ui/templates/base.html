@@ -16,6 +16,7 @@
     <a data-tour="semester" href="/semester" class="{{ 'on' if nav == 'semester' }}">Отчёт за семестр</a>
     <a data-tour="rules" href="/rules" class="{{ 'on' if nav == 'rules' }}">Правила</a>
     <a data-tour="settings" href="/settings" class="{{ 'on' if nav == 'settings' }}">Настройки</a>
+    {% if ctx.cloud and user_email %}<a data-tour="support" href="/support" class="{{ 'on' if nav == 'support' }}">Поддержка{% if support_unread %} <span class="support-badge" title="Новый ответ">{{ support_unread }}</span>{% endif %}</a>{% endif %}
     {% if member and member.role == 'admin' and member.approved %}<a href="/admin" class="{{ 'on' if nav == 'admin' }}">Админ</a>{% endif %}
   </nav>
   {% if ctx.cloud and user_email %}

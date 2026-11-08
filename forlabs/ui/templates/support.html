@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Поддержка{% endblock %}
+{% block body %}
+<main class="page narrow">
+  {% include "_flash.html" %}
+  <h1>Поддержка</h1>
+  {% if not cloud %}
+    <p class="muted">Поддержка работает в облачном режиме (вход по e-mail): сообщение уходит администратору, ответ приходит сюда.
+      Режим меняется в «Настройках».</p>
+  {% else %}
+    <p class="muted">Напиши, что случилось или что нужно: продлить доступ, не получается лаба, вопрос по оформлению.
+      Администратор ответит здесь.</p>
+    {% if load_error %}<div class="flash err" role="alert">{{ load_error }}</div>{% endif %}
+    <section class="chat support" aria-label="Переписка с поддержкой">
+      {% if messages %}
+      <div class="chat-log" data-chat-log>
+        {% for m in messages %}
+          <div class="msg {{ 'msg-assistant' if m.from_admin else 'msg-user' }}">
+            <div class="who-said">{{ 'Поддержка' if m.from_admin else 'Ты' }} · {{ m.created_at[:16].replace('T', ' ') }}</div>
+            <div class="txt">{{ m.text }}</div>
+          </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+      <form method="post" action="/support" class="chat-form">
+        <label class="visually-hidden" for="support-text">Сообщение</label>
+        <textarea id="support-text" name="text" rows="4" maxlength="4000" placeholder="Сообщение администратору…" required></textarea>
+        <div class="row"><button class="btn primary small" type="submit">Отправить</button><span class="hint">Ctrl+Enter</span></div>
+      </form>
+    </section>
+  {% endif %}
+</main>
+{% endblock %}
