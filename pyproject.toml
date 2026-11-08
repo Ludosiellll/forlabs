@@ -36,7 +36,7 @@ include = ["forlabs*"]
 version = {attr = "forlabs.version.__version__"}
 
 [tool.setuptools.package-data]
-forlabs = ["render/assets/*", "executors/assets/*", "ui/templates/*", "ui/static/*", "ui/static/fonts/*", "rules/**/*"]
+forlabs = ["render/assets/*", "executors/assets/*", "ui/templates/*", "ui/static/*", "ui/static/fonts/*", "rules/**/*", "installer/web/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

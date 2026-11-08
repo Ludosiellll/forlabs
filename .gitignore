@@ -21,3 +21,4 @@ build/
 *.dist/
 *.build/
 *.onefile-build/
+payload.zip

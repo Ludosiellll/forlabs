@@ -1,0 +1,394 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Установка ForLabs</title>
+<style>
+/* Вид — Windows 11 (Fluent 2, тёмная тема). Движение — токены Fluent 2 и индикатор WinUI NavigationView. */
+:root{
+  --bg:#202020;--layer:#272727;--stroke:rgba(255,255,255,.0578);--card:rgba(255,255,255,.0512);
+  --card-hover:rgba(255,255,255,.0837);--ctl:rgba(255,255,255,.0605);--ctl-stroke:rgba(255,255,255,.0698);
+  --text:#fff;--text2:rgba(255,255,255,.786);--text3:rgba(255,255,255,.5442);--accent:#60cdff;
+  --ok:#6ccb5f;--err:#ff99a4;--err-bg:#442726;--warn:#fce100;--warn-bg:#433519;
+  --decel-max:cubic-bezier(.1,.9,.2,1);--decel-mid:cubic-bezier(0,0,0,1);--accel-max:cubic-bezier(.9,.1,1,.2);
+  --easy:cubic-bezier(.33,0,.67,1);
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);overflow:hidden;
+  font:14px/20px "Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;user-select:none;-webkit-user-select:none}
+button,input{font:inherit;color:inherit}
+:focus{outline:none}
+:focus-visible{outline:2px solid #fff;outline-offset:1px;box-shadow:0 0 0 3px #000}
+.input:focus-visible{outline:none;box-shadow:none}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:1ms!important;transition-duration:1ms!important}}
+
+.win{height:100%;display:flex;flex-direction:column;border:1px solid #2f2f2f;border-radius:8px;overflow:hidden}
+.title{height:32px;flex-shrink:0;display:flex;align-items:center;padding-left:14px;gap:10px;font-size:12px;color:var(--text2)}
+.title .drag{flex-grow:1;align-self:stretch;display:flex;align-items:center;gap:10px}
+.caption{width:46px;height:32px;display:flex;align-items:center;justify-content:center;border:0;background:transparent;
+  cursor:default;transition:background-color 83ms linear}
+.caption:hover{background:rgba(255,255,255,.0605)}
+.caption.close:hover{background:#c42b1c}
+.caption:disabled{opacity:.36}
+.body{flex-grow:1;display:flex;min-height:0}
+
+.nav{width:196px;flex-shrink:0;padding:8px 8px 12px 6px;display:flex;flex-direction:column}
+.steps{position:relative}
+.pill{position:absolute;left:0;width:3px;border-radius:2px;background:var(--accent);z-index:1;top:10px;height:16px}
+.step{position:relative;display:flex;align-items:center;gap:12px;height:36px;margin-bottom:4px;padding:0 12px;border-radius:4px;
+  color:var(--text3);transition:background-color 83ms linear,color 83ms linear}
+.step.cur{background:var(--ctl);color:var(--text)}
+.step.past{color:var(--text2)}
+.step .n{width:16px;text-align:center;font-size:12px}
+.step.past .n{color:var(--ok)}
+.nav .ver{margin-top:auto;padding:0 12px;font-size:12px;color:var(--text3)}
+
+.main{flex-grow:1;min-width:0;display:flex;flex-direction:column;background:var(--layer);border-top-left-radius:8px;
+  border-top:1px solid var(--stroke);border-left:1px solid var(--stroke)}
+.page{flex-grow:1;padding:28px 32px 0;display:flex;flex-direction:column;gap:14px;min-height:0}
+h1{margin:0;font:600 28px/36px "Segoe UI Variable Display","Segoe UI",system-ui,sans-serif}
+.lead{color:var(--text2);max-width:440px;margin:0}
+.cards{display:flex;flex-direction:column;gap:2px}
+.card{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:48px;padding:0 16px;border-radius:4px;
+  background:var(--card);border:1px solid rgba(0,0,0,.1);text-align:left;width:100%}
+button.card{cursor:default;transition:background-color 83ms linear}
+button.card:hover{background:var(--card-hover)}
+.card .v{color:var(--text2);display:flex;align-items:center;gap:12px}
+.row{min-height:40px}
+.row .note{margin-left:auto;font-size:12px;color:var(--text3);font-variant-numeric:tabular-nums}
+.row .name{color:var(--text3);transition:color 83ms linear}
+.row.on .name{color:var(--text)}
+.ico{width:16px;height:16px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.wait{width:14px;height:14px;border-radius:50%;border:1px solid rgba(255,255,255,.3)}
+
+label.l{color:var(--text2)}
+.field{display:flex;gap:8px}
+.input{flex-grow:1;min-width:0;height:32px;padding:0 10px;border-radius:4px;border:1px solid var(--ctl-stroke);
+  border-bottom-color:rgba(255,255,255,.5442);background:var(--ctl);user-select:text;-webkit-user-select:text}
+.input:focus{background:#1e1e1e;border-bottom:2px solid var(--accent);padding-bottom:1px}
+.input.bad{border-bottom-color:var(--err)}
+.hint{font-size:12px;line-height:16px;color:var(--err);min-height:16px;margin-top:-2px}
+
+.foot{display:flex;justify-content:flex-end;gap:8px;padding:20px 24px;background:var(--bg);border-top:1px solid var(--stroke)}
+.btn{height:32px;min-width:120px;padding:0 12px;border-radius:4px;border:1px solid var(--ctl-stroke);background:var(--ctl);
+  cursor:default;transition:background-color 83ms linear}
+.btn:hover{background:var(--card-hover)}
+.btn:disabled{color:var(--text3);background:rgba(255,255,255,.0419)}
+.btn.primary{background:var(--accent);color:#000;font-weight:600;border-color:rgba(255,255,255,.08)}
+.btn.primary:hover{background:#57bfef}
+.btn.primary:active{background:#4fb2df;color:rgba(0,0,0,.6)}
+.btn.primary:disabled{background:rgba(255,255,255,.1581);color:rgba(255,255,255,.5302)}
+.hidden{display:none!important}
+
+/* Fluent 2 ToggleSwitch: бегунок 200 мс easyEase */
+.sw{position:relative;width:40px;height:20px;border-radius:10px;flex-shrink:0;background:rgba(0,0,0,.1);
+  border:1px solid rgba(255,255,255,.6063);transition:background-color 83ms linear,border-color 83ms linear}
+.sw::after{content:"";position:absolute;top:50%;left:3px;width:12px;height:12px;margin-top:-6px;border-radius:50%;
+  background:var(--text2);transition:transform 200ms var(--easy),background-color 83ms linear}
+.sw.on{background:var(--accent);border-color:var(--accent)}
+.sw.on::after{transform:translateX(20px);background:#000}
+
+/* Fluent 2 presence: Slide+Fade 200 мс decelerateMid; Scale 250 мс decelerateMax (outScale .9) */
+@keyframes fl-enter{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+.e1{animation:fl-enter 200ms var(--decel-mid) both}
+.e2{animation:fl-enter 200ms 60ms var(--decel-mid) both}
+.e3{animation:fl-enter 200ms 120ms var(--decel-mid) both}
+@keyframes fl-scale{from{opacity:0;transform:scale(.9)}to{opacity:1;transform:none}}
+.sc{animation:fl-scale 250ms var(--decel-max) both}
+
+/* Fluent UI Spinner (@fluentui/react-spinner) */
+@keyframes fl-rot{to{transform:rotate(360deg)}}
+@keyframes fl-tail{0%{transform:rotate(-135deg)}50%{transform:rotate(0)}100%{transform:rotate(225deg)}}
+@keyframes fl-tb{0%{transform:rotate(0)}50%{transform:rotate(105deg)}100%{transform:rotate(0)}}
+@keyframes fl-ta{0%{transform:rotate(0)}50%{transform:rotate(225deg)}100%{transform:rotate(0)}}
+.spin{position:relative;flex-shrink:0;width:16px;height:16px;color:var(--accent);background-color:rgba(96,205,255,.22);
+  -webkit-mask-image:radial-gradient(closest-side,transparent calc(100% - 3px),white calc(100% - 2px) calc(100% - 1px),transparent 100%);
+  animation:fl-rot 1.5s linear infinite}
+.spin i{position:absolute;inset:0;-webkit-mask-image:conic-gradient(transparent 105deg,white 105deg);
+  animation:fl-tail 1.5s var(--easy) infinite}
+.spin i::before,.spin i::after{content:"";position:absolute;inset:0;animation:inherit;
+  background-image:conic-gradient(currentcolor 135deg,transparent 135deg)}
+.spin i::before{animation-name:fl-tb}
+.spin i::after{animation-name:fl-ta}
+
+/* Fluent UI ProgressBar */
+.track{position:relative;height:4px;border-radius:2px;background:#3d3d3d;overflow:hidden}
+@keyframes fl-indet{from{transform:translateX(-100%)}to{transform:translateX(300%)}}
+.indet{position:absolute;left:0;top:0;height:100%;width:33%;border-radius:2px;background-color:var(--accent);
+  background-image:linear-gradient(to right,#3d3d3d 0%,transparent 50%,#3d3d3d 100%);animation:fl-indet 3s linear infinite}
+.bar{height:100%;width:0;border-radius:2px;background:var(--accent);transition:width .3s ease}
+.status{display:flex;justify-content:space-between;color:var(--text2)}
+.status b{font-weight:400;font-variant-numeric:tabular-nums}
+
+/* Fluent InfoBar */
+.info{display:flex;gap:12px;align-items:flex-start;padding:12px 16px;border-radius:4px;border:1px solid rgba(0,0,0,.1);
+  background:var(--err-bg);max-width:500px;user-select:text;-webkit-user-select:text}
+.info.warn{background:var(--warn-bg)}
+.info .dot{width:16px;height:16px;border-radius:50%;background:var(--err);color:#000;font:700 11px/16px "Segoe UI";
+  text-align:center;flex-shrink:0;margin-top:2px}
+.info.warn .dot{background:var(--warn)}
+</style>
+</head>
+<body>
+<div class="win">
+  <div class="title">
+    <div class="drag pywebview-drag-region">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#60cdff" stroke-width="2" stroke-linecap="round"
+        stroke-linejoin="round" aria-hidden="true"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M9 13h6M9 17h4"/></svg>
+      <span id="wtitle">Установка ForLabs</span>
+    </div>
+    <button class="caption" id="minBtn" aria-label="Свернуть" tabindex="-1"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 5h10" stroke="#fff"/></svg></button>
+    <button class="caption close" id="closeBtn" aria-label="Закрыть" tabindex="-1"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10" stroke="#fff"/></svg></button>
+  </div>
+  <div class="body">
+    <nav class="nav" aria-label="Шаги установки">
+      <div class="steps" id="steps"><div class="pill" id="pill"></div></div>
+      <div class="ver" id="ver">ForLabs · x64</div>
+    </nav>
+    <div class="main">
+      <main class="page" id="page" aria-live="polite"></main>
+      <div class="foot">
+        <button class="btn" id="backBtn">Назад</button>
+        <button class="btn" id="cancelBtn">Отмена</button>
+        <button class="btn primary" id="nextBtn">Далее</button>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+"use strict";
+const LABELS = ["Начало", "Папка и ярлыки", "Установка", "Готово"];
+const CHECK = '<svg class="sc" width="16" height="16" viewBox="0 0 16 16" role="img" aria-label="Готово"><circle cx="8" cy="8" r="8" fill="#6ccb5f"/><path d="M4.6 8.2l2.2 2.2 4.6-4.8" fill="none" stroke="#000" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const S = {step: 0, d: null, target: "", desktop: true, launch: true, state: "idle", err: "", warnings: [],
+  shown: [], closing: false, timer: null};
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+let api = null;
+
+/* WinUI NavigationView: индикатор 600 мс — растяжение к новому пункту (accelerate), затем сжатие на нём (decelerate) */
+let pillTimer = null;
+function movePill(from, to) {
+  const pill = $("pill"), a = from * 40 + 10, b = to * 40 + 10;
+  clearTimeout(pillTimer);
+  if (a === b) { pill.style.transition = "none"; pill.style.top = b + "px"; pill.style.height = "16px"; return; }
+  pill.style.transition = "top 200ms var(--accel-max),height 200ms var(--accel-max)";
+  pill.style.top = Math.min(a, b) + "px"; pill.style.height = Math.abs(b - a) + 16 + "px";
+  pillTimer = setTimeout(() => {
+    pill.style.transition = "top 400ms var(--decel-max),height 400ms var(--decel-max)";
+    pill.style.top = b + "px"; pill.style.height = "16px";
+  }, 200);
+}
+
+function renderSteps() {
+  const box = $("steps");
+  box.querySelectorAll(".step").forEach((n) => n.remove());
+  LABELS.forEach((label, i) => {
+    const el = document.createElement("div");
+    el.className = "step" + (i === S.step ? " cur" : i < S.step ? " past" : "");
+    if (i === S.step) el.setAttribute("aria-current", "step");
+    el.innerHTML = `<span class="n">${i < S.step ? "✓" : i + 1}</span><span>${label}</span>`;
+    box.appendChild(el);
+  });
+}
+
+function go(step) {
+  const from = S.step;
+  S.step = step;
+  movePill(from, step);
+  renderSteps();
+  renderPage();
+}
+
+const sw = (on) => `<span class="sw${on ? " on" : ""}" aria-hidden="true"></span>`;
+
+function renderPage() {
+  const p = $("page"), d = S.d || {};
+  const update = !!d.installed;
+  if (S.step === 0) {
+    const title = update ? "Обновление ForLabs" : "Установка ForLabs";
+    const lead = update
+      ? `Установлена версия ${esc(d.installed || "—")}, будет установлена ${esc(d.version)}. Лабы, профили и настройки сохранятся.`
+      : "ForLabs разбирает методичку, выполняет задания и собирает отчёт .docx в оформлении колледжа. Лабы и профили хранятся в твоём аккаунте.";
+    p.innerHTML = `<h1 class="e1">${title}</h1><p class="lead e2">${lead}</p>
+      <div class="cards e3" style="margin-top:4px">
+        <div class="card">Место на диске<span class="v">${d.size_mb ? d.size_mb + " МБ" : "—"}</span></div>
+        <div class="card">Права администратора<span class="v">не нужны</span></div>
+      </div>` + (S.d && S.d.error ? `<div class="info e3"><span class="dot">!</span><div>${esc(S.d.error)}</div></div>` : "");
+  } else if (S.step === 1) {
+    p.innerHTML = `<h1 class="e1">Папка и ярлыки</h1>
+      <div class="e2" style="display:flex;flex-direction:column;gap:6px">
+        <label class="l" for="path">Папка установки</label>
+        <div class="field"><input id="path" class="input" spellcheck="false" value="${esc(S.target)}">
+          <button class="btn" id="browse" style="min-width:0">Обзор…</button></div>
+        <div class="hint" id="hint" role="alert"></div>
+      </div>
+      <div class="cards e3">
+        <button class="card" id="tDesk" role="switch" aria-checked="${S.desktop}">Ярлык на рабочем столе
+          <span class="v"><span>${S.desktop ? "Вкл." : "Откл."}</span>${sw(S.desktop)}</span></button>
+        <button class="card" id="tLaunch" role="switch" aria-checked="${S.launch}">Открыть ForLabs после установки
+          <span class="v"><span>${S.launch ? "Вкл." : "Откл."}</span>${sw(S.launch)}</span></button>
+      </div>`;
+    $("path").addEventListener("input", (e) => { S.target = e.target.value; setHint(""); });
+    $("path").addEventListener("keydown", (e) => { if (e.key === "Enter") next(); });
+    $("browse").addEventListener("click", async () => {
+      const r = await api.browse(S.target);
+      if (r) { S.target = r; $("path").value = r; setHint(""); }
+    });
+    const toggle = (id, key) => $(id).addEventListener("click", () => {
+      S[key] = !S[key];
+      const b = $(id);
+      b.setAttribute("aria-checked", S[key]);
+      b.querySelector(".sw").classList.toggle("on", S[key]);
+      b.querySelector(".v span").textContent = S[key] ? "Вкл." : "Откл.";
+    });
+    toggle("tDesk", "desktop"); toggle("tLaunch", "launch");
+  } else if (S.step === 2) {
+    S.shown = (d.components || []).map(() => "");
+    const rows = (d.components || []).map((c, i) => `<div class="card row" id="c${i}"><span class="ico" id="ci${i}"></span>
+      <span class="name">${esc(c.name)}</span><span class="note" id="cn${i}">${esc(c.size || "Ожидание")}</span></div>`).join("");
+    p.innerHTML = `<h1 class="e1">${update ? "Обновление" : "Установка"}</h1>
+      <div class="e2" id="prog" style="display:flex;flex-direction:column;gap:8px">
+        <div class="status"><span id="stText">Подготовка…</span><b id="pct"></b></div>
+        <div class="track" role="progressbar" aria-label="Ход установки" id="track"><div class="indet" id="indet"></div>
+          <div class="bar hidden" id="bar"></div></div>
+      </div>
+      <div class="cards e3" id="rows">${rows}</div>
+      <div class="info hidden" id="errBox"><span class="dot">!</span><div id="errText"></div></div>`;
+    (d.components || []).forEach((_, i) => setRow(i, 0, false));
+  } else {
+    const warn = S.warnings.length
+      ? `<div class="info warn e3"><span class="dot">!</span><div>${S.warnings.map(esc).join("<br>")}</div></div>` : "";
+    p.innerHTML = `<svg class="sc" width="48" height="48" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="8" fill="#6ccb5f"/><path d="M4.6 8.2l2.2 2.2 4.6-4.8" fill="none" stroke="#000" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <h1 class="e1">${update ? "ForLabs обновлён" : "ForLabs установлен"}</h1>
+      <p class="lead e2">${update ? "Новая версия на месте, все лабы и настройки сохранены."
+        : "При первом запуске ForLabs покажет, где создать профиль, как сделать первую лабу и как править её по замечаниям."}
+        Ярлык — в меню «Пуск».</p>${warn}`;
+  }
+  renderFoot();
+}
+
+function setHint(text) {
+  const h = $("hint"), i = $("path");
+  if (h) h.textContent = text;
+  if (i) i.classList.toggle("bad", !!text);
+}
+
+function setRow(i, f, active) {
+  const kind = f >= 1 ? "done" : active ? "spin" : "wait";
+  const row = $("c" + i);
+  if (!row) return;
+  row.classList.toggle("on", kind !== "wait");
+  if (S.shown[i] !== kind) {
+    S.shown[i] = kind;
+    $("ci" + i).innerHTML = kind === "done" ? CHECK
+      : kind === "spin" ? '<span class="spin" role="img" aria-label="Устанавливается"><i></i></span>' : '<span class="wait"></span>';
+  }
+  const comp = (S.d.components || [])[i] || {};
+  $("cn" + i).textContent = kind === "done" ? "Готово" : kind === "spin" ? (comp.size ? Math.round(f * 100) + "%" : "")
+    : (comp.size || "Ожидание");
+}
+
+function renderFoot() {
+  const back = $("backBtn"), cancel = $("cancelBtn"), nx = $("nextBtn");
+  const installing = S.step === 2 && S.state === "running";
+  const failed = S.step === 2 && S.state === "error";
+  back.classList.toggle("hidden", !(S.step === 1 || failed));
+  cancel.classList.toggle("hidden", !installing);
+  cancel.disabled = S.closing;
+  nx.classList.toggle("hidden", installing);
+  nx.disabled = !!(S.d && S.d.error);
+  nx.textContent = S.step === 0 ? (S.d && S.d.installed ? "Далее" : "Далее")
+    : S.step === 1 ? (S.d && S.d.installed ? "Обновить" : "Установить")
+    : failed ? "Повторить" : (S.launch ? "Открыть ForLabs" : "Закрыть");
+  $("closeBtn").disabled = S.closing;
+}
+
+async function startInstall() {
+  const r = await api.start(S.target, S.desktop);
+  if (!r.ok) {
+    if (S.step !== 1) go(1);
+    setHint(r.error);
+    $("path").focus();
+    return;
+  }
+  S.state = "running"; S.err = "";
+  if (S.step !== 2) go(2); else renderPage();
+  poll();
+}
+
+async function poll() {
+  clearTimeout(S.timer);
+  const s = await api.poll();
+  if (s.state === "running") {
+    const prep = s.prep;
+    $("indet").classList.toggle("hidden", !prep);
+    $("bar").classList.toggle("hidden", prep);
+    if (!prep) {
+      $("bar").style.width = s.percent + "%";
+      $("pct").textContent = Math.floor(s.percent) + "%";
+      $("track").setAttribute("aria-valuenow", Math.floor(s.percent));
+      const comps = S.d.components || [];
+      s.fractions.forEach((f, i) => setRow(i, f, i === s.component));
+      const nm = (comps[s.component] || {}).name || "";
+      $("stText").textContent = S.closing ? "Отменяю…" : "Устанавливаю: " + nm.charAt(0).toLowerCase() + nm.slice(1);
+    }
+    S.timer = setTimeout(poll, 120);
+    return;
+  }
+  S.state = s.state;
+  if (S.closing) { api.close(); return; }
+  if (s.state === "done") {
+    $("bar").classList.remove("hidden"); $("indet").classList.add("hidden");
+    $("bar").style.width = "100%"; $("pct").textContent = "100%";
+    (S.d.components || []).forEach((_, i) => setRow(i, 1, false));
+    $("stText").textContent = "Готово";
+    S.warnings = s.warnings || [];
+    renderFoot();
+    setTimeout(() => go(3), 500);
+  } else if (s.state === "error") {
+    $("prog").classList.add("hidden");
+    $("rows").classList.add("hidden");
+    $("errText").textContent = s.error;
+    $("errBox").classList.remove("hidden");
+    $("errBox").classList.add("e1");
+    renderFoot();
+  }
+}
+
+function next() {
+  if (S.step === 0) go(1);
+  else if (S.step === 1) startInstall();
+  else if (S.step === 2 && S.state === "error") startInstall();
+  else if (S.step === 3) api.finish(S.launch);
+}
+
+$("nextBtn").addEventListener("click", next);
+$("backBtn").addEventListener("click", () => { S.state = "idle"; go(S.step === 2 ? 1 : 0); });
+$("cancelBtn").addEventListener("click", () => { api.cancel(); $("cancelBtn").disabled = true; });
+$("minBtn").addEventListener("click", () => api.minimize());
+$("closeBtn").addEventListener("click", () => {
+  if (S.step === 2 && S.state === "running") { S.closing = true; api.cancel(); renderFoot(); return; }
+  api.close();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && S.step === 1) go(0);
+  if (e.key === "Enter" && !e.target.closest("button,input") && !$("nextBtn").classList.contains("hidden")
+      && !$("nextBtn").disabled) next();
+});
+document.addEventListener("contextmenu", (e) => { if (!e.target.closest("input,.info")) e.preventDefault(); });
+
+async function init() {
+  api = window.pywebview.api;
+  S.d = await api.defaults();
+  S.target = S.d.target || "";
+  if (typeof S.d.desktop === "boolean") S.desktop = S.d.desktop;
+  $("ver").textContent = `ForLabs ${S.d.version || ""} · x64`;
+  if (S.d.installed) $("wtitle").textContent = "Обновление ForLabs";
+  movePill(0, 0);
+  renderSteps();
+  renderPage();
+}
+if (window.pywebview && window.pywebview.api) init(); else window.addEventListener("pywebviewready", init);
+</script>
+</body>
+</html>
