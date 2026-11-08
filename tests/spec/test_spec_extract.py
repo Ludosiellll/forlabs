@@ -74,3 +74,62 @@ def test_extract_live():
     assert len(spec.tasks) == 6
     assert len(spec.questions) == 4
     assert [f for f in findings if f.severity == "error"] == []
+
+
+SSP_ENR = Enrollment(subject_id="ssp", title_subject="ССП", variant=14, workplace=2)
+SSP_SRC = SourceText(normalize(
+    "Лабораторная работа №4\nТема работы: Ссылочные типы Java.\nЦель работы: Сформировать умения.\n"
+    "Задание №1:\nВыполните задание согласно варианту , указанному в приложении А.\n"
+    "Вариант выбрать в соответствии с номером рабочего места.\nЗадание №2.\n"
+    "Построить иерархию классов в соответствии с вариантом задания, указанным в приложении Б. Вариант выбрать в "
+    "соответствии с номером по журналу.\nДля разработанной Вами иерархии классов в методе Main:\n"
+    "1) описать массив объектов базового класса;\n2) занести в этот массив объекты дочерних классов;\n"
+    "3) продемонстрировать работу методов класса у всех элементов этого массива.\n"
+    "Приложение А\n2. Создать класс Payment (покупка) с внутренним классом.\nПриложение Б\n14 Организация\n"))
+SSP_RAW = {"number": "4", "topic": "Ссылочные типы Java", "goal": "Сформировать умения",
+           "assignment": "Выполните задание согласно варианту , указанному в приложении А.",
+           "main_tasks": ["Выполните задание согласно варианту , указанному в приложении А. Вариант выбрать в "
+                          "соответствии с номером рабочего места.",
+                          "Построить иерархию классов в соответствии с вариантом задания, указанным в приложении Б. "
+                          "Вариант выбрать в соответствии с номером по журналу. Для разработанной Вами иерархии "
+                          "классов в методе Main:",
+                          "описать массив объектов базового класса;",
+                          "занести в этот массив объекты дочерних классов;",
+                          "продемонстрировать работу методов класса у всех элементов этого массива."],
+           "extra_tasks": [],
+           "variants": [{"appendix": "Приложение А", "basis": "workplace", "number": 2,
+                         "text": "Создать класс Payment (покупка) с внутренним классом."},
+                        {"appendix": "Приложение Б", "basis": "journal", "number": 14, "text": "Организация"}],
+           "questions": []}
+
+
+def test_subitems_merged_into_parent_task():
+    spec, findings = extract_spec(SSP_SRC, SUBJECTS["ssp"], SSP_ENR, FakeLLM([SSP_RAW]), lab_number="4",
+                                  date="16.09.2026")
+    assert len(spec.tasks) == 2
+    assert spec.tasks[1].text.endswith("в методе Main: 1) описать массив объектов базового класса; "
+                                       "2) занести в этот массив объекты дочерних классов; 3) продемонстрировать "
+                                       "работу методов класса у всех элементов этого массива.")
+    assert findings == []
+
+
+def test_space_before_comma_and_assignment_not_a_task():
+    spec, _ = extract_spec(SSP_SRC, SUBJECTS["ssp"], SSP_ENR, FakeLLM([SSP_RAW]), lab_number="4", date="16.09.2026")
+    assert spec.tasks[0].text.startswith("Выполните задание согласно варианту, указанному")
+    assert spec.assignment == ""
+
+
+def test_variants_by_workplace_and_journal():
+    fake = FakeLLM([SSP_RAW])
+    spec, _ = extract_spec(SSP_SRC, SUBJECTS["ssp"], SSP_ENR, fake, lab_number="4", date="16.09.2026")
+    assert "Приложение А (по номеру рабочего места, вариант 2): Создать класс Payment" in spec.variant_text
+    assert "Приложение Б (по журналу, вариант 14): Организация" in spec.variant_text
+    prompt = "\n".join(m["content"] for m in fake.calls[0])
+    assert "рабочего места" in prompt and "2" in prompt
+
+
+def test_workplace_missing_warns():
+    enr = Enrollment(subject_id="ssp", title_subject="ССП", variant=14)
+    spec, findings = extract_spec(SSP_SRC, SUBJECTS["ssp"], enr, FakeLLM([SSP_RAW]), lab_number="4",
+                                  date="16.09.2026")
+    assert [f.rule_id for f in findings] == ["spec.workplace_missing"]

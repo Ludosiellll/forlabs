@@ -15,6 +15,13 @@ from forlabs.spec.prompts import SPEC_SYSTEM, SPEC_USER
 MAX_SOURCE_CHARS = 400_000
 
 
+class VariantPick(BaseModel):
+    appendix: str = ""
+    basis: str = "journal"
+    number: int | str | None = None
+    text: str = ""
+
+
 class RawSpec(BaseModel):
     number: str | None = None
     topic: str = ""
@@ -24,6 +31,7 @@ class RawSpec(BaseModel):
     main_tasks: list[str] = Field(default_factory=list)
     extra_tasks: list[str] = Field(default_factory=list)
     variant_text: str | None = None
+    variants: list[VariantPick] = Field(default_factory=list)
     questions: list[str] = Field(default_factory=list)
 
     @field_validator("number", mode="before")
@@ -31,7 +39,7 @@ class RawSpec(BaseModel):
     def _num(cls, v):
         return None if v is None else str(v)
 
-    @field_validator("main_tasks", "extra_tasks", "questions", mode="before")
+    @field_validator("main_tasks", "extra_tasks", "questions", "variants", mode="before")
     @classmethod
     def _lists(cls, v):
         return [] if v is None else v
@@ -44,7 +52,43 @@ _LABEL = re.compile(r"^\s*(?:Тема(?:\s+работы)?|Цел[ьи](?:\s+ра
 
 def one_line(s: str) -> str:
     s = re.sub(r"(\w)-\s*\n\s*(\w)", r"\1\2", s)
-    return " ".join(s.split())
+    s = " ".join(s.split())
+    s = re.sub(r"\s+([,.;:!?)»])", r"\1", s)  # пробел перед знаком препинания из PDF
+    return re.sub(r"([(«])\s+", r"\1", s)
+
+
+def _starts_lower(s: str) -> bool:
+    return bool(s) and s[0].isalpha() and s[0].islower()
+
+
+def merge_subitems(items: list[str]) -> list[str]:
+    """Подпункты («описать …;») — часть предыдущего задания: дописываем их в него с нумерацией «1) …»."""
+    out: list[str] = []
+    k = 0
+    for raw in items:
+        text = clean_item(raw)
+        if out and _starts_lower(text):
+            k += 1
+            out[-1] = f"{out[-1]} {k}) {text}"
+        else:
+            k = 0
+            out.append(text)
+    return out
+
+
+_BASIS = {"workplace": "по номеру рабочего места", "journal": "по журналу"}
+
+
+def variant_block(picks: list[VariantPick]) -> str | None:
+    lines = []
+    for v in picks:
+        if not v.text.strip():
+            continue
+        basis = _BASIS.get(v.basis, "")
+        meta = ", ".join(x for x in (basis, f"вариант {v.number}" if v.number not in (None, "") else "") if x)
+        head = (v.appendix.strip() or "Вариант") + (f" ({meta})" if meta else "")
+        lines.append(f"{head}: {one_line(v.text)}")
+    return "\n".join(lines) or None
 
 
 def clean_item(s: str) -> str:
@@ -72,16 +116,23 @@ def verify_verbatim(spec: LabSpec, src: SourceText) -> list[Finding]:
 def extract_spec(src: SourceText, subject: Subject, enrollment: Enrollment, llm, lab_number: str | None,
                  date: str) -> tuple[LabSpec, list[Finding]]:
     variant = enrollment.variant if enrollment.variant is not None else subject.default_variant
+    workplace = enrollment.workplace if enrollment.workplace is not None else variant
     hint = f" Номер работы: {lab_number}." if lab_number else ""
     messages = [
-        {"role": "system", "content": SPEC_SYSTEM.replace("{variant}", str(variant))},
+        {"role": "system", "content": SPEC_SYSTEM.format(variant=variant, workplace=workplace)},
         {"role": "user", "content": SPEC_USER.format(subject=subject.name, variant=variant, number_hint=hint,
+                                                     workplace=enrollment.workplace or "не указан",
                                                      text=src.text[:MAX_SOURCE_CHARS])},
     ]
     raw: RawSpec = llm.json(messages, RawSpec, temperature=0.0)
-    tasks = [Task(n=i, text=clean_item(t), kind="main") for i, t in enumerate(raw.main_tasks, start=1) if t.strip()]
-    tasks += [Task(n=len(tasks) + i, text=clean_item(t), kind="extra")
-              for i, t in enumerate([t for t in raw.extra_tasks if t.strip()], start=1)]
+    main = merge_subitems([t for t in raw.main_tasks if t.strip()])
+    extra = merge_subitems([t for t in raw.extra_tasks if t.strip()])
+    tasks = [Task(n=i, text=t, kind="main") for i, t in enumerate(main, start=1)]
+    tasks += [Task(n=len(main) + i, text=t, kind="extra") for i, t in enumerate(extra, start=1)]
+    assignment = clean_field(raw.assignment)
+    if assignment and any(normalize_for_compare(assignment) in normalize_for_compare(t.text) or
+                          normalize_for_compare(t.text) in normalize_for_compare(assignment) for t in tasks):
+        assignment = ""  # это было первое задание, а не общая фраза
     spec = LabSpec(
         subject_id=subject.id,
         number=(lab_number or raw.number or "").strip() or "1",
@@ -89,14 +140,19 @@ def extract_spec(src: SourceText, subject: Subject, enrollment: Enrollment, llm,
         topic=clean_field(raw.topic).rstrip(". "),
         goal=clean_field(raw.goal).rstrip(". "),
         equipment=clean_field(raw.equipment).rstrip(". ") or None,
-        assignment=clean_field(raw.assignment),
+        assignment=assignment,
         tasks=tasks,
         variant=variant,
-        variant_text=one_line(raw.variant_text) if raw.variant_text else None,
+        workplace=enrollment.workplace,
+        variant_text=variant_block(raw.variants) or (one_line(raw.variant_text) if raw.variant_text else None),
         questions=[clean_item(q) for q in raw.questions if q.strip()],
         source_text=src.text,
     )
     findings = verify_verbatim(spec, src)
+    if any(v.basis == "workplace" for v in raw.variants) and enrollment.workplace is None:
+        findings.append(Finding(stage="spec", rule_id="spec.workplace_missing", severity="warn", location="Вариант",
+                                message="Методичка выбирает вариант по номеру рабочего места — укажи его в профиле "
+                                        "(пока взят вариант по журналу)"))
     if not spec.tasks:
         findings.append(Finding(stage="spec", rule_id="spec.no_tasks", location="Задания",
                                 message="В методичке не нашлось заданий — добавь их вручную"))

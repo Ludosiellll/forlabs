@@ -17,6 +17,7 @@ class Enrollment(BaseModel):
     teacher: str = ""
     academic_year: str = ""
     variant: int | None = None
+    workplace: int | None = None  # номер рабочего места/компьютера, если методичка выбирает вариант по нему
     header_style: HeaderStyle = "long"
 
 
@@ -57,6 +58,7 @@ class LabSpec(BaseModel):
     assignment: str = ""
     tasks: list[Task] = Field(default_factory=list)
     variant: int | None = None
+    workplace: int | None = None
     variant_text: str | None = None
     questions: list[str] = Field(default_factory=list)
     source_text: str = ""

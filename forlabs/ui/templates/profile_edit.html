@@ -49,17 +49,22 @@
             <div class="field"><label for="te_{{ sid }}">Руководитель</label>
               <input id="te_{{ sid }}" name="enr_{{ sid }}_teacher" type="text" value="{{ e.teacher if e else '' }}" placeholder="А.А. Петров"></div>
           </div>
-          <div class="grid3">
+          <div class="grid2">
             <div class="field"><label for="y_{{ sid }}">Учебный год</label>
               <input id="y_{{ sid }}" name="enr_{{ sid }}_year" type="text" value="{{ e.academic_year if e else '2026/2027' }}"></div>
-            <div class="field"><label for="v_{{ sid }}">Вариант</label>
-              <input id="v_{{ sid }}" name="enr_{{ sid }}_variant" type="number" min="1" value="{{ e.variant if e and e.variant else s.default_variant }}"></div>
             <div class="field"><label for="st_{{ sid }}">Метки шапки</label>
               <select id="st_{{ sid }}" name="enr_{{ sid }}_style">
                 {% set style = e.header_style if e else s.default_header_style %}
                 <option value="long" {{ 'selected' if style == 'long' }}>«Тема работы:»</option>
                 <option value="short" {{ 'selected' if style == 'short' }}>«Тема:» + «Оснащение работы:»</option>
               </select></div>
+          </div>
+          <div class="grid2">
+            <div class="field"><label for="v_{{ sid }}">Вариант (по журналу)</label>
+              <input id="v_{{ sid }}" name="enr_{{ sid }}_variant" type="number" min="1" value="{{ e.variant if e and e.variant else s.default_variant }}"></div>
+            <div class="field"><label for="w_{{ sid }}">Номер рабочего места</label>
+              <input id="w_{{ sid }}" name="enr_{{ sid }}_workplace" type="number" min="1" value="{{ e.workplace if e and e.workplace else '' }}" placeholder="если просят">
+              <div class="hint">Для заданий «по номеру компьютера».</div></div>
           </div>
         </div>
       {% endfor %}

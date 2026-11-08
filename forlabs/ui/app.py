@@ -166,11 +166,13 @@ def create_app(ctx: AppContext | None = None) -> FastAPI:
         for sid, subj in all_subjects().items():
             if f.get(f"enr_{sid}_on"):
                 v = (f.get(f"enr_{sid}_variant") or "").strip()
+                w = (f.get(f"enr_{sid}_workplace") or "").strip()
                 enrollments.append(Enrollment(
                     subject_id=sid, title_subject=(f.get(f"enr_{sid}_title") or subj.name).strip(),
                     teacher=(f.get(f"enr_{sid}_teacher") or "").strip(),
                     academic_year=(f.get(f"enr_{sid}_year") or "").strip(),
                     variant=int(v) if v.isdigit() else subj.default_variant,
+                    workplace=int(w) if w.isdigit() else None,
                     header_style="short" if f.get(f"enr_{sid}_style") == "short" else "long"))
         old = ctx.store.get_profile(pid)
         base = old.model_dump() if old else Profile(id=pid, full_name=full_name, title_name="").model_dump()
