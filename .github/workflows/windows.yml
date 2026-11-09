@@ -53,6 +53,35 @@ jobs:
           }
           exit $code
 
+  programs:
+    name: Программы лаб на всех языках
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Зависимости
+        run: python -m pip install ".[windows]"
+      - name: План → сборка → песочница → сценарий → снимок (C#, C++, Python, Java, JS, PHP, Go, сайты, MySQL)
+        shell: pwsh
+        run: |
+          python tools/ci_lab_programs.py
+          $code = $LASTEXITCODE
+          if (Test-Path build/probe/report.json) {
+            $r = Get-Content build/probe/report.json -Raw -Encoding utf8 | ConvertFrom-Json
+            $bad = $r.cases.PSObject.Properties | Where-Object { -not $_.Value.ok } | ForEach-Object { "$($_.Name): $($_.Value.reason)$($_.Value.error)" }
+            if ($bad) { Write-Output ("::error title=программы лаб::" + ($bad -join "%0A")) }
+          }
+          exit $code
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lab-program-shots
+          path: build/probe
+          retention-days: 14
+
   build:
     runs-on: windows-latest
     timeout-minutes: 120

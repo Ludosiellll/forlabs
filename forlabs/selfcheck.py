@@ -190,11 +190,30 @@ def _vault() -> str:
     return "«Диспетчер учётных данных» Windows"
 
 
+def _programs() -> str:
+    """Сборка и снимки программ лаб: модули на месте, план проверяется, каталог программ читается; в Windows —
+    песочница, окна и автоматизация окон."""
+    from forlabs.runner import languages, safety, tools  # noqa: F401
+    from forlabs.runner.plan import ProjectPlan, validate
+
+    p = ProjectPlan.model_validate({"language": "python", "kind": "console", "name": "Проверка", "entry": "main.py",
+                                    "files": [{"path": "main.py", "content": "print('ok')\n"}]})
+    if validate(p) or safety.scan(p):
+        raise RuntimeError("план проекта не проходит проверку")
+    n = len(tools.ToolManager().tools)
+    if sys.platform == "win32":
+        from forlabs.runner import console, shots, uia, winapi  # noqa: F401
+
+        uia.load()
+        return f"план, проверка кода, каталог ({n} программ), песочница и автоматизация окон"
+    return f"план, проверка кода, каталог ({n} программ)"
+
+
 def build_checks() -> list[Check]:
     """Сама программа: всё это обязано работать в собранном exe."""
     checks = [_run("Версия", _version), _run("Правила", _rules), _run("Морфология", _morph),
               _run("Библиотеки", _libraries), _run("Шаблоны и оформление", _assets), _run("Документ", _document),
-              _run("PDF", _pdf), _run("Сервер", _server)]
+              _run("PDF", _pdf), _run("Сервер", _server), _run("Программы лаб", _programs)]
     if sys.platform == "win32":
         checks.append(_run("Хранилище паролей", _vault))
     return checks
