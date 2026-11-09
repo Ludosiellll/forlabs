@@ -48,11 +48,14 @@ from forlabs.core.store import safe_file_name, safe_name
 from forlabs.core.subjects import Subject, all_subjects, get_subject
 from forlabs.pipeline.images import MAX_IMAGES, normalize_screenshot, prepare_image
 from forlabs.pipeline.materials import ACCEPT as MATERIALS_ACCEPT, MATERIALS_MAX, PAGE_CHARS, pages
+from forlabs.pipeline.labnum import shown_names, split_by_lab
 from forlabs.pipeline.memory import parse_numbers
 from forlabs import version as _version
 from forlabs.pipeline.run import (
     PipelineError,
     docx_fresh,
+    error_text,
+    is_draft,
     lab_complete,
     output_root,
     running_elsewhere,
@@ -492,7 +495,71 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         extra = [(uf.filename, await uf.read()) for uf in (materials or []) if uf.filename]
         report = (linked_report.filename, await linked_report.read()) if linked_report and linked_report.filename else None
         numbers = parse_numbers(linked)
-        notes: list[str] = []
+
+        async def start(st, hint: str | None = None):
+            """Файлы к лабе, затем разбор в фоне; связи — после разбора. → (лаба, замечания)."""
+            notes: list[str] = []
+            if extra:  # лаба уже создана: сбой с файлами — замечание, а не брошенный черновик без разбора
+                try:
+                    st, problems = await asyncio.to_thread(ctx.pipeline.add_materials, st, extra)
+                    notes += problems
+                except Exception as e:
+                    notes.append(f"Файлы к лабе не добавились ({getattr(e, 'message_ru', None) or e}) — добавь их на "
+                                 "странице лабы, слева.")
+            key = ctx.pipeline.key(st)
+            result = {}
+
+            def job():
+                done = result["st"] = ctx.pipeline.parse(st, date=today(), number=hint)
+                if not (numbers or report):
+                    return
+                # связи — после разбора: известны ссылки методички и тема, по которой модель ищет лабу без заголовка
+                new_key = ctx.pipeline.key(done)
+                claimed = new_key != key and ctx.claim(new_key)  # лаба переехала под номер из методички — тоже занята
+                try:
+                    result["st"], _ = ctx.pipeline.set_links(done, numbers, report)
+                except Exception as e:
+                    ctx.bus.publish(new_key, f"Связанные лабы не сохранены ({getattr(e, 'message_ru', None) or e}) — "
+                                             "укажи их на странице лабы, слева.", "warn")
+                finally:
+                    if claimed:
+                        ctx.release(new_key)
+
+            ctx.run(key, job)
+            return result.get("st", st), notes
+
+        # методички разных лаб («ЛР19…», «ЛР20…») — отдельные лабы; номер, вписанный в форму, — одна лаба на всё
+        groups = await asyncio.to_thread(split_by_lab, data, text) if not number.strip() and len(data) >= 2 else []
+        if groups:
+            made: list[str] = []
+            problems: list[str] = []
+            failed: list[Exception] = []
+            for n, part in groups:
+                try:  # номер занят — черновик: после разбора станет «N-2», как обычно
+                    taken = await asyncio.to_thread(ctx.pipeline._taken, profile_id, subject_id, n)
+                    st = await asyncio.to_thread(ctx.pipeline.create_lab, profile_id, subject_id, part,
+                                                 number=None if taken else n, wishes=wishes, wish_images=photos)
+                except Exception as e:  # одна не создалась — остальные создаются
+                    failed.append(e)
+                    problems.append(f"ЛР {n} не создана: {error_text(e)}")
+                    continue
+                final, notes = await start(st, hint=n)
+                made.append(n if is_draft(final.number) else final.number)
+                problems += [x for x in notes if x not in problems]
+            if not made:
+                if form_token:
+                    ctx.form_tokens.pop(form_token, None)
+                if isinstance(failed[0], PipelineError):
+                    return redirect(back, err=str(failed[0]))
+                raise failed[0]
+            url = (f"/?profile={_q(profile_id)}&subject={_q(subject_id)}&msg="
+                   + _q(f"Методички разных лаб — создал отдельные: {', '.join('ЛР ' + n for n in made)}. "
+                        "Проверь разбор у каждой.")
+                   + (f"&err={_q(' '.join(problems))}" if problems else ""))
+            if form_token:
+                ctx.form_tokens[form_token] = url
+            return RedirectResponse(url, status_code=303)
+
         try:
             st = await asyncio.to_thread(ctx.pipeline.create_lab, profile_id, subject_id, data,
                                          number=number.strip() or None, pasted_text=text, wishes=wishes,
@@ -503,34 +570,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
             if isinstance(e, PipelineError):
                 return redirect(back, err=str(e))
             raise
-        if extra:  # лаба уже создана: сбой с файлами — замечание, а не брошенный черновик без разбора
-            try:
-                st, problems = await asyncio.to_thread(ctx.pipeline.add_materials, st, extra)
-                notes += problems
-            except Exception as e:
-                notes.append(f"Файлы к лабе не добавились ({getattr(e, 'message_ru', None) or e}) — добавь их на "
-                             "странице лабы, слева.")
-        key = ctx.pipeline.key(st)
-        result = {}
-
-        def job():
-            done = result["st"] = ctx.pipeline.parse(st, date=today())
-            if not (numbers or report):
-                return
-            # связи — после разбора: известны ссылки методички и тема, по которой модель ищет лабу без заголовка
-            new_key = ctx.pipeline.key(done)
-            claimed = new_key != key and ctx.claim(new_key)  # лаба переехала под номер из методички — тоже занята
-            try:
-                result["st"], _ = ctx.pipeline.set_links(done, numbers, report)
-            except Exception as e:
-                ctx.bus.publish(new_key, f"Связанные лабы не сохранены ({getattr(e, 'message_ru', None) or e}) — "
-                                         "укажи их на странице лабы, слева.", "warn")
-            finally:
-                if claimed:
-                    ctx.release(new_key)
-
-        ctx.run(key, job)
-        final = result.get("st", st)
+        final, notes = await start(st)
         url = lab_url(profile_id, subject_id, final.number)
         if form_token:
             ctx.form_tokens[form_token] = url
@@ -601,7 +641,11 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         fresh = docx_fresh(st, ctx.store.lab_dir(p, s, n))  # документ — от последней удачной вёрстки этой лабы
         preview_here = fresh and bool(st.pages) and all(Path(x).exists() for x in st.pages)
         docx_here = fresh
+        last = st.versions[-1] if st.versions else None  # методичку заменили, отчёт ещё не написан заново
+        restore_vid = last.id if last and not st.report and last.label == "до замены методички" else None
         return render(request, "lab.html", st=st, profile=profile, subject=get_subject(s), busy=busy,
+                      source_names=shown_names(ctx.pipeline.source_names(st)),
+                      open_replace=request.query_params.get("replace") == "1", restore_vid=restore_vid,
                       subject_theme=subject_theme, subject_memory=subject_memory,
                       link_notes=[f.message for f in st.findings if f.rule_id.startswith("spec.linked")],
                       auto_refs=[("предыдущую лабу" if r == "previous" else f"ЛР {r}") for r in ctx.pipeline._auto_refs(st)],
@@ -658,6 +702,26 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         if running_elsewhere(st):
             return redirect(lab_url(p, s, n), err=ELSEWHERE)
         ctx.run(ctx.pipeline.key(st), ctx.pipeline.parse, st, st.spec.date if st.spec else today())
+        return redirect(lab_url(p, s, n))
+
+    @app.post("/labs/{p}/{s}/{n}/source")
+    async def lab_source(p: str, s: str, n: str, files: list[UploadFile] | None = File(None), text: str = Form("")):
+        """Заменить методичку: новые файлы или текст вместо прежних, разбор — заново, в фоне."""
+        back = lab_url(p, s, n) + "?tab=spec&replace=1"
+        if busy_lab(p, s, n):
+            return redirect(back, err=BUSY)
+        ups = [uf for uf in files or [] if uf.filename]
+        for uf in ups:
+            if (uf.size or 0) > MAX_UPLOAD:
+                return redirect(back, err=f"Файл «{uf.filename}» больше {MAX_UPLOAD // 1_000_000} МБ — оставь только "
+                                          "страницы своей лабы или сожми его.")
+        if not ups and not text.strip():
+            return redirect(back, err="Добавь файл методички или вставь её текст")
+        st = await asyncio.to_thread(load, p, s, n)
+        if running_elsewhere(st):
+            return redirect(lab_url(p, s, n), err=ELSEWHERE)
+        data = [(uf.filename, await uf.read()) for uf in ups]
+        ctx.run(ctx.pipeline.key(st), ctx.pipeline.replace_source, st, data, text)
         return redirect(lab_url(p, s, n))
 
     @app.post("/labs/{p}/{s}/{n}/redo/{t}")

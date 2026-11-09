@@ -331,7 +331,10 @@ class Pipeline:
         st.source_path = str(src)
         return self._save(st)
 
-    def parse(self, st: LabState, date: str | None = None) -> LabState:
+    def parse(self, st: LabState, date: str | None = None, number: str | None = None,
+              renumber: bool = False) -> LabState:
+        """number — номер работы, известный заранее (имя файла, заголовок): модель разбирает только её.
+        renumber — лаба переходит под номер из методички, как черновик (после замены методички)."""
         try:
             self._emit(st, "Читаю методичку", step="parse")
             src_dir = self.lab_dir(st) / "source"
@@ -363,16 +366,21 @@ class Pipeline:
             wishes = st.wishes or (st.spec.wishes if st.spec else "") or ""
             if st.wish_images_text and st.wish_images_text not in wishes:
                 wishes = f"{wishes}\nС фото:\n{st.wish_images_text}".strip()
-            known = st.spec.number if st.spec else (None if is_draft(st.number) else st.number)
+            known = None if renumber else st.spec.number if st.spec else (None if is_draft(st.number) else st.number)
+            renumber = renumber or is_draft(st.number)
+            if normalize_number(number or ""):
+                known = normalize_number(number)
             spec, findings = extract_spec(src, subject, enrollment, self._llm(st), known, date or today(),
                                           wishes=wishes)
             spec.number = normalize_number(spec.number) or "1"
+            if known is None:
+                findings += _several_labs(src.text, spec.number)
             old_dir = self.lab_dir(st)
             old_key = moved_from = None
-            if is_draft(st.number):
+            if renumber:
                 old_key, old_number = self.key(st), st.number
                 st = self._renumber(st, spec.number, old_dir)
-                moved_from = old_number
+                moved_from = old_number if st.number != old_number else None
                 if st.number != spec.number:  # номер в документе — из методички; «7-2» только для списка
                     self._emit(st, f"ЛР {spec.number} уже есть — эта сохранена как «{st.number}». Лишнюю можно "
                                    f"удалить; в документе номер останется {spec.number}.", "warn")
@@ -391,13 +399,12 @@ class Pipeline:
                     st = st.model_copy(update={"number": moved_from, "source_path": str(old_dir / "source")})
                 raise
             if moved_from is not None:
-                try:
-                    if is_draft(moved_from):
-                        self.store.delete_lab(st.profile_id, st.subject_id, moved_from)
+                try:  # запись под прежним номером (черновик или лаба до замены методички) — это эта же лаба
+                    self.store.delete_lab(st.profile_id, st.subject_id, moved_from)
                 except Exception as e:
-                    logging.getLogger("forlabs").warning("Черновик %s не удалён: %s", moved_from, e)
+                    logging.getLogger("forlabs").warning("Запись %s не удалена: %s", moved_from, e)
                 if st.wish_images:
-                    self._sync(st, st.wish_images)  # в облаке фото лежали под номером черновика
+                    self._sync(st, st.wish_images)  # в облаке фото лежали под прежним номером
                 for ev in self.bus.history(old_key):
                     self.bus.publish(self.key(st), ev.text, ev.kind, ev.step)
                 self.bus.publish(old_key, st.number, "moved")
@@ -408,11 +415,14 @@ class Pipeline:
             return self._fail(st, e)
 
     def _renumber(self, st: LabState, number: str, old_dir: Path) -> LabState:
-        """Переносит черновик под номер из методички. Чужие лабы не трогает: занятый номер → «N-2», «N-3»…"""
+        """Переносит черновик под номер из методички. Чужие лабы не трогает: занятый номер → «N-2», «N-3»…
+        Свой номер считается свободным: лаба «7-2» с той же методичкой остаётся на месте."""
         old_key = self.key(st)
         candidate, k = number, 2
-        while self._taken(st.profile_id, st.subject_id, candidate):
+        while candidate != st.number and self._taken(st.profile_id, st.subject_id, candidate):
             candidate, k = f"{number}-{k}", k + 1
+        if candidate == st.number:
+            return st
         st = st.model_copy(update={"number": candidate})
         self.renamed[old_key] = candidate
         if hasattr(self.store, "retag_usage"):
@@ -427,6 +437,113 @@ class Pipeline:
             shutil.move(str(old_dir), str(new_dir))
             st.source_path = str(new_dir / "source")
         return st  # строку черновика удаляет parse — после сохранения под новым номером
+
+    def source_names(self, st: LabState) -> list[str]:
+        """Файлы методички в папке лабы (на другом компьютере их нет — пусто)."""
+        src = self.lab_dir(st) / "source"
+        try:
+            return sorted(f.name for f in src.iterdir() if f.is_file()) if src.exists() else []
+        except OSError:
+            return []
+
+    def replace_source(self, st: LabState, files: list[tuple[str, bytes]], pasted_text: str = "") -> LabState:
+        """Другая методичка для этой лабы: файлы в source/ заменяются, разбор — заново. Готовый отчёт уходит в версию
+        вместе с прежней методичкой (кнопка «Вернуть как было» возвращает обе); лаба без отчёта переходит под номер
+        новой методички, как черновик."""
+        from forlabs.core.models import Finding
+        from forlabs.pipeline.labnum import PASTED_NAME, read_parts, shown_names, single_number
+
+        pasted_text = pasted_text or ""
+        if not files and not pasted_text.strip():
+            raise PipelineError("Добавь файл методички или вставь её текст")
+        d = self.lab_dir(st)
+        staged, src = d / "source.new", d / "source"
+        shutil.rmtree(staged, ignore_errors=True)
+        staged.mkdir(parents=True, exist_ok=True)
+        try:
+            for name, data in files:
+                (staged / safe_file_name(Path(name or "").name or "файл")).write_bytes(data)
+            if pasted_text.strip():
+                (staged / PASTED_NAME).write_text(pasted_text, encoding="utf-8")
+            parts = read_parts(files, pasted_text)
+            had_report = st.report is not None
+            current = None if is_draft(st.number) else normalize_number(st.spec.number if st.spec else st.number)
+            detected = single_number(parts)
+            renumber = not had_report and not st.versions  # у лабы с отчётом рисунки в облаке лежат под её номером
+            number = current
+            if renumber:  # номер — из новой методички; если это сборник, где есть и эта лаба, — остаётся этот
+                found = [n for p in parts for n in p.labs]
+                number = detected or (current if current and (not found or current in found) else None)
+            old_names = shown_names(self.source_names(st))
+            new_names = shown_names(sorted(f.name for f in staged.iterdir()))
+            date = st.spec.date if st.spec else today()
+            if st.spec is not None:
+                st.wishes = st.spec.wishes or ""  # пожелания могли поправить на вкладке разбора
+            aside = d / "source.old"
+            if had_report:
+                vid = push_version(st, "до замены методички")
+                st.versions[-1].spec.source_text = st.spec.source_text
+                aside = d / f"source.v{vid}"  # «Вернуть как было» вернёт и эти файлы
+                st.chat.append(ChatMessage(
+                    id=uuid.uuid4().hex[:8], role="assistant", at=_now(), version=vid,
+                    text=f"Методичка заменена: было {', '.join(old_names) or '—'}, стало {', '.join(new_names)}. "
+                         "Задания разобраны заново — выполни лабу ещё раз. Прежний отчёт сохранён, вернуть его "
+                         "можно кнопкой ниже."))
+                st.report = st.docx_sha = st.docx_path = st.pdf_path = st.engine = None
+                st.pages, st.warnings = [], []
+            shutil.rmtree(aside, ignore_errors=True)
+            moved = False
+            if src.exists():
+                os.replace(src, aside)
+                moved = True
+            os.replace(staged, src)
+            st.source_path = str(src)
+            st.spec, st.findings, st.status, st.error = None, [], "draft", None
+            try:
+                self._save(st)  # без разбора лаба — черновик с новой методичкой: «Разобрать» доделает
+            except Exception:
+                shutil.rmtree(src, ignore_errors=True)
+                if moved:
+                    os.replace(aside, src)
+                raise
+        finally:
+            shutil.rmtree(staged, ignore_errors=True)
+        if aside.name == "source.old":
+            shutil.rmtree(aside, ignore_errors=True)
+        self._prune_sources(st)
+        self._emit(st, f"Методичка заменена: {', '.join(new_names)}", step="parse")
+        st = self.parse(st, date, number=number, renumber=renumber)
+        if st.status == "parsed" and not renumber and detected and current and detected != current:
+            st.findings.append(Finding(
+                stage="spec", rule_id="spec.other_number", severity="warn", location="Методичка",
+                message=f"Новая методичка — ЛР {detected}, а эта лаба — ЛР {current}: задания разобраны как ЛР "
+                        f"{current}. Если это другая лаба, создай её отдельно."))
+            st = self._save(st)
+        return st
+
+    def _prune_sources(self, st: LabState) -> None:
+        """Прежние методички хранятся, пока жива версия, к которой их можно вернуть."""
+        keep = {f"source.v{v.id}" for v in st.versions}
+        d = self.lab_dir(st)
+        for f in d.glob("source.v*") if d.exists() else []:
+            if f.is_dir() and f.name not in keep:
+                shutil.rmtree(f, ignore_errors=True)
+
+    def _restore_source(self, st: LabState, version_id: int, current: int | None) -> None:
+        """Откат к версии до замены методички: её файлы возвращаются в source/, нынешние — к версии current."""
+        d = self.lab_dir(st)
+        saved, src = d / f"source.v{version_id}", d / "source"
+        if not saved.is_dir():
+            return
+        if src.exists():
+            keep = d / f"source.v{current}" if current is not None else None
+            if keep is not None:
+                shutil.rmtree(keep, ignore_errors=True)
+                os.replace(src, keep)
+            else:
+                shutil.rmtree(src)
+        os.replace(saved, src)
+        st.source_path = str(src)
 
     def confirm(self, st: LabState, spec: LabSpec | None) -> LabState:
         old_tasks = [(t.n, t.text) for t in st.spec.tasks] if st.spec else None
@@ -931,13 +1048,22 @@ class Pipeline:
         if target is None:
             raise PipelineError("Этой версии уже нет: хранятся только 10 последних правок")
         with self.lock(st):
-            current = push_version(st, f"до отката к «{target.label}»")
-            source = st.spec.source_text
+            # после замены методички отчёта может ещё не быть — тогда сохранять нечего
+            current = push_version(st, f"до отката к «{target.label}»") if st.report and st.spec else None
+            source = st.spec.source_text if st.spec else ""
             st.spec, st.report = target.spec.model_copy(deep=True), target.report.model_copy(deep=True)
-            st.spec.source_text = source  # в версиях методичка не хранится (облако: меньше данных)
+            text = f"Вернул отчёт к состоянию до правки «{target.label[:80]}»."
+            if target.spec.source_text:  # версия до замены методички: возвращается и методичка
+                if current is not None:
+                    st.versions[-1].spec.source_text = source
+                self._restore_source(st, version_id, current)
+                st.findings = verify_verbatim(st.spec, _SourceProxy(st.spec.source_text)) + self._link_findings(st)
+                text = "Вернул прежнюю методичку и отчёт по ней."
+            else:
+                st.spec.source_text = source  # в версиях методичка не хранится (облако: меньше данных)
+            self._prune_sources(st)
             st.chat.append(ChatMessage(id=uuid.uuid4().hex[:8], role="assistant", at=_now(), kind="revert",
-                                       version=current,
-                                       text=f"Вернул отчёт к состоянию до правки «{target.label[:80]}»."))
+                                       version=current, text=text))
             st.docx_sha = None
             self._save(st)
         return self.render(st)
@@ -1270,6 +1396,20 @@ def _word_image(f: Path) -> bool:
             return im.format in ("PNG", "JPEG", "GIF", "BMP") and im.mode != "CMYK"
     except Exception:
         return False
+
+
+def _several_labs(text: str, number: str) -> list:
+    """Номер не был известен, а в методичке несколько лаб (сборник): модель выбрала одну — студенту видно какую."""
+    from forlabs.core.models import Finding
+    from forlabs.pipeline.labnum import labs_in_text
+
+    found = labs_in_text(text)
+    if len(found) < 2:
+        return []
+    shown = ", ".join(found[:12]) + (" …" if len(found) > 12 else "")
+    return [Finding(stage="spec", rule_id="spec.several_labs", severity="warn", location="Методичка",
+                    message=f"В ней несколько лаб: {shown}. Разобрана ЛР {number}. Нужна другая — создай новую лабу "
+                            "и впиши её номер в поле «Номер лабы», а эту удали.")]
 
 
 def _keep_spec(old: list, new: list) -> list:
