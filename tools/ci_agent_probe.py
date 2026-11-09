@@ -23,6 +23,8 @@ from forlabs.agent.core import Action, Blocked, Stopped, Task, Verdict  # noqa: 
 OUT = Path("build/probe/agent")
 WORK = Path(os.environ.get("RUNNER_TEMP", "build")) / "agent-probe"
 REPORT: dict = {"cases": {}}
+OUT.mkdir(parents=True, exist_ok=True)  # проверки идут сразу при объявлении (@case) — папки нужны заранее
+WORK.mkdir(parents=True, exist_ok=True)
 
 
 class ScriptBrain:
