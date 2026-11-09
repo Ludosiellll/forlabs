@@ -1,20 +1,107 @@
 // ForLabs: загрузка файлов, вставка скриншотов, живой журнал выполнения.
 (function () {
-  // выбор файлов методички
+  // выбор файлов методички: список с крестиком у каждого файла и «Убрать все». Файлы из окна выбора и перетащенные
+  // добавляются к уже выбранным; в поле формы список собирается заново через DataTransfer — уходит ровно то, что видно
   document.querySelectorAll("[data-dropzone]").forEach(function (zone) {
     var input = zone.querySelector("input[type=file]");
     var picked = zone.querySelector("[data-picked]");
-    function show() {
-      var names = Array.prototype.map.call(input.files, function (f) { return f.name; });
-      picked.textContent = names.length ? "Выбрано: " + names.join(", ") : "";
+    var many = zone.querySelector("[data-picked-many]");
+    var slice = function (list) { return Array.prototype.slice.call(list || []); };
+    var editable = false;
+    try { editable = !!new DataTransfer().items; } catch (err) { editable = false; }
+    var accept = (input.getAttribute("accept") || "").toLowerCase().split(",")
+      .map(function (s) { return s.trim(); }).filter(Boolean);
+    var files = slice(input.files);
+    var note = document.createElement("div"); note.className = "pick-note"; note.hidden = true;
+    var live = document.createElement("span"); live.className = "visually-hidden"; live.setAttribute("aria-live", "polite");
+    picked.after(note, live);
+
+    function fits(f) {
+      var name = f.name.toLowerCase();
+      return !accept.length || accept.some(function (a) { return a.charAt(0) === "." && name.slice(-a.length) === a; });
     }
-    input.addEventListener("change", show);
+    function size(n) {
+      return n < 1048576 ? Math.max(1, Math.round(n / 1024)) + " КБ" : (n / 1048576).toFixed(1).replace(".", ",") + " МБ";
+    }
+    function sync() {
+      if (!editable) return;
+      var dt = new DataTransfer();
+      files.forEach(function (f) { dt.items.add(f); });
+      input.files = dt.files;
+    }
+    function render(focusAt) {
+      picked.textContent = "";
+      if (many) many.hidden = files.length < 2;
+      if (!files.length) return;
+      var ul = document.createElement("ul"); ul.className = "picked-list";
+      files.forEach(function (f, i) {
+        var li = document.createElement("li");
+        var name = document.createElement("span"); name.className = "pick-name"; name.textContent = f.name;
+        var weight = document.createElement("span"); weight.className = "pick-size"; weight.textContent = size(f.size);
+        li.append(name, weight);
+        if (editable) {
+          var x = document.createElement("button");
+          x.type = "button"; x.className = "pick-x"; x.textContent = "✕"; x.title = "Убрать";
+          x.setAttribute("aria-label", "Убрать «" + f.name + "»");
+          x.addEventListener("click", function () { remove(i); });
+          li.append(x);
+        }
+        ul.append(li);
+      });
+      picked.append(ul);
+      if (files.length > 1 || !editable) {
+        var all = document.createElement("button");
+        all.type = "button"; all.className = "btn link small pick-all"; all.textContent = "Убрать все";
+        all.addEventListener("click", clear);
+        picked.append(all);
+      }
+      if (focusAt != null) {
+        var xs = picked.querySelectorAll(".pick-x");
+        if (xs.length) xs[Math.min(focusAt, xs.length - 1)].focus();
+      }
+    }
+    function remove(i) {
+      var gone = files.splice(i, 1)[0];
+      sync();
+      live.textContent = "Убран «" + gone.name + "»";
+      render(i);
+      if (!files.length) input.focus();
+    }
+    function clear() {
+      files = [];
+      if (editable) sync(); else input.value = "";
+      note.hidden = true; live.textContent = "Выбор очищен";
+      render();
+      input.focus();
+    }
+    function add(list) {
+      var wrong = [];
+      slice(list).forEach(function (f) {
+        if (!fits(f)) { wrong.push(f.name); return; }
+        var same = files.findIndex(function (g) { return g.name.toLowerCase() === f.name.toLowerCase(); });
+        if (same >= 0) files[same] = f; else files.push(f); // тот же файл ещё раз — заменяет прежний
+      });
+      var doc = wrong.filter(function (n) { return /\.doc$/i.test(n); });
+      note.textContent = !wrong.length ? "" : doc.length === wrong.length
+        ? "«" + wrong.join("», «") + "» — старый формат Word: открой в Word и сохрани как .docx."
+        : "Не добавлено: «" + wrong.join("», «") + "». Подходят PDF, DOCX, TXT и фото страниц.";
+      note.hidden = !wrong.length;
+      sync();
+      render();
+    }
+    input.addEventListener("change", function () {
+      if (editable) { add(input.files); return; }
+      files = slice(input.files); render();
+    });
     zone.addEventListener("dragover", function (e) { e.preventDefault(); zone.classList.add("over"); });
     zone.addEventListener("dragleave", function () { zone.classList.remove("over"); });
     zone.addEventListener("drop", function (e) {
       e.preventDefault(); zone.classList.remove("over");
-      if (e.dataTransfer && e.dataTransfer.files.length) { input.files = e.dataTransfer.files; show(); }
+      if (!e.dataTransfer || !e.dataTransfer.files.length) return;
+      if (editable) { add(e.dataTransfer.files); return; }
+      input.files = e.dataTransfer.files; files = slice(input.files); render();
     });
+    render();
   });
 
   var lab = document.querySelector("[data-lab]");

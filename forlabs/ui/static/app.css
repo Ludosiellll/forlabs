@@ -195,6 +195,23 @@ table.t tr.click:hover td { background: var(--panel); }
 .filebtn:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
 .slot .filebtn { margin-top: 8px; min-height: 30px; padding: 4px 10px; font-size: 13px; }
 .files-picked { font-size: 13px; color: var(--muted); margin-top: 6px; }
+.picked-list { list-style: none; margin: 10px auto 0; padding: 0; max-width: 560px; text-align: left; }
+.picked-list li { display: flex; align-items: center; gap: 10px; margin-top: 6px; padding: 3px 3px 3px 12px;
+  background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); color: var(--ink); }
+.pick-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.pick-size { color: var(--faint); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.pick-x { flex: none; width: 32px; height: 32px; border: 0; border-radius: 4px; background: none; color: var(--muted);
+  font: inherit; font-size: 14px; line-height: 1; cursor: pointer; }
+.pick-x:hover { background: var(--err-soft); color: var(--err); }
+.pick-all { margin-top: 6px; }
+.pick-note { font-size: 13px; color: var(--warn); margin-top: 8px; }
+.dropzone [data-picked-many] { margin-top: 8px; }
+.src-names { margin: -4px 0 10px; }
+.replace-src { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--line-soft); }
+.replace-src > summary { cursor: pointer; color: var(--accent); font-weight: 500; width: max-content; }
+.replace-src form { margin-top: 10px; }
+.replace-src .dropzone { margin-bottom: 14px; }
+.restore-src { justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; }
 .auth { max-width: 400px; margin: 9vh auto 0; padding: 0 20px; }
 .auth .card { padding: 22px 22px 8px; }
 .auth .tabs { margin-bottom: 14px; }

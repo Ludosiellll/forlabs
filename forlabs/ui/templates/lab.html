@@ -6,6 +6,7 @@
     <div class="lab-title">{{ profile.full_name if profile else st.profile_id }} · {{ subject.name }}</div>
     <h1>ЛР {{ st.number }}</h1>
     {% if st.spec %}<p class="small muted">{{ st.spec.topic }}</p>{% endif %}
+    <p class="small muted src-names">{% if source_names %}Методичка: {{ source_names|join(', ') }} · {% endif %}<a href="{{ base_url }}?tab=spec&replace=1#replace">{{ 'заменить' if source_names else 'Заменить методичку' }}</a></p>
     <ol class="steps" data-steps>
       {% for key, title in steps %}
         {% set i = loop.index %}
@@ -209,6 +210,11 @@
       {% endif %}
     {% elif tab == 'spec' %}
       <div class="pane">
+        {% if restore_vid %}
+        <form method="post" action="{{ base_url }}/chat/revert/{{ restore_vid }}" class="notice row restore-src">
+          <span>Методичка заменена. Отчёт по прежней сохранён.</span>
+          <button class="btn small" type="submit" {{ 'disabled' if busy }}>Вернуть прежний отчёт</button></form>
+        {% endif %}
         {% if st.spec %}
         {% set spec_findings = st.findings|selectattr('stage', 'equalto', 'spec')|list %}
         {% if spec_findings %}<div class="notice warn">Проверь разбор:
@@ -255,6 +261,21 @@
         {% else %}
         <p class="muted">Разбор ещё не готов.</p>
         {% endif %}
+        <details class="replace-src" id="replace"{{ ' open' if open_replace }}>
+          <summary>Заменить методичку</summary>
+          <form method="post" action="{{ base_url }}/source" enctype="multipart/form-data">
+            {% if st.report %}<div class="notice warn small">Задания разберутся заново, и лабу нужно будет выполнить ещё раз. Нынешний отчёт сохранится — его можно будет вернуть.</div>{% endif %}
+            <div class="dropzone" data-dropzone>
+              <div>Перетащи сюда PDF, DOCX, TXT или фото страниц</div>
+              <label class="btn filebtn">Выбрать файлы
+                <input class="visually-hidden" type="file" name="files" multiple accept=".pdf,.docx,.txt,.md,.png,.jpg,.jpeg"></label>
+              <div class="files-picked" data-picked></div>
+            </div>
+            <div class="field"><label for="replace-text">Или вставь текст методички</label>
+              <textarea id="replace-text" name="text" rows="4"></textarea></div>
+            <button class="btn primary" type="submit" {{ 'disabled' if busy }}>Заменить и разобрать</button>
+          </form>
+        </details>
       </div>
     {% else %}
       <div class="pane">
