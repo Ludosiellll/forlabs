@@ -566,6 +566,7 @@ def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None) 
             try:
                 target, shot = _target_and_shot(plan, spec, shot, work, hand_in, static)
                 target.network = network
+                target.loopback = plan.language == "mysql"  # консоль mysql идёт на свой сервер по localhost
             except ValueError as e:
                 b.auto_note = f"Сам не снял: {e}."
                 continue

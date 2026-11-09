@@ -466,7 +466,8 @@ def main() -> int:
                 target = RunTarget(cmd=[] if php_web else list(spec.cmd), cwd=Path(spec.cwd), console=spec.console,
                                    url=spec.url or None, env=dict(spec.env or {}),
                                    server=list(spec.cmd) if php_web else None, title=None,
-                                   network=name in SANDBOX_CASES and SANDBOX_CASES[name][1])
+                                   network=name in SANDBOX_CASES and SANDBOX_CASES[name][1],
+                                   loopback=p.language == "mysql")
                 if name in SANDBOX_CASES:
                     target.env = {**target.env, "FORLABS_SECRET": env["FORLABS_SECRET"]}
                 shot = p.shots[0]

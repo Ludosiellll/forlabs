@@ -36,6 +36,7 @@ class RunTarget:
     title: str | None = None  # заголовок консоли (путь к программе, как при обычном запуске)
     env: dict = field(default_factory=dict)
     network: bool = False  # программе нужен интернет: только в песочнице (файлы пользователя ей закрыты)
+    loopback: bool = False  # программе нужен localhost (консоль mysql → свой сервер ForLabs): песочнице он закрыт
 
 
 @dataclass
@@ -248,7 +249,7 @@ class WindowsShooter:
                 return self._browser(target, shot, out)
             run = self._console if (mode == "console" or target.console) else self._window
             self._network = bool(target.network)
-            if self.container:
+            if self.container and not target.loopback:
                 self._in_container = True
                 try:
                     res = run(target, self._stage(target), shot, out)
@@ -256,13 +257,14 @@ class WindowsShooter:
                     res = ShotResult(False, reason=f"песочница: {type(e).__name__}: {e}")
                 finally:
                     self._in_container = False
-                if res.ok or not _launch_problem(res.reason):
+                if res.ok:
                     res.sandbox = "container"
                     return res
                 if target.network:  # без песочницы сетевая программа могла бы отправить файлы пользователя
                     return ShotResult(False, reason="программе нужен интернет, а запустить её в песочнице не вышло "
                                                     f"({res.reason}); без песочницы ForLabs такие программы не запускает",
                                       sandbox="container")
+                # программе в песочнице чего-то не хватило (или она и так ошибается) — повтор с уровнем Low
                 logging.getLogger("forlabs").info("в песочнице не вышло (%s) — снимаю с уровнем Low", res.reason)
             if target.network and self.low:
                 return ShotResult(False, reason="программе нужен интернет: ForLabs запускает такие программы только "
@@ -315,6 +317,8 @@ class WindowsShooter:
         tmp = root / ".tmp"
         tmp.mkdir(exist_ok=True)
         appcontainer.ensure_read(_tool_dirs(cmd, work))
+        if cmd and Path(cmd[0]).name.lower() == "node.exe":  # Node ищет настоящий путь через C:\ — песочнице закрыто
+            cmd = [cmd[0], "--preserve-symlinks", "--preserve-symlinks-main", *cmd[1:]]
         # без cmd.exe: в песочнице он отвечает «Access is denied»; кодировку ставит и окно держит сам помощник
         job = {"cmd": self._line(cmd), "cwd": str(work), "sid": sid,
                "env": {**(target.env or {}), "TEMP": str(tmp), "TMP": str(tmp), "PYTHONNOUSERSITE": "1"},
