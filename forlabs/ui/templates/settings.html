@@ -18,11 +18,14 @@
   </section>
   {% endif %}
   <form method="post" action="/settings">
+    {% if show_mode %}
     <fieldset><legend>Режим работы</legend>
       <label class="radio"><input type="radio" name="mode" value="cloud" {{ 'checked' if s.mode == 'cloud' }}> Облако — вход по e-mail, ключ модели выдаёт администратор</label><br>
       <label class="radio"><input type="radio" name="mode" value="local" {{ 'checked' if s.mode == 'local' }}> Локально — данные только на этом ПК, свой ключ</label>
       <div class="hint" style="margin-bottom:12px">В облаке ключ модели хранится в Supabase в зашифрованном виде и участникам не виден.</div>
     </fieldset>
+    {% endif %}
+    {% if show_model %}
     <fieldset><legend>Модель</legend>
       <div class="grid2">
         <div class="field"><label for="model">Модель</label>
@@ -38,6 +41,7 @@
         <input id="api_key" name="api_key" type="password" autocomplete="off" placeholder="{{ 'Ключ сохранён — вставь новый, чтобы заменить' if has_key else 'sk-…' }}">
         <div class="hint">Хранится в диспетчере учётных данных Windows, не в файлах.</div></div>
     </fieldset>
+    {% endif %}
     <fieldset><legend>Программы на этом ПК</legend>
       <p class="small">Word: <b>{{ 'найден' if word else 'не найден' }}</b>{% if not word %} — номера страниц посчитает LibreOffice, «Продолжение листинга» расставится, когда запустишь на ПК с Word.{% endif %}</p>
       <div class="field"><label for="soffice_path">LibreOffice (soffice)</label>

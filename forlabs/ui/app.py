@@ -46,6 +46,7 @@ from forlabs.core.settings import (
 from forlabs.core.store import safe_file_name, safe_name
 from forlabs.core.subjects import Subject, all_subjects, get_subject
 from forlabs.pipeline.images import MAX_IMAGES, normalize_screenshot, prepare_image
+from forlabs import version as _version
 from forlabs.pipeline.run import (
     PipelineError,
     docx_fresh,
@@ -159,7 +160,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
     @app.middleware("http")
     async def require_login(request: Request, call_next):
         path = request.url.path
-        open_paths = ("/login", "/register", "/static", "/settings", "/health", "/focus")
+        open_paths = ("/login", "/register", "/static", "/health", "/focus")
         if ctx.cloud and not ctx.auth.session and not path.startswith(open_paths):
             return RedirectResponse("/login", status_code=303)
         return await call_next(request)
@@ -818,27 +819,43 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
                 my_balance, balance_state = ctx.store.my_balance()
             except CloudError:
                 pass
+        admin = can_tune_model()
         return render(request, "settings.html", s=ctx.settings, presets=API_PRESETS, has_key=bool(get_api_key()),
+                      show_mode=not _version.frozen() and admin, show_model=admin,
                       word=word_com.available(), soffice=libreoffice.find_soffice(ctx.settings.soffice_path),
                       nav="settings", my_balance=my_balance, balance_state=balance_state,
                       model_choices=MODEL_CHOICES)
+
+    def can_tune_model() -> bool:
+        """Режим, модель, адрес API и ключ: в облаке — только администратор (студент не уйдёт мимо подписки)."""
+        if not ctx.cloud:
+            return True
+        try:
+            m = ctx.store.member() if ctx.auth.session else None
+        except CloudError:
+            return False
+        return bool(m and m.role == "admin" and m.approved)
 
     @app.post("/settings")
     async def settings_save(request: Request):
         if ctx.running:  # смена режима или модели посреди работы над лабой
             return redirect("/settings", err=BUSY_MESSAGE)
         f = await request.form()
+        admin = can_tune_model()
         data = ctx.settings.model_dump()
-        for key in ("mode", "base_url", "model", "soffice_path", "tesseract_path", "browser_channel"):
+        keys = ("soffice_path", "tesseract_path", "browser_channel") + (("mode", "base_url", "model") if admin else ())
+        for key in keys:
             if key in f:
                 data[key] = (f.get(key) or "").strip() or None
+        if _version.frozen():
+            data["mode"] = "cloud"
         data["mode"] = data.get("mode") or "cloud"
         data["base_url"] = data.get("base_url") or Settings().base_url
         data["model"] = data.get("model") or Settings().model
         ctx.settings = Settings.model_validate(data)
         save_settings(ctx.settings)
         ctx.notice = ""
-        key = (f.get("api_key") or "").strip()
+        key = (f.get("api_key") or "").strip() if admin else ""
         if key and not set_api_key(key):
             os.environ["FORLABS_API_KEY"] = key
         ctx.reset()

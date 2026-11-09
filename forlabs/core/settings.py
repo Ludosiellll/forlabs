@@ -63,6 +63,15 @@ SETTINGS_WERE_RESET = False  # файл настроек был повреждё
 
 
 def load_settings() -> Settings:
+    s = _load_settings()
+    from forlabs.version import frozen
+
+    if frozen() and s.mode != "cloud":  # программа для студентов работает только через облако (подписка, лимиты)
+        s = s.model_copy(update={"mode": "cloud"})
+    return s
+
+
+def _load_settings() -> Settings:
     f = _settings_file()
     if f.exists():
         try:
