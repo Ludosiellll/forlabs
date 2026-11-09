@@ -24,7 +24,7 @@
           <input id="doc_author" name="doc_author" type="text" value="{{ p.doc_author }}" placeholder="Иванов Иван"></div>
         <div class="field"><label for="output_root">Папка сдачи</label>
           <input id="output_root" name="output_root" type="text" value="{{ p.output_root }}" placeholder="D:\Лабы\Иванов">
-          <div class="hint">Сюда кладутся готовые файлы: Предмет\ЛР N\…</div></div>
+          <div class="hint">Сюда ForLabs кладёт готовые файлы: Предмет\ЛР N\…</div></div>
       </div>
     </fieldset>
     <fieldset><legend>Титульный лист</legend>
@@ -38,7 +38,7 @@
         <input id="specialty_lines_{{ i }}" name="specialty_lines_{{ i }}" type="text" value="{{ p.specialty_lines[i] if p.specialty_lines|length > i else '' }}"></div>{% endfor %}
     </fieldset>
     <fieldset><legend>Предметы</legend>
-      <p class="small muted">Отметь предметы этого студента. Название пойдёт на титул, вариант — в задания.</p>
+      <p class="small muted">Отметь предметы этого студента.</p>
       {% for sid, s in subjects.items() %}
         {% set e = p.enrollment(sid) %}
         <div class="card" style="margin-bottom:10px">
@@ -63,18 +63,17 @@
             <div class="field"><label for="v_{{ sid }}">Вариант (по журналу)</label>
               <input id="v_{{ sid }}" name="enr_{{ sid }}_variant" type="number" min="1" value="{{ e.variant if e and e.variant else s.default_variant }}"></div>
             <div class="field"><label for="w_{{ sid }}">Номер рабочего места</label>
-              <input id="w_{{ sid }}" name="enr_{{ sid }}_workplace" type="number" min="1" value="{{ e.workplace if e and e.workplace else '' }}" placeholder="если просят">
-              <div class="hint">Для заданий «по номеру компьютера».</div></div>
+              <input id="w_{{ sid }}" name="enr_{{ sid }}_workplace" type="number" min="1" value="{{ e.workplace if e and e.workplace else '' }}" placeholder="если задания по номеру ПК"></div>
           </div>
         </div>
       {% endfor %}
       <details class="card add-subject" style="margin-bottom:10px">
-        <summary style="font-weight:600;cursor:pointer">＋ Добавить свой предмет <span class="small muted" style="font-weight:400">— если нужного нет в списке</span></summary>
+        <summary style="font-weight:600;cursor:pointer">＋ Добавить свой предмет</summary>
         <div class="grid2" style="margin-top:8px">
           <div class="field"><label for="ns_name">Название предмета</label>
             <input id="ns_name" name="new_subject_name" type="text" maxlength="200" placeholder="Технология разработки программного обеспечения"></div>
           <div class="field"><label for="ns_short">Короткое название</label>
-            <input id="ns_short" name="new_subject_short" type="text" maxlength="30" placeholder="ТРПО — можно не заполнять"></div>
+            <input id="ns_short" name="new_subject_short" type="text" maxlength="30" placeholder="ТРПО, необязательно"></div>
         </div>
         <div class="grid2">
           <div class="field"><label for="ns_kind">Что делают на лабах</label>
@@ -90,7 +89,7 @@
             <select id="ns_style" name="new_subject_style"><option value="long">«Тема работы:»</option>
               <option value="short">«Тема:» + «Оснащение работы:»</option></select></div>
         </div>
-        <div class="hint">Предмет добавится в список и сразу будет отмечен у этого студента. Оформление у всех предметов общее.</div>
+        <div class="hint">Новый предмет сразу отметится у этого студента. Оформление у всех предметов общее.</div>
       </details>
     </fieldset>
     <div class="row"><button class="btn primary" type="submit">Сохранить</button>

@@ -26,11 +26,11 @@
   {% endif %}
 
   <h2 style="margin-top:32px">Новый предмет</h2>
-  <p class="small muted">Оформление у всех предметов общее. Добавленный предмет появится в профилях, отметь его там.</p>
+  <p class="small muted">Добавленный предмет отметь в профиле. Оформление у всех предметов общее.</p>
   <form method="post" action="/subjects/add" class="card" style="max-width:760px">
     <div class="grid2">
       <div class="field"><label for="sname">Название</label><input id="sname" name="name" type="text" required placeholder="Объектно-ориентированное программирование"></div>
-      <div class="field"><label for="sshort">Короткое название</label><input id="sshort" name="short_name" type="text" placeholder="ООП — можно не заполнять"></div>
+      <div class="field"><label for="sshort">Короткое название</label><input id="sshort" name="short_name" type="text" placeholder="ООП, необязательно"></div>
     </div>
     <div class="grid3">
       <div class="field"><label for="skind">Что делают на лабах</label>

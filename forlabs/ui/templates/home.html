@@ -27,7 +27,7 @@
       {% endfor %}
     </ul>
     {% else %}
-    <p class="small muted">В профиле не отмечено ни одного предмета. <a href="/profiles/{{ q(current.id) }}">Отметить</a></p>
+    <p class="small muted">В профиле не отмечены предметы. <a href="/profiles/{{ q(current.id) }}">Отметить</a></p>
     {% endif %}
   </aside>
   <main class="main">
@@ -58,7 +58,7 @@
       </table>
     </div>
     {% else %}
-    <div class="empty">По этому предмету лаб пока нет. Нажми «Новая лаба» и добавь методичку.</div>
+    <div class="empty">По этому предмету лаб пока нет.</div>
     {% endif %}
   </main>
 </div>

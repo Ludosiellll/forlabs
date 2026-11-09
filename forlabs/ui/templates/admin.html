@@ -4,7 +4,7 @@
 <main class="page admin" data-balances="/admin/balances">
   {% include "_flash.html" %}
   <div class="row"><h1>Админ</h1><span class="spacer"></span><a class="btn small" href="/admin/support">Поддержка</a></div>
-  <p class="muted">Участники, подписки, ключи и расход модели. Цифры — за последние 30 дней.</p>
+  <p class="muted">Цифры — за последние 30 дней.</p>
 
   <div class="admin-setup">
     <section class="box" aria-labelledby="b-shared">
@@ -12,7 +12,7 @@
       {% if shared_key %}
         <p class="small">Задан: <span class="mono">••••{{ shared_key[0] }}</span>{% if shared_set %} <span class="muted">· {{ shared_set }}</span>{% endif %}</p>
       {% else %}
-        <p class="small muted">Не задан — модель работает только у тех, кому в карточке выдан свой ключ.</p>
+        <p class="small muted">Не задан: модель работает только у тех, кому выдан свой ключ.</p>
       {% endif %}
       <form method="post" action="/admin/shared-key" class="row until">
         <input type="hidden" name="action" value="set">
@@ -26,12 +26,9 @@
     <section class="box" aria-labelledby="b-help">
       <h2 id="b-help">Где что настраивается</h2>
       <ul class="small help-list">
-        <li><b>Доступ человеку</b> — нажми на его строку в «Участниках»: одобрить, продлить на N дней, до даты, без срока, пробный доступ, забрать.</li>
-        <li><b>Ключ модели</b> человеку — там же, блок «Ключ модели»: вставить, заменить, убрать; разрешить или запретить общий ключ.</li>
-        <li><b>Лимит токенов в день</b> — там же (пусто — общий 1 000 000).</li>
-        <li><b>Общий ключ</b> — слева, для всех без своего ключа.</li>
-        <li><b>Поддержка</b> — кнопка «Поддержка» вверху; Telegram подключается там же.</li>
-        <li><b>Правила для модели</b> — пункт «Правила» в меню (видишь только ты).</li>
+        <li>Подписка, пробный доступ, ключ модели и лимит токенов — в карточке участника: нажми на его строку в «Участниках».</li>
+        <li>Telegram для поддержки подключается по кнопке «Поддержка» вверху.</li>
+        <li>Правила для модели — пункт «Правила» в меню, его видишь только ты.</li>
       </ul>
     </section>
   </div>

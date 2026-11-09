@@ -11,7 +11,7 @@ from test_admin import admin, fake, make_client  # noqa: E402, F401
 def test_admin_page_has_shared_key_box_and_help(admin):
     page = admin.get("/admin").text
     assert "Общий ключ модели" in page and 'action="/admin/shared-key"' in page
-    assert "Где что настраивается" in page and "Ключ модели" in page
+    assert "Где что настраивается" in page and "ключ модели и лимит токенов — в карточке участника" in page
 
 
 def test_admin_sets_and_clears_shared_key(admin, fake):

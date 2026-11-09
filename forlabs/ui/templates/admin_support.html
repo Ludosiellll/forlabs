@@ -22,10 +22,10 @@
       {% if telegram %}
         <p class="small">Telegram подключён{% if bot %} (бот @{{ bot }}){% endif %}: сообщения студентов приходят туда, отвечай реплаем.</p>
       {% else %}
-        <p class="small">Telegram не подключён — сообщения видны только здесь.</p>
+        <p class="small">Telegram не подключён, сообщения видны только здесь.</p>
       {% endif %}
       {% if setup %}
-        <p class="small">Открой ссылку в Telegram и нажми «Start» — бот запомнит этот чат (ссылка действует 30 минут):<br>
+        <p class="small">Открой ссылку в Telegram и нажми «Start», бот запомнит этот чат. Ссылка действует 30 минут:<br>
           <a href="{{ setup.link }}" target="_blank" rel="noopener">{{ setup.link }}</a></p>
       {% endif %}
       {% if setup_error %}<div class="flash err" role="alert">{{ setup_error }}</div>{% endif %}

@@ -48,12 +48,12 @@
 </aside>
 {% endif %}
 {% if ctx.cloud and ctx.store.offline %}
-<div class="offline-banner" role="status">Нет связи с облаком — показана копия с этого компьютера. Смотреть и скачивать
-  лабы можно; выполнять и править — когда связь появится.</div>
+<div class="offline-banner" role="status">Нет связи с облаком, показана копия с этого компьютера. Лабы можно смотреть и скачивать,
+  а выполнять и править — когда связь вернётся.</div>
 {% endif %}
 {% if member and member.role != 'admin' and member.approved and member.access_state == 'expired' %}
-<div class="sub-banner" role="alert">Подписка закончилась {{ date_ru(member.access_until) }} — напиши администратору, чтобы он её продлил.
-  Свои лабы можно смотреть и скачивать, новые работы модель не выполнит.</div>
+<div class="sub-banner" role="alert">Подписка закончилась {{ date_ru(member.access_until) }}. Свои лабы можно смотреть и скачивать,
+  новые модель не выполнит. Чтобы продлить подписку, напиши администратору.</div>
 {% endif %}
 {% endblock %}
 {% block body %}{% endblock %}

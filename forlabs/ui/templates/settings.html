@@ -11,7 +11,7 @@
     {% if balance_state == 'ok' %}
       <p class="small">Остаток на твоём ключе: <b>{{ fmt_tokens(my_balance) }}</b> токенов, {{ labs_estimate(my_balance) }}.</p>
     {% elif balance_state == 'no_key' %}
-      <p class="small muted">Свой ключ тебе ещё не выдан{{ ' — работа идёт через общий ключ' if member.allow_shared_key }}. Ключи выдаёт администратор.</p>
+      <p class="small muted">Свой ключ ещё не выдан{{ ', работа идёт через общий' if member.allow_shared_key }}. Ключи выдаёт администратор.</p>
     {% else %}
       <p class="small muted">Остаток сейчас не узнать: нет связи с облаком.</p>
     {% endif %}
@@ -22,7 +22,7 @@
     <fieldset><legend>Режим работы</legend>
       <label class="radio"><input type="radio" name="mode" value="cloud" {{ 'checked' if s.mode == 'cloud' }}> Облако — вход по e-mail, ключ модели выдаёт администратор</label><br>
       <label class="radio"><input type="radio" name="mode" value="local" {{ 'checked' if s.mode == 'local' }}> Локально — данные только на этом ПК, свой ключ</label>
-      <div class="hint" style="margin-bottom:12px">В облаке ключ модели хранится в Supabase в зашифрованном виде и участникам не виден.</div>
+      <div class="hint" style="margin-bottom:12px">В облаке ключ модели хранится в Supabase зашифрованным, участники его не видят.</div>
     </fieldset>
     {% endif %}
     {% if show_model %}
@@ -41,13 +41,13 @@
       </div>
       {% if show_mode %}
       <div class="field"><label for="api_key">Ключ API (для локального режима)</label>
-        <input id="api_key" name="api_key" type="password" autocomplete="off" placeholder="{{ 'Ключ сохранён — вставь новый, чтобы заменить' if has_key else 'sk-…' }}">
+        <input id="api_key" name="api_key" type="password" autocomplete="off" placeholder="{{ 'Ключ сохранён. Вставь новый, чтобы заменить' if has_key else 'sk-…' }}">
         <div class="hint">Хранится в диспетчере учётных данных Windows, не в файлах.</div></div>
       {% endif %}
     </fieldset>
     {% endif %}
     <fieldset><legend>Программы на этом ПК</legend>
-      <p class="small">Word: <b>{{ 'найден' if word else 'не найден' }}</b>{% if not word %} — номера страниц посчитает LibreOffice, «Продолжение листинга» расставится, когда запустишь на ПК с Word.{% endif %}</p>
+      <p class="small">Word: <b>{{ 'найден' if word else 'не найден' }}</b>{% if not word %}. Номера страниц посчитает LibreOffice, а «Продолжение листинга» появится после пересборки на ПК с Word.{% endif %}</p>
       <div class="field"><label for="soffice_path">LibreOffice (soffice)</label>
         <input id="soffice_path" name="soffice_path" type="text" value="{{ s.soffice_path or '' }}" placeholder="{{ soffice or 'не найден' }}"></div>
       <div class="field"><label for="tesseract_path">Tesseract для фото методичек</label>
