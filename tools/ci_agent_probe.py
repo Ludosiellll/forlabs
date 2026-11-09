@@ -457,7 +457,7 @@ def typing_stops_when_another_window_takes_focus(res):
         time.sleep(1.5)
         leaked = got.read_text(encoding="utf-8") if got.exists() else ""
         res["leaked_chars"] = len(leaked)
-        assert len(leaked) <= 8, f"в чужое окно ушло {len(leaked)} знаков"
+        assert len(leaked) <= 2, f"в чужое окно ушло {len(leaked)} знаков"
     finally:
         tk.kill()
         kill_tree(desk.root)

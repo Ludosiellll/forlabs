@@ -402,7 +402,9 @@ class WinDesk:
         if self.watch:
             self.watch.check()
         now = _u.GetForegroundWindow()
-        if now != fg and (not now or self._pid_of(now) not in self.targets()):
+        if now == fg:  # обычный случай — без перебора процессов: проверка идёт перед каждым знаком
+            return
+        if not now or self._pid_of(now) not in self.targets():
             raise Blocked("окно программы ушло с переднего плана — набор остановлен, чтобы текст не попал в "
                           "чужое окно")
 
@@ -449,8 +451,7 @@ class WinDesk:
                     held.remove(vk)
             elif a.do == "type":
                 for i, unit in enumerate(utf16_units(a.text.replace("\r\n", "\n"))):
-                    if i % 8 == 0:  # студент нажал Esc или щёлкнул в другое окно — остальное туда не уйдёт
-                        self._still_here(fg)
+                    self._still_here(fg)  # студент нажал Esc или щёлкнул в другое окно — остальное туда не уйдёт
                     if unit == 0x0A:
                         _send([_key(0x0D), _key(0x0D, flags=KEYUP)])
                     elif unit == 0x09:

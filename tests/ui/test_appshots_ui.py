@@ -32,7 +32,10 @@ def lab(tmp_home, tmp_path, monkeypatch):
 
 
 def test_block_lists_figure_program_and_how_to_get_it(tmp_home, tmp_path, monkeypatch):
+    from forlabs.agent import apps
+
     c, ctx, url = lab(tmp_home, tmp_path, monkeypatch)
+    monkeypatch.setattr(apps, "installed", lambda *a, **k: {})  # в CI на Windows IDLE есть — здесь «нет»
     page = c.get(url).text
     assert "Снимки в программах: 1" in page and "IDLE (Python)" in page
     assert url + "/apps/run" in page and "Esc — остановить" in page
@@ -54,6 +57,9 @@ def test_program_path_must_be_an_existing_exe(tmp_home, tmp_path, monkeypatch):
 
 
 def test_run_outside_windows_is_refused_politely(tmp_home, tmp_path, monkeypatch):
+    import sys
+
     c, ctx, url = lab(tmp_home, tmp_path, monkeypatch)
+    monkeypatch.setattr(sys, "platform", "linux")  # и в CI на Windows: настоящую программу тест не запускает
     r = c.post(url + "/apps/run", follow_redirects=False)
     assert "err=" in r.headers["location"]
