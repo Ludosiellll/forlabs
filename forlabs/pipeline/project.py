@@ -92,15 +92,23 @@ PROJECT_SYSTEM = """Ты собираешь из отчёта по лабора�
   («source shop.sql\\nsource select.sql\\n»), или сами запросы; expect — значение из результата. Скрипты должны
   выполняться повторно без ошибок: перед CREATE DATABASE — DROP DATABASE IF EXISTS той же базы, перед
   CREATE USER — DROP USER IF EXISTS того же пользователя.
-- mode "manual" + reason — только если снять может лишь студент: окно среды разработки, конструктора или
-  обозревателя решений, phpMyAdmin, Блокнот и другие программы, страница после ввода данных или отправки формы.
+- mode "app" + app + goal (+ open) — окно другой программы, которое ForLabs снимет сам, работая в ней: среда
+  разработки с кодом или обозревателем решений, конструктор формы, SSMS, Workbench, Блокнот. app — ключ: {apps};
+  goal — что сделать (например «открыть Program.cs в редакторе, чтобы был виден метод Main»); open — файлы
+  проекта, которые открыть при запуске (для Visual Studio — файл .csproj или .sln и нужный .cs); expect — что
+  должно быть видно на снимке.
+- mode "manual" + reason — только если снять может лишь студент: phpMyAdmin и сайты со входом, телефон, фото.
 
 Формат:
 {"language": "csharp", "kind": "winforms", "name": "Калькулятор", "entry": "Program.cs",
  "files": [{"path": "Program.cs", "content": "…"}, {"path": "Form1.cs", "content": "…"}],
  "listings": [{"section": 1, "block": 2, "file": "Form1.cs"}],
  "shots": [{"section": 1, "block": 3, "mode": "window", "steps": […], "expect": "Результат:"},
-           {"section": 2, "block": 2, "mode": "manual", "reason": "окно конструктора форм"}]}"""
+           {"section": 2, "block": 2, "mode": "app", "app": "visualstudio", "goal": "открыть Form1.cs в конструкторе",
+            "open": ["Form1.cs"], "expect": "конструктор формы Form1 с кнопкой «Вычислить»"}]}"""
+_AGENT_APPS = __import__("forlabs.agent.apps", fromlist=["APPS"]).APPS
+PROJECT_SYSTEM = PROJECT_SYSTEM.replace("{apps}", ", ".join(
+    k for k, a in _AGENT_APPS.items() if a.kind in ("ide", "db", "editor")))
 
 PARTS_NOTE = """Прошлый ответ не поместился целиком: проект большой. Сейчас верни план без текста файлов — у каждого
 файла в files только path (content не пиши); listings и shots — полностью, как обычно. Тексты файлов я попрошу
@@ -490,6 +498,21 @@ def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None) 
                 continue
             b.need_tool = None
             shot = shots.get((n, bi))
+            if shot is not None and shot.mode == "app":  # окно среды разработки и т.п. — агент, по кнопке
+                from forlabs.agent import apps as agent_apps
+                from forlabs.core.models import AppTask
+                from forlabs.pipeline import appshots
+
+                project = hand_in.name if hand_in != work else ""
+                files = list(shot.open)
+                if shot.app == "visualstudio":  # файл проекта создаёт ForLabs — модель его не знает
+                    files = [f.name for f in sorted(hand_in.glob("*")) if f.suffix in (".sln", ".slnx", ".csproj",
+                                                                                       ".vcxproj")][:1] + files
+                opens = [f"{project}/{f}" if project else f for f in files]
+                b.app_task = AppTask(app=shot.app, goal=shot.goal, shot=shot.expect, open=opens)
+                b.auto_note = appshots.note_for(b, agent_apps.installed(getattr(pipe, "app_paths", {}))
+                                                if sys.platform == "win32" else {})
+                continue
             if shot is None or shot.mode == "manual":
                 b.auto_note = f"Этот снимок делаешь ты: {shot.reason}." if shot and shot.reason else None
                 continue

@@ -111,6 +111,9 @@ class Pipeline:
         self.memory = memory
         self.projects = False  # этап «Проект»: собрать программу лабы и снять её окна (в приложении включён)
         self.shooter = None  # кто снимает окна; None — WindowsShooter в Windows
+        self.agents = False  # снимки в программах студента (агент): план после этапа «Проект» (в приложении включён)
+        self.app_paths: dict[str, str] = {}  # программы, которые студент указал сам (ключ → путь)
+        self.app_hooks: tuple = (None, None)  # свернуть и вернуть окно ForLabs на время работы агента
         self._locks: dict[str, threading.Lock] = {}
         self.renamed: dict[str, str] = {}
         self.background: set[str] = set()  # фоновая работа после «Сдать» (память предмета): окно спросит при закрытии
@@ -794,6 +797,30 @@ class Pipeline:
             emit(f"Программу собрать не получилось ({getattr(e, 'message_ru', None) or e}). Снимки сделай сам.", "warn")
         return self._save(st)
 
+    def _plan_app_shots(self, st: LabState, llm) -> LabState:
+        """Какие рисунки ForLabs снимет сам в программах студента. Сбой — не ошибка лабы."""
+        from forlabs.pipeline import appshots
+
+        if not self.agents or not st.report or not appshots.pending(st):
+            return st
+        emit = lambda text, kind="info": self._emit(st, text, kind, step="check")  # noqa: E731
+        try:
+            st = appshots.plan(self, st, llm, emit)
+        except Exception as e:  # noqa: BLE001
+            logging.getLogger("forlabs").warning("план снимков в программах: %s", e, exc_info=True)
+        return self._save(st)
+
+    def app_shots(self, st: LabState) -> LabState:
+        """«Сделать снимки в программах»: агент открывает программы и снимает рисунки с app_task."""
+        from forlabs.pipeline import appshots
+
+        emit = lambda text, kind="info": self._emit(st, text, kind, step="check")  # noqa: E731
+        with self.lock(st):
+            before, after = self.app_hooks
+            st = appshots.run(self, st, self._llm(st), emit, before=before, after=after)
+            st = self._save(st)
+        return self.render(st)
+
     @staticmethod
     def _auto_shots(st: LabState) -> int:
         return sum(1 for s in st.report.sections for b in s.blocks
@@ -1169,6 +1196,7 @@ class Pipeline:
                 st.docx_sha = None
                 self._save(st)  # отчёт целиком — до вёрстки (Word может работать минуты)
                 st = self._project(st, llm)
+                st = self._plan_app_shots(st, llm)
                 return self.render(st)
             except Exception as e:  # любая ошибка — в статус лабы, а не в никуда
                 return self._fail(st, e)

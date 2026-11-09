@@ -81,6 +81,15 @@ class NumberedList(BaseModel):
     items: list[str]
 
 
+class AppTask(BaseModel):
+    """Рисунок, который ForLabs снимет сам, работая в программе студента (Visual Studio, SSMS, Packet Tracer…)."""
+    app: str  # ключ из forlabs.agent.apps.APPS
+    goal: str  # что сделать в программе
+    shot: str = ""  # что должно быть видно на снимке (проверка снимка); пусто — goal
+    open: list[str] = Field(default_factory=list)  # файлы лабы, которые открыть (пути от папки лабы)
+    allow: list[str] = Field(default_factory=list)  # «опасные» кнопки, нужные именно здесь («Удалить»)
+
+
 class Figure(BaseModel):
     type: Literal["figure"] = "figure"
     topic: str
@@ -88,7 +97,8 @@ class Figure(BaseModel):
     slot: str | None = None
     width_cm: float | None = None
     auto_note: str | None = None  # почему ForLabs не снял сам (студенту в «Нужно от тебя»)
-    need_tool: str | None = None  # чего не хватает на компьютере (dotnet, python…) — кнопка «Установить»
+    need_tool: str | None = None  # чего не хватает на компьютере (dotnet, python…; app:ключ — программа агента)
+    app_task: AppTask | None = None  # снимет агент в программе (кнопка «Сделать снимки в программах»)
 
 
 class Listing(BaseModel):

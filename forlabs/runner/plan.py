@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 Language = Literal["csharp", "cpp", "python", "java", "javascript", "web", "php", "go", "mysql"]
 Kind = Literal["console", "winforms", "wpf", "web", "script", "sql", "gui"]
-ShotMode = Literal["window", "console", "browser", "manual"]
+ShotMode = Literal["window", "console", "browser", "manual", "app"]  # app — агент в программе студента
 SHOT_ACTIONS = ("set", "select", "click", "check", "type", "key", "wait", "scroll", "open")
 NEEDS_TARGET = {"set", "select", "click", "check"}
 NEEDS_VALUE = {"set", "select", "type", "key", "open"}
@@ -124,13 +124,22 @@ class ShotPlan(_Model):
     url: str = ""
     expect: str = ""
     reason: str = ""  # почему снимок делает студент (mode == "manual")
+    app: str = ""  # mode == "app": ключ программы (forlabs.agent.apps.APPS)
+    goal: str = ""  # mode == "app": что сделать в программе
+    open: list[str] = Field(default_factory=list)  # mode == "app": файлы проекта, которые открыть
 
     @field_validator("mode", mode="before")
     @classmethod
     def _mode(cls, v):
         return str(_text(v)).strip().lower() or "window"
 
-    _strings = field_validator("input", "url", "expect", "reason", mode="before")(_text)
+    _strings = field_validator("input", "url", "expect", "reason", "app", "goal", mode="before")(_text)
+
+    @field_validator("open", mode="before")
+    @classmethod
+    def _open(cls, v):
+        items = v if isinstance(v, list) else ([v] if v else [])
+        return [str(x).replace("\\", "/").removeprefix("./") for x in items]
 
 
 class ProjectPlan(_Model):
@@ -286,6 +295,16 @@ def validate(plan: ProjectPlan) -> list[str]:
         where = f"Снимок {shot.section}.{shot.block}"
         if shot.mode == "browser" and (why := _url_problem(shot.url)):
             out.append(f"{where}: {why}")
+        if shot.mode == "app":
+            from forlabs.agent.apps import APPS
+
+            if shot.app not in APPS:
+                out.append(f"{where}: неизвестная программа «{shot.app}» (можно: {', '.join(APPS)})")
+            if not shot.goal.strip():
+                out.append(f"{where}: не сказано, что сделать в программе (goal)")
+            for f in shot.open:
+                if plan.file(f) is None:
+                    out.append(f"{where}: файла «{f}» нет в проекте")
         for step in shot.steps:
             if step.action not in SHOT_ACTIONS:
                 out.append(f"{where}: неизвестное действие «{step.action}» (можно: {', '.join(SHOT_ACTIONS)})")

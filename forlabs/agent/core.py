@@ -112,6 +112,7 @@ class Action(BaseModel):
 
 class Step(BaseModel):
     thought: str = ""
+    plan: str = ""  # короткий план; новый заменяет старый
     actions: list[Action] = Field(default_factory=list)
 
     @field_validator("actions", mode="before")
@@ -166,7 +167,10 @@ class Desk(Protocol):
 
 SYSTEM = """Ты управляешь программой на компьютере студента, чтобы получить снимок окна для отчёта по лабораторной.
 Тебе дают снимок окна (координаты — пиксели этой картинки, (0,0) — левый верхний угол) и список элементов окна
-с номерами и центрами. Отвечай только JSON: {"thought": "коротко: что видишь и что делаешь", "actions": [...]}.
+с номерами и центрами. Отвечай только JSON:
+{"thought": "коротко: что видишь и что делаешь", "plan": "…", "actions": [...]}.
+"plan" — в первом ответе: 3–7 коротких пунктов, как дойти до нужного снимка; потом пиши его, только если план
+поменялся (пустая строка — прежний план в силе).
 
 Действия (от 1 до 5 за ответ):
 - {"do":"click","el":N} или {"do":"click","x":X,"y":Y}; так же "double_click" и "right_click"
@@ -191,6 +195,8 @@ SYSTEM = """Ты управляешь программой на компьюте
   от строки формул (щёлкни его, набери A4, Enter) или Ctrl+Home и стрелки; в тексте — стрелки, Home, End, Ctrl+End;
   в списках — стрелки. Таблица в Word и Writer — Ctrl+F12 (Writer) или меню «Вставка → Таблица».
 - Не трогай лишнего: поля стиля и шрифта, боковые панели, кнопки панели инструментов, если они не нужны для задачи.
+- Ошибся (текст не туда, лишнее окно, не та ячейка) — отмени Ctrl+Z или закрой окно Esc, а не исправляй вручную.
+- Перед набором убедись, куда попадёт текст: курсор в нужном поле, в таблице — нужная ячейка (видно в поле имени).
 - Ввод в ячейки: набери значение и Enter (курсор уйдёт вниз); несколько ячеек подряд — одним набором через \n.
 - Делай только то, что нужно для задачи: не удаляй и не перезаписывай чужие файлы, не меняй настройки Windows,
   не входи в учётные записи, ничего не покупай, не открывай сайты.
@@ -275,7 +281,8 @@ def to_window(action: Action, scale: float) -> Action:
     return action.model_copy(update=upd)
 
 
-def _messages(task: Task, obs: Observation, url: str, history: list[str], zoom: tuple | None = None) -> list[dict]:
+def _messages(task: Task, obs: Observation, url: str, history: list[str], zoom: tuple | None = None,
+              plan: str = "") -> list[dict]:
     w, h = obs.image.size
     shown = (round(w * obs.scale), round(h * obs.scale))
     lines = [f"Задача: {task.goal}"]
@@ -286,6 +293,8 @@ def _messages(task: Task, obs: Observation, url: str, history: list[str], zoom: 
     if task.folder:
         lines.append(f"Папка лабы (сохранять только сюда): {task.folder}")
     lines += [f"Подсказка: {x}" for x in task.hints[:8]]
+    if plan:
+        lines.append("Твой план:\n" + plan[:800])
     if history:
         lines.append("Уже сделано:\n" + "\n".join(f"{i}. {x}" for i, x in
                                                    enumerate(history[-HISTORY:], max(1, len(history) - HISTORY + 1))))
@@ -336,6 +345,7 @@ def run(task: Task, desk: Desk, llm, on_step: Callable[[str], None] | None = Non
     say = on_step or (lambda text: None)
     fails = asked = same = repeat = 0
     batch_sig = prev_sig = None
+    plan = ""
     deadline = clock() + task.seconds
     before = last_batch = zoom_at = None
     try:
@@ -364,7 +374,9 @@ def run(task: Task, desk: Desk, llm, on_step: Callable[[str], None] | None = Non
             if zoom_at is not None:
                 big, corner = zoomed(small, *zoom_at)
                 zoom_img, zoom_at = (data_url(big), corner), None
-            step = llm.json(_messages(task, obs, url, log, zoom_img), Step, max_tokens=1200, temperature=0.2)
+            step = llm.json(_messages(task, obs, url, log, zoom_img, plan), Step, max_tokens=1200, temperature=0.2)
+            if step.plan.strip():
+                plan = step.plan.strip()
             if step.thought:
                 say(step.thought)
             if not step.actions:

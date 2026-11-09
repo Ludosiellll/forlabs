@@ -140,6 +140,9 @@ def main() -> int:
                 range(args.repeat) if not args.names or name in args.names]
         for name, base in runs:
             sc = scenarios(Path(tempfile.mkdtemp(prefix="ЛР 1 ")))[base]
+            from forlabs.agent.apps import APPS
+
+            sc["task"] = sc["task"].model_copy(update={"hints": sc["task"].hints + APPS["libreoffice"].hints})
             profile = Path(tempfile.mkdtemp(prefix="lo-profile-"))
             proc = subprocess.Popen([*sc["cmd"], f"-env:UserInstallation={profile.as_uri()}"], env=env,
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

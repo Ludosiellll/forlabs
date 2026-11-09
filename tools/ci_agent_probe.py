@@ -256,21 +256,32 @@ def visual_studio_project(res):
     desk = WinDesk("visualstudio", exe, [p for p in [sln, proj / "Program.cs"] if p], proj, launch_timeout=300)
     res["main_window_sec"] = round(time.time() - t0)
     try:
+        import re
+
         seen = []
-        for i in range(12):
-            time.sleep(10)
+        first_run = re.compile(r"Skip|Пропустить|Not now|Не сейчас|Start Visual Studio|Запуск Visual Studio|"
+                               r"Continue without code|Продолжить без кода")
+        for i in range(20):
+            time.sleep(6)
             t1 = time.time()
             obs = desk.observe()
-            seen.append({"title": obs.title, "dialog": obs.dialog, "elements": len(obs.elements),
-                         "observe_sec": round(time.time() - t1, 1)})
+            step = {"title": obs.title, "dialog": obs.dialog, "elements": len(obs.elements),
+                    "observe_sec": round(time.time() - t1, 1)}
             obs.image.save(OUT / f"vs_{i:02d}.png")
-            if obs.dialog:
-                desk.act(Action(do="key", keys="esc"), obs)
-            elif "Program.cs" in obs.title or i >= 6:
+            skip = next((e for e in obs.elements if first_run.search(e.name) and e.role in ("Кнопка", "Ссылка")), None)
+            if skip:
+                step["clicked"] = skip.name
+                seen.append(step)
+                desk.act(Action(do="click", el=skip.id), obs)
+                continue
+            seen.append(step)
+            if "Kalkulyator" in obs.title or "Program.cs" in obs.title:
+                res["project_open"] = True
                 break
         res["seen"] = seen
         res["elements_sample"] = elements_dump(obs, 60)
         desk.capture("window").save(OUT / "vs_final.png")
+        assert res.get("project_open"), "проект в Visual Studio так и не открылся"
     finally:
         kill_tree(desk.root)
 
@@ -309,6 +320,66 @@ def core_run_end_to_end_in_notepad(res):
         if r.image is not None:
             r.image.save(OUT / "core_run.png")
         assert r.ok
+    finally:
+        kill_tree(desk.root)
+
+
+@case
+def students_own_window_is_left_alone(res):
+    from forlabs.agent.windesk import WinDesk
+    from forlabs.runner import winapi
+
+    folder = WORK / "своё окно"
+    folder.mkdir(parents=True, exist_ok=True)
+    mine = folder / "мой файл.txt"
+    mine.write_text("личное", encoding="utf-8")
+    own = subprocess.Popen([apps.find("notepad"), str(mine)])
+    time.sleep(3)
+    own_wins = [w.hwnd for w in winapi.windows_of(winapi.process_tree({own.pid}))]
+    lab = folder / "лаба.txt"
+    lab.write_text("", encoding="utf-8")
+    desk = WinDesk("notepad", apps.find("notepad"), [lab], folder)
+    try:
+        res["own_windows"], res["agent_main"] = own_wins, desk.main
+        assert desk.main not in own_wins, "агент взялся за окно студента"
+        obs = desk.observe()
+        assert "лаба" in obs.title, obs.title
+        if own_wins:
+            left, top, right, bottom = winapi.window_rect(own_wins[0])
+            winapi.foreground(own_wins[0])
+            time.sleep(0.5)
+            obs = desk.observe()  # агент снова выводит своё окно вперёд
+            res["front_after"] = obs.title
+            assert "лаба" in obs.title
+    finally:
+        kill_tree(desk.root)
+        own.kill()
+
+
+@case
+def paint_drag_draws_a_line(res):
+    from forlabs.agent.windesk import WinDesk
+
+    exe = apps.find("paint")
+    if not exe:
+        res.update(ok=True, note="Paint нет")
+        return
+    folder = WORK / "paint"
+    folder.mkdir(parents=True, exist_ok=True)
+    desk = WinDesk("paint", exe, [], folder, launch_timeout=60)
+    try:
+        time.sleep(2)
+        obs = desk.observe()
+        obs.image.save(OUT / "paint_before.png")
+        w, h = obs.image.size
+        x1, y1, x2, y2 = w // 3, h // 2, 2 * w // 3, h // 2 + 60
+        before = obs.image.crop((x1, y1 - 5, x2, y2 + 5)).convert("L").getextrema()
+        desk.act(Action(do="drag", x=x1, y=y1, x2=x2, y2=y2), obs)
+        after_img = desk.observe().image
+        after_img.save(OUT / "paint_after.png")
+        after = after_img.crop((x1, y1 - 5, x2, y2 + 5)).convert("L").getextrema()
+        res["before_extrema"], res["after_extrema"] = before, after
+        assert after[0] < before[0] - 50, "линия не нарисовалась — перетаскивание не дошло"
     finally:
         kill_tree(desk.root)
 
