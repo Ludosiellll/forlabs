@@ -4,6 +4,7 @@
     ForLabs.exe --browser               в браузере вместо окна
     ForLabs.exe --selfcheck [--out f]   самопроверка сборки (CI, поддержка)
     ForLabs.exe --uninstall [--silent]  удаление (строка «Параметры → Приложения»)
+    ForLabs.exe --console-helper <job>  ввод в окно консоли программы лабы (для снимка)
 """
 
 from __future__ import annotations
@@ -14,6 +15,10 @@ import sys
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
+    if "--console-helper" in argv:  # короткий помощник: без PDF и окна
+        from forlabs.runner import console
+
+        return console.main(argv)
     if "--uninstall" not in argv:  # удалению PDF не нужен
         from forlabs import frozen_fix
 

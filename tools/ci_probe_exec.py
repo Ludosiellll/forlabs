@@ -95,8 +95,10 @@ FORM_CS = textwrap.dedent('''
             result.Text = "Результат: " + (op.SelectedIndex == 0 ? a + b : a - b);
           };
           Controls.AddRange(new Control[] { inputA, inputB, op, calc, result });
-          try { System.IO.File.WriteAllText(System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "forlabs-probe.txt"), "x"); Text += " [docs-write-ok]"; }
-          catch (Exception) { Text += " [docs-write-denied]"; }
+          Label probe = new Label { Name = "probe", Left = 20, Top = 140, Width = 1, Height = 1 };
+          try { System.IO.File.WriteAllText(System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "forlabs-probe.txt"), "x"); probe.Text = "docs-write-ok"; }
+          catch (Exception) { probe.Text = "docs-write-denied"; }
+          Controls.Add(probe);
         }
         [STAThread] static void Main() { Application.EnableVisualStyles(); Application.Run(new MainForm()); }
       }
@@ -154,6 +156,19 @@ def build_cs(name, src, csproj):
 
 
 def uia_fill(hwnd):
+    from forlabs.runner import uia
+
+    uia.perform(hwnd, [{"action": "set", "target": "inputA", "value": "12"},
+                       {"action": "set", "target": "inputB", "value": "5"},
+                       {"action": "select", "target": "op", "value": "Сумма"},
+                       {"action": "click", "target": "Вычислить"}])
+    time.sleep(0.5)
+    win = uia.root(hwnd)
+    found = uia.texts(win)
+    return " | ".join(t for t in found if "Результат" in t or "docs-write" in t)
+
+
+def _old_uia_fill(hwnd):
     import clr  # pythonnet
 
     for asm in ("UIAutomationClient", "UIAutomationTypes"):
@@ -186,7 +201,7 @@ def uia_fill(hwnd):
 def forms_case(low):
     from forlabs.runner import winapi
 
-    exe = build_cs("ProbeForms", FORM_CS, CSPROJ_WIN)
+    exe = build_cs("ProbeFormsLow" if low else "ProbeForms", FORM_CS.replace("ProbeForms", "ProbeFormsLow" if low else "ProbeForms"), CSPROJ_WIN)
     cwd = exe.parent
     if low:
         winapi.low_label_dir(str(cwd))
@@ -217,7 +232,15 @@ def c2():
     return forms_case(low=True)
 
 
-def type_into_console(pid, text):
+def type_into_console(pid, text, title=None):
+    from forlabs.runner import console
+
+    res = console.act(pid, text=text, title=title)
+    if not res.get("ok"):
+        raise RuntimeError(f"ввод в консоль: {res}")
+
+
+def _old_type_into_console(pid, text):
     helper = textwrap.dedent(f'''
         import time, win32console, win32file, win32con
         win32console.FreeConsole()
@@ -244,10 +267,10 @@ def type_into_console(pid, text):
         raise RuntimeError(f"ввод в консоль: {out}")
 
 
-def console_case(name, cmd, cwd, inputs, low=False, expect=None, conhost=True):
-    from forlabs.runner import winapi
+def console_case(name, cmd, cwd, inputs, low=False, expect=None, conhost=True, title=None):
+    from forlabs.runner import console, winapi
 
-    full = (f'conhost.exe cmd.exe /d /c "chcp 65001>nul & {cmd} & pause>nul"' if conhost else cmd)
+    full = (f'"{console.CONHOST}" cmd.exe /d /s /c "chcp 65001>nul & {cmd} & pause>nul"' if conhost else cmd)
     app = winapi.spawn(full, str(cwd), low=low, new_console=not conhost)
     try:
         w = winapi.wait_window({app.pid}, 30, lambda x: x.cls in ("ConsoleWindowClass", "CASCADIA_HOSTING_WINDOW_CLASS"))
@@ -256,11 +279,16 @@ def console_case(name, cmd, cwd, inputs, low=False, expect=None, conhost=True):
         time.sleep(1.5)
         tree = winapi.process_tree({app.pid})
         target = next((p for p in sorted(tree) if p != app.pid), app.pid)
-        type_into_console(target if conhost else app.pid, inputs)
+        type_into_console(target if conhost else app.pid, inputs, title=title or str(Path(cwd) / "program.exe"))
         time.sleep(1.5)
-        res = {"title": w.title, "class": w.cls}
+        screen = console.act(target, read=True).get("screen", "")
+        res = {"title": winapi.windows_of({w.pid})[0].title if winapi.windows_of({w.pid}) else w.title,
+               "class": w.cls, "screen": screen[-400:]}
+        if expect and expect not in screen:
+            res["ok"] = False
+            res["error"] = f"в консоли нет «{expect}»"
         res["shot"] = save(winapi.capture(w.hwnd), name)
-        res["ok"] = not res["shot"]["blank"]
+        res.setdefault("ok", not res["shot"]["blank"])
         return res
     finally:
         app.close()
@@ -269,7 +297,7 @@ def console_case(name, cmd, cwd, inputs, low=False, expect=None, conhost=True):
 @case("console_cs")
 def c3():
     exe = build_cs("ProbeConsole", CONSOLE_CS, CSPROJ_CON)
-    return console_case("console_cs", f'"{exe}"', exe.parent, "12\n5\n")
+    return console_case("console_cs", f'"{exe}"', exe.parent, "12\n5\n", expect="Сумма: 17", title=str(exe))
 
 
 @case("console_cs_low")
@@ -277,7 +305,7 @@ def c3b():
     exe = build_cs("ProbeConsole2", CONSOLE_CS, CSPROJ_CON)
     from forlabs.runner import winapi
     winapi.low_label_dir(str(exe.parent))
-    return console_case("console_cs_low", f'"{exe}"', exe.parent, "12\n5\n", low=True)
+    return console_case("console_cs_low", f'"{exe}"', exe.parent, "12\n5\n", low=True, expect="Сумма: 17", title=str(exe))
 
 
 @case("console_python")
@@ -415,11 +443,227 @@ def c11():
     return res
 
 
+MSGBOX_CS = FORM_CS.replace('result.Text = "Результат: " + (op.SelectedIndex == 0 ? a + b : a - b);',
+                            'MessageBox.Show("Сумма равна " + (a + b), "Результат");').replace("ProbeForms", "ProbeMsg")
+
+
+@case("winforms_messagebox")
+def c12():
+    from forlabs.runner import uia, winapi
+
+    exe = build_cs("ProbeMsg", MSGBOX_CS, CSPROJ_WIN)
+    app = winapi.spawn(f'"{exe}"', str(exe.parent), low=False)
+    try:
+        w = winapi.wait_window({app.pid}, 40)
+        uia.perform(w.hwnd, [{"action": "set", "target": "inputA", "value": "12"},
+                             {"action": "set", "target": "inputB", "value": "5"},
+                             {"action": "click", "target": "calc"}])
+        box = winapi.wait_window({app.pid}, 10, lambda x: x.hwnd != w.hwnd)
+        if not box:
+            raise RuntimeError("окно сообщения не появилось")
+        res = {"box_title": box.title, "box_class": box.cls}
+        res["shot"] = save(winapi.capture(box.hwnd), "winforms_messagebox")
+        res["ok"] = box.title == "Результат" and not res["shot"]["blank"]
+        return res
+    finally:
+        app.close()
+
+
+WPF_XAML = textwrap.dedent('''
+    <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+            xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" x:Class="ProbeWpf.MainWindow"
+            Title="Учёт книг" Width="360" Height="220">
+      <StackPanel Margin="12">
+        <TextBox x:Name="title" Margin="0,0,0,8"/>
+        <Button x:Name="add" Content="Добавить" Click="Add_Click" Width="120" HorizontalAlignment="Left"/>
+        <ListBox x:Name="books" Height="80" Margin="0,8,0,0"/>
+      </StackPanel>
+    </Window>
+''')
+WPF_CS = textwrap.dedent('''
+    using System.Windows;
+    namespace ProbeWpf {
+      public partial class MainWindow : Window {
+        public MainWindow() { InitializeComponent(); }
+        void Add_Click(object s, RoutedEventArgs e) { books.Items.Add(title.Text); title.Clear(); }
+      }
+      public partial class App : Application {
+        [System.STAThread] public static void Main() { new App().Run(new MainWindow()); }
+      }
+    }
+''')
+
+
+@case("wpf")
+def c13():
+    from forlabs.runner import uia, winapi
+
+    d = WORK / "ProbeWpf"
+    shutil.rmtree(d, ignore_errors=True)
+    d.mkdir(parents=True)
+    (d / "MainWindow.xaml").write_text(WPF_XAML, encoding="utf-8")
+    (d / "MainWindow.xaml.cs").write_text(WPF_CS, encoding="utf-8")
+    (d / "ProbeWpf.csproj").write_text(textwrap.dedent(f'''
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup><OutputType>WinExe</OutputType><TargetFramework>{tfm()}-windows</TargetFramework>
+            <UseWPF>true</UseWPF><StartupObject>ProbeWpf.App</StartupObject><EnableDefaultApplicationDefinition>false</EnableDefaultApplicationDefinition></PropertyGroup>
+        </Project>'''), encoding="utf-8")
+    code, out = run(["dotnet", "build", "-c", "Release", "-o", str(d / "out"), "-nologo", "-v", "q"], cwd=d, timeout=600)
+    if code:
+        raise RuntimeError(out)
+    exe = d / "out" / "ProbeWpf.exe"
+    app = winapi.spawn(f'"{exe}"', str(exe.parent), low=False)
+    try:
+        w = winapi.wait_window({app.pid}, 40)
+        uia.perform(w.hwnd, [{"action": "set", "target": "title", "value": "Мастер и Маргарита"},
+                             {"action": "click", "target": "add"},
+                             {"action": "set", "target": "title", "value": "Война и мир"},
+                             {"action": "click", "target": "add"}])
+        time.sleep(0.5)
+        found = uia.texts(uia.root(w.hwnd))
+        res = {"texts": found[:20]}
+        res["shot"] = save(winapi.capture(w.hwnd), "wpf")
+        res["ok"] = "Война и мир" in found and not res["shot"]["blank"]
+        return res
+    finally:
+        app.close()
+
+
+def keyboard_case(name, cmd, cwd, keys, title_has, low=False):
+    from forlabs.runner import winapi
+
+    app = winapi.spawn(cmd, str(cwd), low=low)
+    try:
+        w = winapi.wait_window({app.pid}, 40, lambda x: title_has in x.title)
+        if not w:
+            raise RuntimeError(f"окно «{title_has}» не появилось (жив={app.alive()})")
+        time.sleep(1.5)
+        for k in keys:
+            if k.startswith("key:"):
+                winapi.press(w.hwnd, k[4:])
+            else:
+                winapi.type_text(w.hwnd, k)
+            time.sleep(0.2)
+        time.sleep(0.8)
+        res = {"title": w.title}
+        res["shot"] = save(winapi.capture(w.hwnd), name)
+        res["ok"] = not res["shot"]["blank"]
+        return res
+    finally:
+        app.close()
+
+
+@case("java_swing_keyboard")
+def c14():
+    d = WORK / "swing"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "Main.java").write_text(textwrap.dedent('''
+        import javax.swing.*; import java.awt.*;
+        public class Main { public static void main(String[] args) { SwingUtilities.invokeLater(() -> {
+          JFrame f = new JFrame("Калькулятор"); f.setLayout(new FlowLayout());
+          JTextField a = new JTextField(6), b = new JTextField(6); JButton c = new JButton("Вычислить"); JLabel r = new JLabel("Результат:");
+          c.addActionListener(e -> r.setText("Результат: " + (Double.parseDouble(a.getText()) + Double.parseDouble(b.getText()))));
+          f.add(a); f.add(b); f.add(c); f.add(r); f.getRootPane().setDefaultButton(c);
+          f.setSize(420, 120); f.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE); f.setVisible(true); a.requestFocusInWindow(); }); } }
+    '''), encoding="utf-8")
+    code, out = run(["javac", "-encoding", "UTF-8", "Main.java"], cwd=d)
+    if code:
+        raise RuntimeError(out)
+    return keyboard_case("java_swing", "javaw -Dfile.encoding=UTF-8 Main", d, ["12", "key:tab", "5", "key:enter"],
+                         "Калькулятор")
+
+
+@case("python_tkinter_keyboard")
+def c15():
+    d = WORK / "tk"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "main.py").write_text(textwrap.dedent('''
+        import tkinter as tk
+        root = tk.Tk(); root.title("Калькулятор"); root.geometry("380x120")
+        a = tk.Entry(root); b = tk.Entry(root); r = tk.Label(root, text="Результат:")
+        def calc(event=None): r.config(text=f"Результат: {float(a.get()) + float(b.get())}")
+        a.pack(); b.pack(); tk.Button(root, text="Вычислить", command=calc).pack(); r.pack()
+        root.bind("<Return>", calc); a.focus_set(); root.mainloop()
+    '''), encoding="utf-8")
+    pyw = str(Path(sys.executable).with_name("pythonw.exe"))
+    return keyboard_case("python_tkinter", f'"{pyw}" main.py', d, ["12", "key:tab", "5", "key:enter"], "Калькулятор")
+
+
+@case("cpp_msvc")
+def c16():
+    d = WORK / "msvc"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "main.cpp").write_text('#include <iostream>\nint main(){ double a,b; std::cout << "Введите два числа: "; std::cin >> a >> b;'
+                                ' std::cout << "Сумма: " << a + b << std::endl; return 0; }\n', encoding="utf-8")
+    vs = REPORT["tools"]["vswhere"]["out"].strip().splitlines()[0]
+    vcvars = Path(vs) / "VC" / "Auxiliary" / "Build" / "vcvars64.bat"
+    code, out = run(f'call "{vcvars}" >nul && cl /nologo /utf-8 /EHsc /O2 main.cpp', cwd=d, timeout=600, shell=True)
+    if code:
+        raise RuntimeError(out)
+    return console_case("cpp_msvc", '"main.exe"', d, "12 5\n", expect="Сумма: 17")
+
+
+@case("php_site")
+def c17():
+    from forlabs.runner import winapi
+
+    d = WORK / "phpsite"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "index.php").write_text('<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>Библиотека</title></head><body>'
+                                 '<h1>Книги</h1><ul><?php foreach (["Мастер и Маргарита","Война и мир"] as $b) echo "<li>$b</li>"; ?></ul>'
+                                 '</body></html>', encoding="utf-8")
+    srv = subprocess.Popen(["php", "-S", "127.0.0.1:8099", "-t", str(d)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    prof = WORK / "edge-profile-php"
+    edge = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+    app = winapi.spawn(f'"{edge}" --user-data-dir="{prof}" --no-first-run --no-default-browser-check '
+                       f'--disable-features=msEdgeFirstRunExperience --window-size=1100,700 --new-window http://127.0.0.1:8099/',
+                       str(d), low=False, max_processes=64, memory_mb=4096)
+    try:
+        w = winapi.wait_window({app.pid}, 40, lambda x: "Библиотека" in x.title)
+        if not w:
+            raise RuntimeError("окно с сайтом не появилось")
+        time.sleep(2)
+        res = {"title": w.title, "shot": save(winapi.capture(w.hwnd), "php_site")}
+        res["ok"] = not res["shot"]["blank"]
+        return res
+    finally:
+        app.close()
+        srv.terminate()
+
+
+@case("hang_is_killed")
+def c18():
+    from forlabs.runner import winapi
+
+    d = WORK / "hang"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "main.py").write_text("while True:\n    pass\n", encoding="utf-8")
+    app = winapi.spawn(f'"{sys.executable}" main.py', str(d), low=True, hidden=True)
+    t = time.time()
+    code = app.wait(2)
+    app.kill()
+    gone = app.wait(5)
+    return {"ok": code is None and gone is not None, "killed_in": round(time.time() - t, 1)}
+
+
+@case("crash_reported")
+def c19():
+    from forlabs.runner import winapi
+
+    d = WORK / "crash"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "main.py").write_text("raise SystemExit(3)\n", encoding="utf-8")
+    app = winapi.spawn(f'"{sys.executable}" main.py', str(d), low=True, hidden=True)
+    code = app.wait(15)
+    w = winapi.wait_window({app.pid}, 2)
+    return {"ok": code == 3 and w is None, "exit": code}
+
+
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
     WORK.mkdir(parents=True, exist_ok=True)
     tools()
-    for fn in (c1, c2, c3, c3b, c4, c5, c6, c7, c8, c9, c10, c11):
+    for fn in (c1, c2, c3, c3b, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17, c18, c19):
         fn()
     (OUT / "report.json").write_text(json.dumps(REPORT, ensure_ascii=False, indent=2), encoding="utf-8")
     bad = [k for k, v in REPORT["cases"].items() if not v.get("ok")]

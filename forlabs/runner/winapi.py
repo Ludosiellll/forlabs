@@ -199,9 +199,72 @@ def blank(img) -> bool:
     return hi - lo < 12
 
 
-def foreground(hwnd: int) -> None:
+class KEYBDINPUT(ctypes.Structure):
+    _fields_ = [("wVk", wintypes.WORD), ("wScan", wintypes.WORD), ("dwFlags", wintypes.DWORD),
+                ("time", wintypes.DWORD), ("dwExtraInfo", ctypes.c_size_t)]
+
+
+class _INPUTUNION(ctypes.Union):
+    _fields_ = [("ki", KEYBDINPUT), ("pad", ctypes.c_byte * 32)]
+
+
+class INPUT(ctypes.Structure):
+    _fields_ = [("type", wintypes.DWORD), ("u", _INPUTUNION)]
+
+
+_sig(user32.SendInput, wintypes.UINT, wintypes.UINT, ctypes.POINTER(INPUT), ctypes.c_int)
+_sig(user32.GetForegroundWindow, HW)
+_sig(user32.keybd_event, None, wintypes.BYTE, wintypes.BYTE, wintypes.DWORD, ctypes.c_size_t)
+KEYEVENTF_KEYUP, KEYEVENTF_UNICODE = 0x2, 0x4
+VK = {"enter": 0x0D, "tab": 0x09, "esc": 0x1B, "space": 0x20, "backspace": 0x08, "down": 0x28, "up": 0x26,
+      "left": 0x25, "right": 0x27, "home": 0x24, "end": 0x23, "f5": 0x74}
+
+
+def foreground(hwnd: int, timeout: float = 3.0) -> bool:
+    """Вывести окно вперёд (нужно для ввода с клавиатуры). Windows не даёт это фоновым процессам — нажатие Alt снимает
+    запрет, как это делают средства автоматизации."""
     user32.ShowWindow(wintypes.HWND(hwnd), 9)  # SW_RESTORE
-    user32.SetForegroundWindow(wintypes.HWND(hwnd))
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        user32.keybd_event(0x12, 0, 0, 0)  # Alt
+        user32.SetForegroundWindow(wintypes.HWND(hwnd))
+        user32.keybd_event(0x12, 0, KEYEVENTF_KEYUP, 0)
+        if user32.GetForegroundWindow() == hwnd:
+            return True
+        time.sleep(0.1)
+    return False
+
+
+def _send(inputs: list[INPUT]) -> None:
+    arr = (INPUT * len(inputs))(*inputs)
+    user32.SendInput(len(inputs), arr, ctypes.sizeof(INPUT))
+
+
+def type_text(hwnd: int, text: str) -> None:
+    """Набрать текст в окне (Unicode — кириллица без раскладки). Окно выводится вперёд."""
+    if not foreground(hwnd):
+        raise OSError("окно не вышло на передний план")
+    for ch in text:
+        if ch == "\n":
+            press(hwnd, "enter", focus=False)
+            continue
+        if ch == "\t":
+            press(hwnd, "tab", focus=False)
+            continue
+        down = INPUT(type=1, u=_INPUTUNION(ki=KEYBDINPUT(0, ord(ch), KEYEVENTF_UNICODE, 0, 0)))
+        up = INPUT(type=1, u=_INPUTUNION(ki=KEYBDINPUT(0, ord(ch), KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, 0, 0)))
+        _send([down, up])
+        time.sleep(0.01)
+
+
+def press(hwnd: int, key: str, focus: bool = True) -> None:
+    """Нажать клавишу: enter, tab, esc, space, стрелки…"""
+    if focus and not foreground(hwnd):
+        raise OSError("окно не вышло на передний план")
+    vk = VK[key.lower()]
+    _send([INPUT(type=1, u=_INPUTUNION(ki=KEYBDINPUT(vk, 0, 0, 0, 0))),
+           INPUT(type=1, u=_INPUTUNION(ki=KEYBDINPUT(vk, 0, KEYEVENTF_KEYUP, 0, 0)))])
+    time.sleep(0.05)
 
 
 def close_window(hwnd: int) -> None:
