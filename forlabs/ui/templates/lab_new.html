@@ -40,7 +40,7 @@
           <label class="btn link small">Общий отчёт с ними (DOCX, PDF)<input id="linked-report" class="visually-hidden" type="file" name="linked_report" accept=".docx,.pdf" data-images-input></label>
           <span class="small muted" data-images-picked="linked-report"></span>
         </div>
-        <div class="hint">Если тема и приложение берутся из прошлых лаб. Из общего отчёта ForLabs вырежет только эти лабы — остальное модель не читает, лимит не тратится.</div></div>
+        <div class="hint">Если тема и приложение берутся из прошлых лаб. Из общего отчёта ForLabs вырежет только эти лабы, а если у какой-то нет заголовка — её найдёт модель по короткому скелету отчёта. Весь отчёт модель не читает, лимит не тратится.</div></div>
       <div class="field"><span style="display:block;font-weight:500;margin-bottom:4px">Файлы к лабе</span>
         <div class="row attach-row">
           <label class="btn small">Выбрать файлы<input id="materials-in" class="visually-hidden" type="file" name="materials" multiple accept="{{ materials_accept }}" data-images-input></label>

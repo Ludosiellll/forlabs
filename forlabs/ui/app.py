@@ -423,25 +423,37 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
             st = await asyncio.to_thread(ctx.pipeline.create_lab, profile_id, subject_id, data,
                                          number=number.strip() or None, pasted_text=text, wishes=wishes,
                                          wish_images=photos)
-            if numbers or report:
-                try:
-                    st, _ = await asyncio.to_thread(ctx.pipeline.set_links, st, numbers, report)
-                except PipelineError as e:  # лаба создаётся и без отчёта; номера сохраняются
-                    notes.append(str(e))
-                    st, _ = await asyncio.to_thread(ctx.pipeline.set_links, st, numbers, None)
-            if extra:
-                st, notes = await asyncio.to_thread(ctx.pipeline.add_materials, st, extra)
         except Exception as e:  # лаба не создана — форму можно отправить снова
             if form_token:
                 ctx.form_tokens.pop(form_token, None)
             if isinstance(e, PipelineError):
                 return redirect(back, err=str(e))
             raise
+        if extra:  # лаба уже создана: сбой с файлами — замечание, а не брошенный черновик без разбора
+            try:
+                st, problems = await asyncio.to_thread(ctx.pipeline.add_materials, st, extra)
+                notes += problems
+            except Exception as e:
+                notes.append(f"Файлы к лабе не добавились ({getattr(e, 'message_ru', None) or e}) — добавь их на "
+                             "странице лабы, слева.")
         key = ctx.pipeline.key(st)
         result = {}
 
         def job():
-            result["st"] = ctx.pipeline.parse(st, date=today())
+            done = result["st"] = ctx.pipeline.parse(st, date=today())
+            if not (numbers or report):
+                return
+            # связи — после разбора: известны ссылки методички и тема, по которой модель ищет лабу без заголовка
+            new_key = ctx.pipeline.key(done)
+            claimed = new_key != key and ctx.claim(new_key)  # лаба переехала под номер из методички — тоже занята
+            try:
+                result["st"], _ = ctx.pipeline.set_links(done, numbers, report)
+            except Exception as e:
+                ctx.bus.publish(new_key, f"Связанные лабы не сохранены ({getattr(e, 'message_ru', None) or e}) — "
+                                         "укажи их на странице лабы, слева.", "warn")
+            finally:
+                if claimed:
+                    ctx.release(new_key)
 
         ctx.run(key, job)
         final = result.get("st", st)
@@ -518,6 +530,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         return render(request, "lab.html", st=st, profile=profile, subject=get_subject(s), busy=busy,
                       subject_theme=subject_theme, subject_memory=subject_memory,
                       link_notes=[f.message for f in st.findings if f.rule_id.startswith("spec.linked")],
+                      auto_refs=[("предыдущую лабу" if r == "previous" else f"ЛР {r}") for r in ctx.pipeline._auto_refs(st)],
                       materials=[(m.name, pages(len(m.text))) for m in st.materials],
                       materials_accept=MATERIALS_ACCEPT, materials_pages=MATERIALS_MAX // PAGE_CHARS,
                       preview_here=preview_here, docx_here=docx_here, teacher_rules=teacher_rules,
@@ -631,15 +644,11 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
             return redirect(lab_url(p, s, n), err=f"Отчёт больше {MAX_UPLOAD // 1_000_000} МБ — сожми картинки в нём.")
         st = await asyncio.to_thread(load, p, s, n)
         report = (linked_report.filename, await linked_report.read()) if linked_report and linked_report.filename else None
-        try:
-            st, missing = await asyncio.to_thread(ctx.pipeline.set_links, st, parse_numbers(linked), report)
-        except PipelineError as e:
-            return redirect(lab_url(p, s, n), err=str(e))
-        if missing:
-            return redirect(lab_url(p, s, n), err="Нет ни в ForLabs, ни в отчёте: "
-                            + ", ".join(m if m[:1].isalpha() else f"ЛР {m}" for m in missing)
-                            + ". Прикрепи общий отчёт с ними или опиши их в пожеланиях.")
-        return redirect(lab_url(p, s, n), msg="Связанные лабы сохранены" if st.linked else "Связанные лабы убраны")
+        # с отчётом может понадобиться модель (лаба без заголовка) — в фоне, итог появится в блоке слева
+        ctx.run(ctx.pipeline.key(st), ctx.pipeline.set_links, st, parse_numbers(linked), report)
+        if report:
+            return redirect(lab_url(p, s, n), msg="Ищу связанные лабы в отчёте — что нашлось, появится слева")
+        return redirect(lab_url(p, s, n), msg="Связанные лабы сохранены" if linked.strip() else "Связанные лабы убраны")
 
     @app.post("/labs/{p}/{s}/{n}/materials")
     async def lab_materials(p: str, s: str, n: str, materials: list[UploadFile] | None = File(None)):

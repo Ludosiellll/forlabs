@@ -373,3 +373,22 @@ def test_offline_shows_local_copy(auth, fake, tmp_home):
     store._offline_until = 0  # прошло 30 с — снова пробуем облако
     store.list_profiles()
     assert store.offline is False
+
+
+def test_subject_memory_reads_cached_and_fail_fast_offline(auth, fake, tmp_home):
+    auth.sign_in("a@b.c", "верный")
+    store = CloudStore(auth, retry_delays=(0, 0))
+    store.write_memory("ivanov", "psip.theme", "сайт кофейни")
+    gets = lambda: sum(1 for r in fake.requests if r.method == "GET" and "/subject_memory" in r.url.path)
+    before = gets()
+    assert store.read_memory("ivanov", "psip.theme") == "сайт кофейни"
+    assert store.read_memory("ivanov", "psip.theme") == "сайт кофейни"
+    assert gets() == before  # только что записанное и прочитанное — из памяти, без запросов на каждой странице
+    store._memory_cache.clear()
+    assert store.read_memory("ivanov", "psip.theme") == "сайт кофейни" and gets() == before + 1
+    store._memory_cache.clear()
+    store._offline_until = time.monotonic() + 30  # связи только что не было
+    n = len(fake.requests)
+    with pytest.raises(CloudError):
+        store.read_memory("ivanov", "psip.theme")
+    assert len(fake.requests) == n  # страница лабы не ждёт повторов, пока связи нет

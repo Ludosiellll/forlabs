@@ -480,39 +480,95 @@ class Pipeline:
 
     def set_links(self, st: LabState, numbers: list[str], report: tuple[str, bytes] | None = None
                   ) -> tuple[LabState, list[str]]:
-        """Связанные прошлые лабы: номера и (по желанию) общий отчёт, из которого берутся только эти лабы —
-        без модели. Возвращает номера, которых нет ни в ForLabs, ни в отчёте."""
+        """Связанные прошлые лабы: номера и (по желанию) общий отчёт. Из отчёта берутся только эти лабы: сначала по
+        заголовкам — без модели; чего так не нашлось (заголовок забыт или другой) — модель ищет по скелету отчёта.
+        Возвращает номера, которых нет ни в ForLabs, ни в отчёте. Нечитаемый отчёт — предупреждение в журнале."""
         from forlabs.pipeline.memory import LINKED_MAX, split_labs
 
         with self.lock(st):
             numbers = list(dict.fromkeys(n for n in numbers if n))[:5]
-            parts: dict[str, str] = {}
-            if report is not None:
-                name, data = report
-                tmp = self.lab_dir(st) / "linked" / safe_file_name(Path(name).name or "report.docx")
-                tmp.parent.mkdir(parents=True, exist_ok=True)
-                tmp.write_bytes(data)
-                try:
-                    parts = split_labs(extract_text(tmp, self.tesseract).text)
-                except Exception as e:  # битый или не тот файл — понятная причина, а не ошибка сервера
-                    raise PipelineError(f"Общий отчёт не прочитался ({e}). Нужен DOCX или PDF.") from e
-                finally:
-                    shutil.rmtree(tmp.parent, ignore_errors=True)
-                if not parts:
-                    raise PipelineError("В общем отчёте не нашлось заголовков «Лабораторная работа №N» — по ним "
-                                        "ForLabs находит нужные лабы. Проверь, что каждая лаба начинается с такого "
-                                        "заголовка.")
             st.linked = numbers
-            for n in st.linked:
-                if n in parts:
-                    st.linked_texts[n] = parts[n][:LINKED_MAX]
-            st.linked_texts = {n: t for n, t in st.linked_texts.items() if n in st.linked}
+            auto = self._auto_refs(st)
+            prev = self._previous_number(st) if "previous" in auto else None
+            wanted = list(dict.fromkeys(numbers + [r for r in auto if r != "previous"] + ([prev] if prev else [])))
+            text = self._report_text(st, report) if report is not None else ""
+            if text:
+                parts = split_labs(text)
+                for n in wanted:
+                    if n in parts:
+                        st.linked_texts[n] = parts[n][:LINKED_MAX]
+                        st.linked_how.pop(n, None)
+                lost = [n for n in wanted if n not in parts and not self._done_in_forlabs(st, n)]
+                for n, (body, how) in self._locate_in_report(st, text, lost).items():
+                    st.linked_texts[n] = body[:LINKED_MAX]
+                    st.linked_how[n] = how
+            st.linked_texts = {n: t for n, t in st.linked_texts.items() if n in wanted}
+            st.linked_how = {n: h for n, h in st.linked_how.items() if n in st.linked_texts}
             if st.spec is not None:  # после разбора замечания о связях обновляются сразу
                 st.findings = [f for f in st.findings if not f.rule_id.startswith("spec.linked")]
                 st.findings += self._link_findings(st)
             st = self._save(st)
         _, missing = self._linked_labs(st)
         return st, [m.removeprefix("ЛР ") for m in missing]
+
+    def _report_text(self, st: LabState, report: tuple[str, bytes]) -> str:
+        name, data = report
+        tmp = self.lab_dir(st) / "linked" / safe_file_name(Path(name or "").name or "report.docx")
+        try:
+            tmp.parent.mkdir(parents=True, exist_ok=True)
+            tmp.write_bytes(data)
+            text = extract_text(tmp, self.tesseract).text
+        except Exception as e:  # битый или не тот файл — понятная причина в журнале, номера сохраняются
+            self._emit(st, f"Общий отчёт «{name}» не прочитался ({getattr(e, 'message_ru', None) or e}) — нужен DOCX "
+                           "или PDF с текстом. Номера связанных лаб сохранены.", "warn")
+            return ""
+        finally:
+            shutil.rmtree(tmp.parent, ignore_errors=True)
+        if not text.strip():
+            self._emit(st, f"В общем отчёте «{name}» нет текста (похоже на скан) — сохрани его из Word как DOCX "
+                           "или PDF с текстом.", "warn")
+        return text
+
+    def _done_in_forlabs(self, st: LabState, n: str) -> bool:
+        if n == st.number:
+            return False
+        try:
+            lab = self.store.load_lab(st.profile_id, st.subject_id, n)
+        except Exception:
+            return False
+        return lab is not None and lab.report is not None
+
+    def _locate_in_report(self, st: LabState, text: str, wanted: list[str]) -> dict[str, tuple[str, str]]:
+        """Модель ищет лабы, у которых в отчёте нет понятного заголовка: по номеру в любом виде, по порядку работ
+        или по смыслу (ближе всего к теме текущей лабы). Сбой модели — не ошибка: лаба считается ненайденной."""
+        from forlabs.pipeline.linked import locate_labs
+
+        if not wanted:
+            return {}
+        self._emit(st, f"Ищу в общем отчёте {', '.join('ЛР ' + n for n in wanted)}: заголовков с такими номерами "
+                       "нет — смотрит модель (по скелету отчёта, не целиком)")
+        try:
+            return locate_labs(text, wanted, self._links_context(st), self._llm(st))
+        except Exception as e:
+            self._emit(st, f"Модель не смогла поискать в отчёте ({getattr(e, 'message_ru', None) or e}) — сохрани "
+                           "номера ещё раз позже или добавь заголовки «Лабораторная работа №N» в отчёт.", "warn")
+            return {}
+
+    def _links_context(self, st: LabState) -> str:
+        """О чём текущая лаба — чтобы модель выбрала в отчёте ближайшую по смыслу часть."""
+        if st.spec is not None:
+            tasks = "\n".join(t.text for t in st.spec.tasks)
+            return f"Тема: {st.spec.topic}\nЦель: {st.spec.goal}\nЗадания:\n{tasks}"[:2500]
+        src = self.lab_dir(st) / "source"
+        files = sorted(f for f in src.iterdir() if f.is_file() and f.suffix.lower() in {".pdf", ".docx", ".txt", ".md"}
+                       ) if src.exists() else []
+        text = ""
+        if files:
+            try:
+                text = extract_many(files).text
+            except Exception:
+                text = ""
+        return f"{st.wishes}\n{text}".strip()[:2500]
 
     def add_materials(self, st: LabState, files: list[tuple[str, bytes]]) -> tuple[LabState, list[str]]:
         """Файлы к лабе: текст каждого — целиком в модель. Что не влезает в лимит или не читается — не добавляется,
@@ -573,14 +629,35 @@ class Pipeline:
         return ("Файлы к этой лабе от преподавателя (прочитай целиком: данные, имена, значения и текст бери отсюда, "
                 f"не придумывай свои):\n{files}")
 
+    def _auto_refs(self, st: LabState) -> list[str]:
+        """На какие прошлые лабы ссылается сама эта лаба: своя часть методички, общее задание и задания."""
+        from forlabs.pipeline.memory import referenced_labs
+
+        if st.spec is None:
+            return []
+        refs = referenced_labs(st.spec.source_text or "", st.spec.number)
+        extra = "\n".join([st.spec.assignment or "", *(t.text for t in st.spec.tasks)])
+        for r in referenced_labs(extra, st.spec.number):
+            if r not in refs:
+                refs.append(r)
+        return refs[:3]
+
+    def _previous_number(self, st: LabState) -> str | None:
+        """«Предыдущая работа» для ЛР 7 — ЛР 6 (если номер целый)."""
+        try:
+            f = float((st.spec.number if st.spec else st.number).split("-")[0])
+        except ValueError:
+            return None
+        return str(int(f) - 1) if f == int(f) and f >= 2 else None
+
     def _linked_labs(self, st: LabState) -> tuple[list[tuple[str, str, str, str]], list[str]]:
         """Прошлые лабы для этой: выбранные студентом и те, на которые ссылается методичка. Каждая —
         (номер, откуда, тема, текст): сделанная в ForLabs — целиком с кодом, иначе кусок прикреплённого отчёта."""
-        from forlabs.pipeline.memory import LINKED_MAX, referenced_labs
+        from forlabs.pipeline.memory import LINKED_MAX
         from forlabs.pipeline.write import section_text
 
         current = st.spec.number if st.spec else st.number
-        refs = list(dict.fromkeys(st.linked + (referenced_labs(st.spec.source_text or "", current) if st.spec else [])))
+        refs = list(dict.fromkeys(st.linked + self._auto_refs(st)))
         if not refs:
             return [], []
 
@@ -594,7 +671,7 @@ class Pipeline:
         missing: list[str] = []
         others: list[LabState] | None = None
         for ref in refs[:5]:
-            lab = None
+            lab, key = None, ref
             if ref == "previous":
                 if others is None:
                     try:
@@ -604,7 +681,12 @@ class Pipeline:
                         others = []
                 earlier = [x for x in others if 0 <= num(x.number) < num(current)]
                 lab = max(earlier, key=lambda x: num(x.number)) if earlier else None
-                label = "предыдущую лабу"
+                prev = self._previous_number(st)
+                if prev and prev in st.linked_texts and (lab is None or num(lab.number) < num(prev)):
+                    lab, key = None, prev  # в отчёте есть ровно предыдущая — она точнее более ранней из ForLabs
+                elif lab is not None:
+                    key = lab.number
+                label = "предыдущая лаба"
             else:
                 if ref != st.number:
                     try:
@@ -612,14 +694,14 @@ class Pipeline:
                     except Exception:
                         lab = None
                 label = f"ЛР {ref}"
-            if any(f[0] == (lab.number if lab else ref) for f in found):
+            if any(f[0] == key for f in found):
                 continue
             if lab is not None and lab.report is not None:
                 body = "\n\n".join(f"Задание {x.n}: {x.title}\n{section_text(x)}" for x in lab.report.sections)
                 variant = f" {lab.spec.variant_text}" if lab.spec and lab.spec.variant_text else ""
                 found.append((lab.number, "forlabs", lab.spec.topic if lab.spec else "", (variant + "\n" + body)[:LINKED_MAX]))
-            elif ref in st.linked_texts:
-                found.append((ref, "report", "", st.linked_texts[ref]))
+            elif key in st.linked_texts:
+                found.append((key, "report", "", st.linked_texts[key]))
             else:
                 missing.append(label)
         return found, missing
@@ -628,14 +710,23 @@ class Pipeline:
         from forlabs.core.models import Finding
 
         found, missing = self._linked_labs(st)
+        def where(n: str, src: str, text: str) -> str:
+            if src == "forlabs":
+                return " — из ForLabs, с кодом."
+            how = st.linked_how.get(n)
+            if how:
+                first = " ".join(text.split())[:90]
+                return (f" — в отчёте не было заголовка, модель нашла её {how}: начинается с «{first}». "
+                        "Если не та — поправь номер или добавь в отчёт заголовок «Лабораторная работа №…».")
+            return " — из прикреплённого отчёта."
+
         out = [Finding(stage="spec", rule_id="spec.linked_lab", severity="warn", location="Связь с прошлыми лабами",
-                       message=f"Опираюсь на ЛР {n}" + (f" «{topic}»" if topic else "")
-                               + (" — из ForLabs, с кодом." if src == "forlabs" else " — из прикреплённого отчёта."))
-               for n, src, topic, _ in found]
+                       message=f"Опираюсь на ЛР {n}" + (f" «{topic}»" if topic else "") + where(n, src, text))
+               for n, src, topic, text in found]
         out += [Finding(stage="spec", rule_id="spec.linked_lab_missing", severity="warn",
                         location="Связь с прошлыми лабами",
-                        message=f"Нужна {m}, а её нет ни в ForLabs, ни в прикреплённом отчёте — прикрепи отчёт с ней "
-                                "(слева, «Связанные лабы») или напиши в пожеланиях тему и что было сделано.")
+                        message=f"Нужна {m}, а её нет ни в ForLabs, ни в прикреплённом отчёте — прикрепи общий отчёт "
+                                "с ней (слева, «Связанные лабы и файлы») или напиши в пожеланиях тему и что было сделано.")
                 for m in missing]
         return out
 
@@ -876,6 +967,9 @@ class Pipeline:
                     push_version(st, f"до переписывания задания {', '.join(map(str, only))}")
                 st.status, st.error = "executing", None
                 st.docx_sha = None  # пока задания переписываются, прежний документ не выдаётся за готовый
+                # связанные лабы могли появиться в ForLabs после разбора — замечания о них по текущему состоянию
+                st.findings = [f for f in st.findings if not f.rule_id.startswith("spec.linked")]
+                st.findings += self._link_findings(st)
                 self._save(st)
                 llm = self._llm(st)
                 assets = self.lab_dir(st) / "assets"

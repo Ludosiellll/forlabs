@@ -225,6 +225,7 @@ class LabState(BaseModel):
     wishes: str = ""  # пожелания, введённые при создании (до разбора)
     linked: list[str] = Field(default_factory=list)  # номера прошлых лаб, на которых строится эта (выбрал студент)
     linked_texts: dict[str, str] = Field(default_factory=dict)  # их текст из прикреплённого отчёта (только выбранные)
+    linked_how: dict[str, str] = Field(default_factory=dict)  # каких нашла модель (заголовка не было): «по смыслу» и т.п.
     materials: list[Material] = Field(default_factory=list)  # файлы к лабе (данные, текст, код) — целиком в модель
     wish_images: list[str] = Field(default_factory=list)  # фото к пожеланиям
     wish_images_text: str = ""  # что модель прочитала с этих фото

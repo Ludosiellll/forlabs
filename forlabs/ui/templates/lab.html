@@ -25,8 +25,9 @@
         <span class="small muted" data-images-picked="linked-report"></span>
         <button class="btn small" type="submit">Сохранить</button>
       </form>
+      {% if auto_refs %}<div class="small muted">Методичка ссылается на {{ auto_refs|join(', ') }} — их ForLabs возьмёт сам: из сделанных лаб или из прикреплённого отчёта.</div>{% endif %}
       {% if link_notes %}<ul class="small">{% for m in link_notes %}<li>{{ m }}</li>{% endfor %}</ul>{% endif %}
-      <div class="hint">Из общего отчёта берутся только эти лабы, остальное модель не читает. Лаба, сделанная в ForLabs, берётся целиком, с кодом.</div>
+      <div class="hint">Из общего отчёта берутся только эти лабы — по заголовкам «Лабораторная работа №…». Если заголовка нет, лабу найдёт модель по короткому скелету отчёта, весь отчёт она не читает. Лаба, сделанная в ForLabs, берётся целиком, с кодом.</div>
 
       <h3 class="small" style="margin:12px 0 4px">Файлы к лабе</h3>
       {% if materials %}<ul class="small mats">{% for name, pg in materials %}

@@ -89,3 +89,48 @@ def test_materials_limit_keeps_small_rejects_huge(tmp_home, tmp_path):
     assert len(st.materials) == 1 and "4 5 6" in st.materials[0].text
     reloaded = pipe.store.load_lab("ivanov", "psip", "7")
     assert reloaded.materials[0].text == st.materials[0].text  # сохраняется с лабой
+
+
+def _xlsx_raw(path, sheet_xml, styles=None, shared=None):
+    ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"'
+    rel = 'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("xl/workbook.xml", f'<workbook {ns} {rel}><sheets><sheet name="Лист1" sheetId="1" r:id="rId1"/>'
+                                      "</sheets></workbook>")
+        z.writestr("xl/_rels/workbook.xml.rels",
+                   '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                   '<Relationship Id="rId1" Target="/xl/worksheets/sheet1.xml" '
+                   'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/>'
+                   "</Relationships>")
+        if styles:
+            z.writestr("xl/styles.xml", f"<styleSheet {ns}>{styles}</styleSheet>")
+        if shared is not None:
+            z.writestr("xl/sharedStrings.xml", shared)
+        z.writestr("xl/worksheets/sheet1.xml", f"<worksheet {ns}><sheetData>{sheet_xml}</sheetData></worksheet>")
+    return path
+
+
+def test_xlsx_cells_without_address_dates_and_inline_strings(tmp_path):
+    styles = ('<numFmts count="1"><numFmt numFmtId="164" formatCode="dd/mm/yyyy;@"/></numFmts>'
+              '<cellXfs count="3"><xf numFmtId="0"/><xf numFmtId="14"/><xf numFmtId="164"/></cellXfs>')
+    sheet = ('<row><c t="inlineStr"><is><t>x</t></is></c><c t="inlineStr"><is><t>y</t></is></c><c><v>3</v></c></row>'
+             '<row r="2"><c r="A2" s="1"><v>45962</v></c><c r="C2" s="2"><v>45963.5</v></c><c r="D2"><v>2.50</v></c></row>')
+    text = read_material(_xlsx_raw(tmp_path / "t.xlsx", sheet, styles))
+    assert "x\ty\t3" in text  # без адресов ячейки идут подряд, а не в одну
+    assert "01.11.2025\t\t02.11.2025\t2.50" in text  # даты — датами, а не числами 45962
+
+
+def test_huge_xlsx_rejected_without_reading_it_all(tmp_path):
+    import time
+
+    row = "".join(f'<c r="{c}{{i}}" t="inlineStr"><is><t>значение-{c}</t></is></c>' for c in "ABCDEF")
+    sheet = "".join(f'<row r="{i}">' + row.replace("{i}", str(i)) + "</row>" for i in range(1, 60_000))
+    path = _xlsx_raw(tmp_path / "большая.xlsx", sheet)
+    t = time.monotonic()
+    try:
+        read_material(path)
+    except ValueError as e:
+        assert "строк" in str(e) or "лист" in str(e)
+    else:
+        raise AssertionError("огромная таблица должна отклоняться")
+    assert time.monotonic() - t < 3  # читает до лимита и останавливается

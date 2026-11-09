@@ -29,7 +29,7 @@ from forlabs.cloud.auth import CloudAuth, CloudError
 from forlabs.core import paths
 from forlabs.core.fs import atomic_write_bytes, atomic_write_text
 from forlabs.core.models import LabState, LabSummary, Profile, summarize
-from forlabs.core.netcert import is_cert_error, offline_message
+from forlabs.core.netcert import OFFLINE_MESSAGE, is_cert_error, offline_message
 from forlabs.core.store import Store, _number_key, _read_model, safe_name
 
 BUCKET = "labs"
@@ -125,6 +125,7 @@ class CloudStore:
         self.local = Store(cache_home or paths.data_home() / "cloud_cache")
         self.offline = False
         self._offline_until = 0.0  # недавно не было связи: чтение с копией идёт сразу в копию
+        self._memory_cache: dict[tuple[str, str], tuple[float, str]] = {}
 
     # HTTP
     def _h(self, extra: dict | None = None) -> dict:
@@ -384,14 +385,26 @@ class CloudStore:
         return out
 
     # память предмета и правила
+    MEMORY_TTL = 30.0  # секунд: страница лабы не спрашивает память предмета (тема, выжимки, требования) каждый раз
+
     def read_memory(self, profile_id: str, subject_id: str) -> str:
+        key = (profile_id, subject_id)
+        hit = self._memory_cache.get(key)
+        if hit and time.monotonic() - hit[0] < self.MEMORY_TTL:
+            return hit[1]
+        if time.monotonic() < self._offline_until:  # связи только что не было — не ждать повторов на каждой странице
+            raise CloudError(OFFLINE_MESSAGE, "память предмета без связи", offline=True)
         rows = self._rest("GET", "subject_memory", params={"select": "text", **self._mine(), "profile_id": f"eq.{profile_id}",
                                                            "subject_id": f"eq.{subject_id}"}).json()
-        return rows[0]["text"] if rows else ""
+        text = rows[0]["text"] if rows else ""
+        self._memory_cache[key] = (time.monotonic(), text)
+        return text
 
     def write_memory(self, profile_id: str, subject_id: str, text: str) -> None:
+        self._memory_cache.pop((profile_id, subject_id), None)
         self._upsert("subject_memory", {"profile_id": profile_id, "subject_id": subject_id, "text": text},
                      "owner,profile_id,subject_id")
+        self._memory_cache[(profile_id, subject_id)] = (time.monotonic(), text)
 
     def rule_overrides(self) -> dict[str, str]:
         rows = self._rest("GET", "rule_overrides", params={"select": "path,text", **self._mine()}).json()

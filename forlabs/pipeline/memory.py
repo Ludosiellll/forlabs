@@ -28,50 +28,90 @@ PROMPT = ("Сожми выполненную лабораторную работ
           "работы (например сайт кофейни «Зерно», база данных библиотеки), первой строкой напиши «Тематика: …» "
           "коротко. Без оценок и воды, по-русски, обычным текстом без markdown.")
 
-_LAB_REF = re.compile(r"(?:лабораторн\w*\s+работ\w*|\bЛР|\bл\.?\s*/?\s*р\.?)\s*(?:№\s*)?(\d+(?:\.\d+)?)",
+_LAB_REF = re.compile(r"(?:лабораторн\w*\s+работ\w*|\bЛР|\bл\.?\s*/?\s*р\.?)\s*(?:№\s*|No\.?\s*)?(\d+(?:\.\d+)?)"
+                      r"(?![\d])(?!\s*(?:час|ак\w*\s*час|мин|стр|балл|недел|%))",  # «работы 2 часа» — не ссылка
                       re.IGNORECASE)
 _PREV_REF = re.compile(r"(?:предыдущ|прошл)\w*\s+(?:лабораторн\w*\s+)?работ", re.IGNORECASE)
 
 
 _NUM = re.compile(r"\d+(?:\.\d+)?")
-_HEAD = re.compile(r"^[ \t]*(?:Отч[её]т\s+по\s+)?(?:лабораторн|практическ)\w*\s+работ\w*\s*№?\s*(\d+(?:\.\d+)?)",
+# заголовок лабы в любом привычном виде, в начале короткой строки или ячейки таблицы: «ЛАБОРАТОРНАЯ РАБОТА 1»,
+# «Лаб. работа № 2», «ЛР 3.», «Л/р №4», «Практическая работа 5», «Отчёт о выполнении лабораторной работы №6»,
+# «к лабораторной работе №7», «Иванов | Лабораторная работа No 8»
+_HEAD = re.compile(r"^(?:[^|\n]{0,80}\|\s*)*[ \t]*(?:Отч[её]т\s+(?:по|о)\s+(?:выполнении\s+)?|к\s+)?"
+                   r"(?:(?:лабораторн|практическ)\w*\.?\s+(?:работ|заняти)\w*|лаб\.?\s*раб\w*\.?|"
+                   r"пр(?:акт)?\.\s*раб\w*\.?|ЛР|ПР|Л/Р|П/Р)\s*(?:№|No\.?)?\s*(\d+(?:\.\d+)?)(?![\d])"
+                   r"(?!\s*(?:[-–—]|,|и\b)\s*\d)(?=[^\n]{0,200}$)",  # «работам 24–28», «работы 1, 2» — не заголовок
                    re.IGNORECASE | re.MULTILINE)
 LINKED_MAX = 12000  # символов одной прошлой лабы — модель видит её, но лимиты не съедаются
 LINKED_TOTAL = 36000  # на все связанные лабы вместе (уходят в каждое задание)
 
 
+def norm_number(n: str) -> str:
+    """«04» → «4», «05.2» → «5.2»: номер из отчёта совпадает с набранным."""
+    head, _, tail = (n or "").partition(".")
+    head = head.lstrip("0") or ("0" if head else "")
+    return f"{head}.{tail}" if tail else head
+
+
 def parse_numbers(raw: str) -> list[str]:
     """«1, 27; ЛР 5.2 и 30» → ["1", "27", "5.2", "30"] (без повторов, не больше пяти)."""
     out: list[str] = []
-    for n in _NUM.findall(raw or ""):
+    for n in map(norm_number, _NUM.findall(raw or "")):
         if n not in out:
             out.append(n)
     return out[:5]
 
 
 def split_labs(text: str) -> dict[str, str]:
-    """Общий отчёт → {номер: текст этой лабы} по заголовкам «Лабораторная работа №N». У одного номера несколько
-    кусков (строка оглавления и сама лаба) — берётся самый длинный."""
-    heads = list(_HEAD.finditer(text or ""))
-    out: dict[str, str] = {}
+    """Общий отчёт → {номер: текст этой лабы} по заголовкам. Заголовок, повторённый на каждой странице PDF, не режет
+    лабу на страницы: подряд идущие куски с одним номером склеиваются. Из оставшихся кусков одного номера (строка
+    оглавления и сама лаба) берётся самый длинный."""
+    text = text or ""
+    heads = list(_HEAD.finditer(text))
+    pieces: list[tuple[str, int, int]] = []
     for i, m in enumerate(heads):
-        end = heads[i + 1].start() if i + 1 < len(heads) else len(text)
-        part = text[m.start():end].strip()
-        if len(part) > len(out.get(m.group(1), "")):
-            out[m.group(1)] = part
+        n, end = norm_number(m.group(1)), heads[i + 1].start() if i + 1 < len(heads) else len(text)
+        if pieces and pieces[-1][0] == n:
+            pieces[-1] = (n, pieces[-1][1], end)
+        else:
+            pieces.append((n, m.start(), end))
+    out: dict[str, str] = {}
+    for n, start, end in pieces:
+        part = text[start:end].strip()
+        if len(part) > len(out.get(n, "")):
+            out[n] = part
     return out
 
 
+def _as_float(n: str) -> float | None:
+    try:
+        return float(n.split("-")[0])
+    except ValueError:
+        return None
+
+
 def referenced_labs(text: str, current: str) -> list[str]:
-    """Номера прошлых лаб, на которые ссылается методичка («из ЛР №1», «лабораторной работы 3»), и «previous» для
-    «предыдущей работы». Своя лаба (заголовок «Лабораторная работа №7») не считается; не больше трёх."""
-    cur = (current or "").split("-")[0]
+    """Номера прошлых лаб, на которые ссылается эта лаба («из ЛР №1», «лабораторной работы 3»), и «previous» для
+    «предыдущей работы». Смотрится только своя часть сборника; заголовки других лаб, будущие лабы и «работы 2 часа»
+    ссылками не считаются; не больше трёх."""
+    cur = norm_number((current or "").split("-")[0])
+    text = text or ""
+    own = split_labs(text).get(cur)
+    if own:
+        text = own
+    heads = {m.start(1) for m in _HEAD.finditer(text)}
+    cur_f = _as_float(cur)
     out: list[str] = []
-    for m in _LAB_REF.finditer(text or ""):
-        n = m.group(1)
-        if n != cur and n not in out:
-            out.append(n)
-    if _PREV_REF.search(text or "") and "previous" not in out:
+    for m in _LAB_REF.finditer(text):
+        n = norm_number(m.group(1))
+        if m.start(1) in heads or n == cur or n in out:
+            continue
+        n_f = _as_float(n)
+        if cur_f is not None and n_f is not None and n_f >= cur_f:
+            continue
+        out.append(n)
+    if _PREV_REF.search(text) and "previous" not in out:
         out.append("previous")
     return out[:3]
 
