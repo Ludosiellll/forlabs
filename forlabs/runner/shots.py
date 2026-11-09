@@ -133,7 +133,7 @@ class WindowsShooter:
             if not w:
                 return ShotResult(False, reason="окно консоли не появилось")
             time.sleep(1.2)
-            pid = next((p for p in sorted(winapi.process_tree({app.pid})) if p != app.pid), app.pid)
+            pid = [p for p in sorted(winapi.process_tree({app.pid})) if p != app.pid] or [app.pid]
             title = target.title or (cmd[0] if cmd else None)
             text = _get(shot, "input") or ""
             for step in _get(shot, "steps", None) or []:  # ввод по шагам: type/key/wait
@@ -151,11 +151,16 @@ class WindowsShooter:
             if not res.get("ok"):
                 return ShotResult(False, reason=f"не получилось ввести данные в консоль ({res.get('error')})")
             time.sleep(1.5)
-            seen = console.act(pid, read=True).get("screen", "")
+            pid = [p for p in sorted(winapi.process_tree({app.pid})) if p != app.pid] or [app.pid]
+            read = console.act(pid, read=True)
+            seen = read.get("screen", "")
+            img = winapi.capture(w.hwnd)
             expect = _get(shot, "expect") or ""
             if expect and expect not in seen:
-                return ShotResult(False, reason=f"программа вывела не то, что ожидалось («{expect}»)", seen=seen)
-            img = winapi.capture(w.hwnd)
+                img.save(out.with_name(out.stem + ".fail.png"))  # для разбора: что было на экране
+                why = read.get("error") or (seen.strip().splitlines() or ["пусто"])[-1][:120]
+                return ShotResult(False, reason=f"программа вывела не то, что ожидалось («{expect}»; на экране: {why})",
+                                  seen=seen)
             if winapi.blank(img):
                 return ShotResult(False, reason="снимок окна консоли получился пустым", seen=seen)
             out.parent.mkdir(parents=True, exist_ok=True)

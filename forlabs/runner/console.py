@@ -36,17 +36,19 @@ def helper_cmd() -> list[str]:
     return [sys.executable, "-m", "forlabs.runner.console"]
 
 
-def act(pid: int, *, text: str | None = None, title: str | None = None, read: bool = False,
+def act(pid: int | list[int], *, text: str | None = None, title: str | None = None, read: bool = False,
         timeout: float = 20.0) -> dict:
-    """Ввод, заголовок и/или чтение экрана консоли процесса pid. Возвращает {"ok", "screen", "error"}."""
+    """Ввод, заголовок и/или чтение экрана консоли. pid — процесс этой консоли или список: подключение к первому
+    живому (сама программа могла уже завершиться — окно держит cmd). Возвращает {"ok", "screen", "error"}."""
     import tempfile
     from pathlib import Path
 
     # задание и ответ — файлами: у собранного ForLabs.exe (оконная программа) нет надёжных stdin/stdout
     with tempfile.TemporaryDirectory(prefix="forlabs-con-") as tmp:
         job_file = Path(tmp) / "job.json"
-        job_file.write_text(json.dumps({"pid": pid, "text": text, "title": title, "read": read}, ensure_ascii=False),
-                            encoding="utf-8")
+        pids = [pid] if isinstance(pid, int) else list(pid)
+        job_file.write_text(json.dumps({"pids": pids, "text": text, "title": title, "read": read},
+                                       ensure_ascii=False), encoding="utf-8")
         try:
             subprocess.run([*helper_cmd(), str(job_file)], timeout=timeout, capture_output=True,
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
@@ -67,7 +69,16 @@ def _helper(job: dict) -> dict:
     import win32file
 
     win32console.FreeConsole()
-    win32console.AttachConsole(int(job["pid"]))
+    pids = job.get("pids") or [job["pid"]]
+    last = None
+    for p in pids:  # первый живой процесс этой консоли
+        try:
+            win32console.AttachConsole(int(p))
+            break
+        except Exception as e:  # noqa: BLE001 - процесс уже завершился или без консоли
+            last = e
+    else:
+        raise RuntimeError(f"не подключиться к консоли ({last})")
     try:
         if job.get("title"):
             win32console.SetConsoleTitle(job["title"])
