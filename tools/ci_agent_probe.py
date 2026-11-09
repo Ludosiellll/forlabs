@@ -46,6 +46,20 @@ class ScriptBrain:
         return core.Step(actions=[{"do": "done", "claim": "текст набран"}])
 
 
+def desktop_dump() -> list[str]:
+    """Все видимые окна верхнего уровня и их процессы — для разбора сбоев."""
+    from forlabs.runner import winapi
+
+    names = winapi.process_names()
+    wins = winapi.windows_of(set(names), owned=True)
+    out = []
+    for w in wins:
+        left, top, right, bottom = winapi.window_rect(w.hwnd)
+        out.append(f"{names.get(w.pid, '?')}[{w.pid}] «{w.title[:60]}» {w.cls} {right - left}x{bottom - top}")
+    out.append("devenv: " + ", ".join(f"{pid}" for pid, n in names.items() if n.lower() == "devenv.exe"))
+    return out
+
+
 def case(fn):
     name = fn.__name__
     t0 = time.time()
@@ -273,7 +287,14 @@ def visual_studio_project(res):
             if skip:
                 step["clicked"] = skip.name
                 seen.append(step)
-                desk.act(Action(do="click", el=skip.id), obs)
+                try:
+                    desk.act(Action(do="click", el=skip.id), obs)
+                except Stopped:
+                    res["after_stop"] = desktop_dump()
+                    from PIL import ImageGrab
+
+                    ImageGrab.grab(all_screens=True).save(OUT / "vs_screen_after_stop.png")
+                    raise
                 continue
             seen.append(step)
             if "Kalkulyator" in obs.title or "Program.cs" in obs.title:
