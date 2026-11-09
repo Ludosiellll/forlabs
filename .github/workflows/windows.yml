@@ -251,19 +251,32 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ForLabsSetup
-          path: build/ForLabsSetup.exe
+          path: |
+            build/ForLabsSetup.exe
+            build/latest.json
           retention-days: 14
+
+  # выпуск — только когда прошли и тесты, и сборка с проверкой установки: по тегу v* или при новой версии в main
+  release:
+    needs: [tests, build]
+    if: github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ForLabsSetup
+          path: build
       - name: Версия для выпуска
         id: ver
-        shell: pwsh
         run: |
-          $ver = python -c "from forlabs.version import __version__ as v; print(v)"
-          "tag=v$ver" >> $env:GITHUB_OUTPUT
-          $exists = git ls-remote --tags origin "refs/tags/v$ver"
-          if ($exists) { "exists=true" >> $env:GITHUB_OUTPUT } else { "exists=false" >> $env:GITHUB_OUTPUT }
-      # выпуск: по тегу v* или при новой версии в main (тег и релиз создаёт сама сборка)
+          ver=$(python3 -c "import re; print(re.search(r'__version__ = \"([^\"]+)\"', open('forlabs/version.py', encoding='utf-8').read())[1])")
+          echo "tag=v$ver" >> "$GITHUB_OUTPUT"
+          if git ls-remote --tags origin "refs/tags/v$ver" | grep -q .; then echo "exists=true" >> "$GITHUB_OUTPUT"; else echo "exists=false" >> "$GITHUB_OUTPUT"; fi
+          ls -l build
+          grep -q "\"version\": *\"$ver\"" build/latest.json || { echo "::error::latest.json не для версии $ver"; exit 1; }
       - name: Выпуск
-        if: startsWith(github.ref, 'refs/tags/v') || (github.ref == 'refs/heads/main' && steps.ver.outputs.exists != 'true')
+        if: startsWith(github.ref, 'refs/tags/v') || steps.ver.outputs.exists != 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || steps.ver.outputs.tag }}

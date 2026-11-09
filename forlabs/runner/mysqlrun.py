@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
 import socket
 import subprocess
 import sys
@@ -15,6 +14,8 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+
+from forlabs.core.fs import remove_tree
 
 WINDOWS = sys.platform == "win32"
 EXE = ".exe" if WINDOWS else ""
@@ -160,13 +161,9 @@ class LabServer:
 
     def stop(self) -> None:
         self.proc.kill()
-        for _ in range(10):  # файлы сервера освобождаются не мгновенно
-            shutil.rmtree(self.data, ignore_errors=True)
-            if not self.data.exists():
-                break
-            time.sleep(0.5)
+        remove_tree(self.data, tries=10)  # файлы сервера освобождаются не мгновенно; ключи — «только для чтения»
         if self.root is not None:
-            shutil.rmtree(self.root, ignore_errors=True)
+            remove_tree(self.root, tries=3)
 
 
 def start(mysql_client: str, work_root: Path, timeout: float = 90, low: bool = True) -> LabServer:
@@ -189,7 +186,7 @@ def start(mysql_client: str, work_root: Path, timeout: float = 90, low: bool = T
             p.kill()  # и задание (job) закрыть: зависшая подготовка не остаётся висеть
             ok = code == 0 and (db / "mysql").is_dir()
         if not ok:
-            shutil.rmtree(db, ignore_errors=True)
+            remove_tree(db, tries=3)
             ok = _bootstrap(mysqld, base, db, as_root)
     else:
         p = _Proc([str(mysqld), "--no-defaults", f"--basedir={base}", f"--datadir={db}", "--initialize-insecure",
@@ -200,7 +197,7 @@ def start(mysql_client: str, work_root: Path, timeout: float = 90, low: bool = T
     if not ok:
         detail = f"код {code}; {_tail(data / 'init.err')}"
         log.warning("mysqld: папка данных не подготовлена: %s", detail)
-        shutil.rmtree(data, ignore_errors=True)
+        remove_tree(data, tries=3)
         raise MysqlError("сервер MySQL не подготовил папку данных", detail)
     port = _free_port()
     args = [str(mysqld), "--no-defaults", f"--basedir={base}", f"--datadir={db}",

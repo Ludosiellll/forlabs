@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
+from forlabs.core.fs import remove_tree
+
 EDGE_PATHS = [r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
               r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"]
 
@@ -154,7 +156,7 @@ def run_dir(base: Path | None = None) -> Path:
         cutoff = time.time() - 86400
         for old in root.iterdir() if root.is_dir() else []:
             if old.is_dir() and old.stat().st_mtime < cutoff:
-                shutil.rmtree(old, ignore_errors=True)
+                remove_tree(old)
     except OSError:
         pass
     d = root / uuid.uuid4().hex[:10]
@@ -169,11 +171,7 @@ def _drop_run(path: Path | None) -> None:
     root = runs_root()
     for p in [path, *path.parents]:
         if p.parent == root:
-            for _ in range(5):  # процессы закрываются не мгновенно — файлы могут быть ещё заняты
-                shutil.rmtree(p, ignore_errors=True)
-                if not p.exists():
-                    return
-                time.sleep(0.4)
+            remove_tree(p, tries=5, pause=0.4)  # процессы закрываются не мгновенно — файлы могут быть ещё заняты
             return
 
 
@@ -355,7 +353,6 @@ class WindowsShooter:
 
     # --- сайт ---
     def _browser(self, target: RunTarget, shot, out: Path) -> ShotResult:
-        import subprocess
 
         from forlabs.runner import winapi
 

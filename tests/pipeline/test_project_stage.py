@@ -149,7 +149,7 @@ def test_project_name_with_colon_does_not_lose_the_stage(tmp_home, tmp_path):
     pipe, fake, st = make(tmp_home, tmp_path, [{**PLAN, "name": "Сумма: «два» числа"}])
     st = pipe.execute(st)
     assert st.project and st.project.built and st.project.name == "Сумма два числа"
-    assert (Path(st.project.folder) / "main.py").exists() and ":" not in st.project.folder.split("/")[-1]
+    assert (Path(st.project.folder) / "main.py").exists() and ":" not in Path(st.project.folder).name
 
 
 def test_big_project_is_planned_in_parts_when_answer_is_cut(tmp_home, tmp_path):

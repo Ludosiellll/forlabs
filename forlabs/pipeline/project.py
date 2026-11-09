@@ -21,11 +21,18 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from forlabs.core.fs import remove_tree
 from forlabs.core.llm import LLMError
 from forlabs.core.models import Figure, LabState, Listing, ProjectInfo
 from forlabs.runner import languages, safety
 from forlabs.runner import plan as plan_rules
-from forlabs.runner.plan import DATA_EXT, ListingRef, ProjectFile, ProjectPlan, validate  # noqa: F401 (validate — для конвейера)
+from forlabs.runner.plan import (  # noqa: F401 (validate — для конвейера)
+    DATA_EXT,
+    ListingRef,
+    ProjectFile,
+    ProjectPlan,
+    validate,
+)
 
 MAX_FIXES = 3
 CODE_LANGS = {"python", "py", "csharp", "cs", "c#", "cpp", "c++", "c", "java", "js", "javascript", "html", "css",
@@ -388,7 +395,7 @@ def start_mysql(client: str):
         root = run_dir()
         if not str(mysqlrun.short_path(root)).isascii():
             # имя пользователя на кириллице, а коротких имён на диске нет: такой путь понимает не каждая сборка MySQL
-            shutil.rmtree(root, ignore_errors=True)
+            remove_tree(root)
             root = run_dir(Path(os.environ.get("ProgramData", r"C:\ProgramData")) / "ForLabs" / "runs")
         winapi.low_label_dir(str(root))  # писать сервер с пониженными правами может только сюда
     else:
@@ -396,7 +403,7 @@ def start_mysql(client: str):
     try:
         server = mysqlrun.start(client, root, low=win)
     except BaseException:
-        shutil.rmtree(root, ignore_errors=True)
+        remove_tree(root, tries=3)
         raise
     server.root = root
     return server

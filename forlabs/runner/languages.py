@@ -641,7 +641,9 @@ def run_spec(plan: ProjectPlan, artifact: Path | str | None, project_dir: Path |
         return RunSpec([_windowless(t.path, console), *t.args, "-B", plan.entry], d, console, dict(PY_ENV))
     if lang == "java":
         java = _windowless(_java_exe(tools["java"]), console)
-        return RunSpec([java, *JAVA_RUN, "-cp", str(a), _java_main(plan)], d, console)
+        # путь классов — от папки проекта: кириллица в аргументах java при кодовой странице 1252 становится «?»
+        cp = os.path.relpath(a, d) if Path(a).is_relative_to(d) else str(a)
+        return RunSpec([java, *JAVA_RUN, "-cp", cp, _java_main(plan)], d, console)
     if lang == "javascript":
         return RunSpec([tools["node"].path, plan.entry], d, console)
     if lang == "php" and plan.kind == "web":

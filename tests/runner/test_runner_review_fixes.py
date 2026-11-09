@@ -115,3 +115,34 @@ def test_expect_must_be_in_output_not_only_in_typed_text(expect, seen, typed, ok
     from forlabs.runner.shots import shown
 
     assert shown(expect, seen, typed) is ok
+
+
+def test_java_classpath_is_relative_so_cyrillic_project_path_works(tmp_path):
+    """В Windows с кодовой страницей 1252 кириллица в аргументах java превращается в «?»: путь классов — от папки
+    проекта, где программа и запускается."""
+    from forlabs.runner import languages
+    from forlabs.runner.languages import Toolchain
+
+    p = ProjectPlan.model_validate({"language": "java", "kind": "console", "name": "Лаба", "entry": "src/ru/lab/Main.java",
+                                    "files": [{"path": "src/ru/lab/Main.java", "content": "package ru.lab;\nclass Main {}\n"}]})
+    d = tmp_path / "Проект Иванова"
+    spec = languages.run_spec(p, d / "out", d, {"java": Toolchain("java", str(tmp_path / "jdk" / "bin" / "javac"))})
+    cp = spec.cmd[spec.cmd.index("-cp") + 1]
+    assert cp == "out" and spec.cwd == d and spec.cmd[-1] == "ru.lab.Main"
+
+
+def test_remove_tree_deletes_read_only_files(tmp_path):
+    """MySQL кладёт в папку данных ключи «только для чтения»: в Windows обычный rmtree их не удаляет."""
+    import os
+    import stat
+
+    from forlabs.core.fs import remove_tree
+
+    d = tmp_path / "mysql-1" / "db"
+    d.mkdir(parents=True)
+    key = d / "server-key.pem"
+    key.write_text("x")
+    os.chmod(key, stat.S_IREAD)
+    remove_tree(tmp_path / "mysql-1")
+    assert not (tmp_path / "mysql-1").exists()
+    assert remove_tree(tmp_path / "нет такой")  # нет папки — не ошибка

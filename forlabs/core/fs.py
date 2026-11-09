@@ -5,6 +5,9 @@ from __future__ import annotations
 import errno
 import logging
 import os
+import shutil
+import stat
+import sys
 import threading
 import time
 from datetime import datetime
@@ -101,3 +104,30 @@ def os_error_text(e: OSError) -> str:
     if e.errno == errno.EROFS:
         return "Диск открыт только для чтения — выбери другую папку."
     return f"Не получилось работать с файлом{where} ({e.strerror or type(e).__name__}). Повтори ещё раз."
+
+
+def remove_tree(path: Path | str, tries: int = 1, pause: float = 0.5) -> bool:
+    """Удалить папку целиком, вместе с файлами «только для чтения» (в Windows rmtree на них спотыкается: так MySQL
+    хранит ключи). Ошибки не выбрасываются; tries — повторы, пока файлы ещё заняты закрывающейся программой.
+    True — папки больше нет."""
+    def retry(func, p, *_):
+        try:
+            os.chmod(p, stat.S_IWRITE | stat.S_IREAD)
+            func(p)
+        except OSError:
+            pass
+
+    path = Path(path)
+    for i in range(max(1, tries)):
+        try:
+            if sys.version_info >= (3, 12):
+                shutil.rmtree(path, onexc=retry)
+            else:
+                shutil.rmtree(path, onerror=retry)
+        except OSError:
+            pass
+        if not path.exists():
+            return True
+        if i + 1 < tries:
+            time.sleep(pause)
+    return False

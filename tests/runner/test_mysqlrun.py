@@ -23,12 +23,12 @@ def test_private_server_clean_limited_and_removed(tmp_path):
         # кириллица в таблице без указания кодировки: у MariaDB (XAMPP) по умолчанию latin1
         assert r.returncode == 0 and "Мастер и Маргарита — 17" in r.stdout, r.stderr
         outside = tmp_path / "outside.txt"
-        r = subprocess.run([*srv.client(), "-e", f"SELECT 1 INTO OUTFILE '{outside}'"], capture_output=True,
+        r = subprocess.run([*srv.client(), "-e", f"SELECT 1 INTO OUTFILE '{outside.as_posix()}'"], capture_output=True,
                            text=True, timeout=30)
         assert r.returncode != 0 and not outside.exists()  # писать файлы вне своей папки сервер не может
     finally:
         srv.stop()
-    assert not srv.data.exists()  # папка данных удалена
+    assert not srv.data.exists(), [str(p) for p in srv.data.rglob("*")][:10]  # папка данных удалена
 
 
 def test_project_stage_server_cleans_its_folder():
