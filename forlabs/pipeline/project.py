@@ -2,12 +2,15 @@
 делает ForLabs, студенту остаётся только то, что снять нельзя (с причиной); копия проекта — рядом с отчётом.
 
 Порядок: модель составляет план (файлы, какие листинги из каких файлов, сценарий каждого снимка) → проверка плана →
-сборка, ошибки уходят модели (до трёх кругов) → проверка кода на опасное → снимки в песочнице → листинги отчёта
-сверяются с кодом → копия в папку сдачи. Сбой этапа не ломает лабу: рисунки просто остаются студенту."""
+сборка, ошибки уходят модели (до трёх кругов) → проверка кода на опасное → листинги отчёта сверяются с кодом →
+копия в папку сдачи → снимки в песочнице (пути на них — из папки сдачи). Сбой этапа не ломает лабу: рисунки
+просто остаются студенту."""
 
 from __future__ import annotations
 
+import difflib
 import json
+import re
 import shutil
 import sys
 import uuid
@@ -15,8 +18,10 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from forlabs.core.llm import LLMError
 from forlabs.core.models import Figure, LabState, Listing, ProjectInfo
 from forlabs.runner import languages, safety
+from forlabs.runner import plan as plan_rules
 from forlabs.runner.plan import DATA_EXT, ListingRef, ProjectFile, ProjectPlan, validate  # noqa: F401 (validate — для конвейера)
 
 MAX_FIXES = 3
@@ -26,43 +31,83 @@ CODE_LANGS = {"python", "py", "csharp", "cs", "c#", "cpp", "c++", "c", "java", "
 PROJECT_SYSTEM = """Ты собираешь из отчёта по лабораторной работе настоящий проект: студент откроет его в своей среде,
 соберёт и запустит, а ForLabs сам сделает снимки окон программы для отчёта. Ответ — только JSON.
 
-Правила:
-1. Все файлы исходного кода целиком, чтобы проект собирался и работал. Код из листингов отчёта уже согласован и должен
-   войти в файлы дословно. Если для сборки код из листинга пришлось изменить — верни новый текст листинга в
-   listings[].code (иначе code не пиши).
-2. Файлы сборки (csproj, sln, pom.xml, go.mod, CMakeLists.txt, package.json со скриптами, .bat, .ps1) НЕ пиши — их
-   сделает ForLabs. Файлы данных (txt, csv, json), которые читает программа, положи в проект.
-3. Пиши как студент колледжа: заголовки окон, надписи и сообщения — по-русски и по теме лабы; имена — как в отчёте.
-   Никаких служебных пометок, «TODO», «generated», английских заглушек, отладочного вывода и лишних окон.
-4. Программа не трогает файлы вне своей папки, не запускает другие программы, не обращается к реестру и сети
+Код и файлы:
+1. Все файлы исходного кода целиком, чтобы проект собирался и работал (со всеми using, import, #include). Код из
+   листингов отчёта уже согласован: он входит в файлы дословно, ничего в нём не меняй — ни ради снимков (фокус,
+   имена элементов, клавиши), ни «для надёжности». Чего не хватает (другие классы, файл Designer формы, App.xaml,
+   разметка, главный файл), допиши сам в том же стиле.
+2. listings — по записи на КАЖДЫЙ листинг отчёта (все номера [N.M], и фрагменты, и файлы данных): из какого файла
+   он взят. Если код листинга в итоговом файле всё же другой (задание продолжает прежнее и меняет его код,
+   например в main добавлены строки), верни в code текст этого листинга так, как он стоит в файле; иначе code не
+   пиши.
+3. Файлы сборки (csproj, sln, pom.xml, go.mod, CMakeLists.txt, package.json со скриптами, .bat, .ps1) НЕ пиши — их
+   сделает ForLabs. Файлы данных (txt, csv, json), которые читает программа, положи в проект; файлы от
+   преподавателя ForLabs положит сам.
+4. Пиши как студент колледжа: заголовки окон, надписи и сообщения — по-русски и по теме лабы; имена — как в отчёте.
+   Никаких служебных пометок, «TODO», «generated», английских надписей, отладочного вывода и лишних окон.
+5. Программа не трогает файлы вне своей папки, не запускает другие программы, не обращается к реестру и сети
    (кроме локального сервера для сайта на PHP).
-5. Оконная программа: у каждого поля, списка и кнопки, которые участвуют в снимках, — понятное имя
-   (WinForms — свойство Name, WPF — x:Name). В Swing и tkinter при старте курсор стоит в первом поле.
-6. Сценарий каждого рисунка-скриншота (section и block — номера из квадратных скобок):
-   - mode "console": input — что ввести с клавиатуры (каждая строка с \\n), expect — кусок текста, который точно
-     будет на экране после ввода (например «Сумма: 17»);
-   - mode "window": steps — шаги в окне: {"action":"set","target":"имя поля","value":"12"},
-     {"action":"select","target":"имя списка","value":"пункт"}, {"action":"click","target":"имя или текст кнопки"},
-     {"action":"check","target":"имя флажка"}, для Swing и tkinter — {"action":"type","value":"12"} и
-     {"action":"key","value":"tab|enter|esc"}, {"action":"wait","value":"1"}; expect — текст, который появится
-     в окне; если после нажатия открывается окно сообщения, снимок будет его;
-   - mode "browser": url — путь страницы в проекте (index.html);
-   - mode "manual" + reason — если снять может только студент: окно среды разработки или конструктора, проводник,
-     другая программа, сервер, оборудование, сеть колледжа.
-7. language — один из: csharp, cpp, python, java, javascript, web, php, go, mysql; kind — console, winforms, wpf,
-   web, script, sql или gui (окно Swing/tkinter); entry — главный файл.
+6. name — короткое название по-русски, 1–4 слова (это имя папки проекта): без двоеточий, кавычек, слэшей и
+   названия языка. language — один из: csharp, cpp, python, java, javascript, web, php, go, mysql; kind — console,
+   winforms, wpf, web, script, sql или gui (окно Swing/tkinter); entry — главный файл (у сайта на PHP — файл .php).
+
+Снимки — по одному на каждый рисунок-скриншот (section и block — номера из квадратных скобок). ForLabs запускает
+программу в Windows студента, проходит сценарий и проверяет, что на экране есть expect:
+- mode "console": input — что набрать на клавиатуре, каждая строка с \\n, ровно столько строк, сколько программа
+  прочитает (лишний Enter закроет окно консоли), в том формате, как читает код: «12 5\\n» — если два числа читаются
+  из одной строки, «12\\n5\\n» — если по одному. expect — короткий кусок строки, которую печатает сама программа:
+  подпись результата («Общая стоимость:») или подпись с числом, которое видно без расчётов; набранный ввод в expect
+  не включай. C# и Java в русской Windows читают и печатают дробные числа с запятой (2,5): в input для них бери
+  целые числа, дробных чисел в expect не ставь.
+- mode "window", WinForms и WPF: steps — {"action":"set","target":"имя поля","value":"12"},
+  {"action":"select","target":"имя списка","value":"пункт"}, {"action":"click","target":"имя кнопки"},
+  {"action":"check","target":"имя флажка"}, {"action":"wait","value":"1"}; target — Name элемента (WinForms) или
+  x:Name (WPF), это имя должно быть задано в коде. expect — текст, который появится в окне; если после нажатия
+  открывается окно сообщения, снимок будет его.
+- mode "window", Swing и tkinter: только клавиатура — {"action":"type","value":"12"},
+  {"action":"key","value":"tab|enter|space|esc"}, {"action":"wait","value":"1"}. Tab переходит по полям и кнопкам в
+  порядке их создания, надписи пропускает. Swing: при запуске курсор уже в первом поле. tkinter: при запуске курсора
+  нет нигде, первый шаг — key tab (если код не вызывает focus_set). Кнопку нажимает key space, когда до неё дошли
+  клавишей Tab; key enter — только если в коде Enter привязан (bind("<Return>", …), setDefaultButton).
+- mode "browser": url — путь страницы в проекте (index.html, form.php). ForLabs только открывает страницу (сайт на
+  PHP — через встроенный сервер), шагов в браузере нет.
+- MySQL: ForLabs запускает консольный клиент mysql в папке проекта. Результат запросов — mode "console", input —
+  «source файл.sql\\n» (или сами запросы), expect — значение из результата. Скрипт должен выполняться повторно без
+  ошибок: перед CREATE DATABASE — DROP DATABASE IF EXISTS той же базы.
+- mode "manual" + reason — только если снять может лишь студент: окно среды разработки, конструктора или
+  обозревателя решений, phpMyAdmin, Блокнот и другие программы, страница после ввода данных или отправки формы.
 
 Формат:
 {"language": "csharp", "kind": "winforms", "name": "Калькулятор", "entry": "Program.cs",
  "files": [{"path": "Program.cs", "content": "…"}, {"path": "Form1.cs", "content": "…"}],
  "listings": [{"section": 1, "block": 2, "file": "Form1.cs"}],
- "shots": [{"section": 1, "block": 3, "mode": "window", "steps": […], "expect": "17"},
+ "shots": [{"section": 1, "block": 3, "mode": "window", "steps": […], "expect": "Результат:"},
            {"section": 2, "block": 2, "mode": "manual", "reason": "окно конструктора форм"}]}"""
+
+PARTS_NOTE = """Прошлый ответ не поместился целиком: проект большой. Сейчас верни план без текста файлов — у каждого
+файла в files только path (content не пиши); listings и shots — полностью, как обычно. Тексты файлов я попрошу
+следом, по одному."""
+
+FILE_SYSTEM = """Ты пишешь один файл проекта лабораторной работы по готовому плану. Ответ — только JSON:
+{"path": "…", "content": "полный текст файла"}. Код из листингов отчёта, которые берутся из этого файла, входит в него
+дословно; с уже написанными файлами проекта файл должен собираться вместе (те же имена классов, полей, функций).
+Правила те же: русские надписи, без служебных пометок и отладочного вывода, без работы с файлами вне папки
+программы, процессами и сетью."""
 
 FIX_SYSTEM = """Ты исправляешь проект лабораторной работы: сборка не прошла. Верни только JSON с изменёнными файлами
 целиком: {"files": [{"path": "…", "content": "…"}], "listings": [{"section": 1, "block": 2, "file": "…",
-"code": "новый текст листинга, если код из него изменился"}]}. Меняй как можно меньше, тем же стилем; правила те же:
-русские надписи, без служебных пометок, без файлов сборки, без работы с файлами вне папки программы, процессами и сетью."""
+"code": "новый текст листинга"}]}. Исправляй причину ошибки, меняй как можно меньше, тем же стилем. Если изменился
+код, который входит в листинг отчёта (список ниже), верни этот листинг в listings — так, как он теперь стоит в файле.
+Файлы сборки (csproj, go.mod, pom.xml, package.json, CMakeLists.txt) делает ForLabs — не пиши и не меняй их. Правила
+те же: русские надписи, без служебных пометок, без работы с файлами вне папки программы, процессами и сетью."""
+
+PLAN_MAX_TOKENS = 8000
+FILE_MAX_TOKENS = 8000  # один файл большого проекта (план по частям)
+MAX_PART_FILES = 12  # большой проект по частям: не больше стольких файлов (по запросу на файл)
+DATA_PREVIEW_LINES = 12  # начало файла данных от преподавателя в запросе: столбцы, разделитель, формат чисел
+HEADER = re.compile(r"\s*(?:import\s|using\s+[\w.=\s]+;|#\s*include\b|package\s|from\s+[\w.]+\s+import\s|"
+                    r"require(?:_once)?\b|include(?:_once)?\b)")
+NAME_BAD = re.compile(r'[\\/:<>"|?*«»\x00-\x1f]+')
 
 
 class FixOut(BaseModel):
@@ -98,25 +143,75 @@ def lab_text(st: LabState) -> str:
     if st.materials:
         parts.append("Файлы от преподавателя (ForLabs сам положит их в папку программы, читай их по имени): "
                      + ", ".join(m.name for m in st.materials))
+        for m in st.materials:
+            if Path(m.name).suffix.lower() in DATA_EXT and m.text.strip():
+                lines = m.text.strip("\n").split("\n")
+                head = "\n".join(lines[:DATA_PREVIEW_LINES])[:1500]
+                more = f"\n… (всего строк: {len(lines)})" if len(lines) > DATA_PREVIEW_LINES else ""
+                parts.append(f"Начало файла {m.name}:\n<<<\n{head}{more}\n>>>")
     return "\n\n".join(parts)
+
+
+def _tidy(plan: ProjectPlan) -> ProjectPlan:
+    """Мелочи, из-за которых не стоит терять весь этап: двоеточие или кавычки в имени проекта (это имя папки) и
+    файлы сборки, которые модель всё же написала (их всё равно пишет ForLabs по своим шаблонам)."""
+    name = " ".join(NAME_BAD.sub(" ", plan.name).split()).strip(". ")[:60].strip(". ") or plan.name
+    files = [f for f in plan.files if plan_rules._build_file_problem(f) is None]
+    return plan.model_copy(update={"name": name, "files": files})
+
+
+def _files_text(files) -> str:
+    return "\n\n".join(f"Файл {f.path}:\n<<<\n{f.content}\n>>>" for f in files
+                        if Path(f.path).suffix.lower() not in DATA_EXT or f.content.strip())
+
+
+def _plan_in_parts(user: str, llm) -> ProjectPlan:
+    """Большой проект, который не влез в один ответ: сначала план без текстов файлов, затем каждый файл отдельно."""
+    head = _tidy(llm.json([{"role": "system", "content": PROJECT_SYSTEM},
+                           {"role": "user", "content": f"{user}\n\n{PARTS_NOTE}"}], ProjectPlan,
+                          max_tokens=PLAN_MAX_TOKENS))
+    todo = [f for f in head.files if not f.content.strip()]
+    if len(todo) > MAX_PART_FILES:
+        raise LLMError("bad_response", f"{len(todo)} файлов", "Проект программы слишком большой.")
+    refs = "; ".join(f"[{r.section}.{r.block}] → {r.file}" for r in head.listings) or "нет"
+    manifest = (f"План проекта: язык {head.language}, вид {head.kind}, главный файл {head.entry}.\n"
+                f"Файлы: {', '.join(f.path for f in head.files)}.\nЛистинги отчёта: {refs}.")
+    done: dict[str, ProjectFile] = {f.path: f for f in head.files if f.content.strip()}
+    for f in todo:
+        mine = ", ".join(f"[{r.section}.{r.block}]" for r in head.listings if r.file == f.path) or "нет"
+        written = _files_text(done.values())
+        ask = (f"{user}\n\n{manifest}\n\n" + (f"Уже написаны:\n{written}\n\n" if written else "")
+               + f"Напиши файл {f.path} целиком. Листинги отчёта из этого файла: {mine}.")
+        out = llm.json([{"role": "system", "content": FILE_SYSTEM}, {"role": "user", "content": ask}], ProjectFile,
+                       max_tokens=FILE_MAX_TOKENS)
+        done[f.path] = ProjectFile(path=f.path, content=out.content)
+    return head.model_copy(update={"files": [done[f.path] for f in head.files]})
 
 
 def plan_project(st: LabState, llm, memory: str = "") -> ProjectPlan:
     user = lab_text(st) + (f"\n\nПамять предмета и требования:\n{memory[:6000]}" if memory.strip() else "")
-    return llm.json([{"role": "system", "content": PROJECT_SYSTEM}, {"role": "user", "content": user}], ProjectPlan,
-                    max_tokens=8000)
+    try:
+        plan = llm.json([{"role": "system", "content": PROJECT_SYSTEM}, {"role": "user", "content": user}],
+                        ProjectPlan, max_tokens=PLAN_MAX_TOKENS)
+    except LLMError as e:
+        if e.kind != "bad_response":  # сеть, ключ, лимит — части не помогут
+            raise
+        plan = _plan_in_parts(user, llm)  # ответ обрезан по длине или JSON не собрался
+    return _tidy(plan)
 
 
 def fix_project(plan: ProjectPlan, log: str, llm) -> ProjectPlan:
     files = "\n\n".join(f"Файл {f.path}:\n<<<\n{f.content}\n>>>" for f in plan.files
                         if Path(f.path).suffix.lower() not in DATA_EXT)
+    refs = "; ".join(f"[{r.section}.{r.block}] из {r.file}" for r in plan.listings) or "нет"
     user = (f"Язык: {plan.language}, вид: {plan.kind}, главный файл: {plan.entry}.\n\nОшибки сборки:\n{log[-6000:]}"
-            f"\n\nФайлы проекта:\n{files}")
+            f"\n\nЛистинги отчёта: {refs}.\n\nФайлы проекта:\n{files}")
     out = llm.json([{"role": "system", "content": FIX_SYSTEM}, {"role": "user", "content": user}], FixOut,
                    max_tokens=8000)
     by_path = {f.path: f for f in plan.files}
     for f in out.files:
-        by_path[f.path] = f
+        if plan_rules._build_file_problem(f) is None:  # go.mod, csproj и т.п. всё равно пишет ForLabs
+            by_path[f.path] = f
     refs = {(r.section, r.block): r for r in plan.listings}
     for r in out.listings:
         refs[(r.section, r.block)] = r
@@ -131,12 +226,64 @@ def _with_materials(plan: ProjectPlan, st: LabState) -> ProjectPlan:
     return plan.model_copy(update={"files": [*plan.files, *extra]}) if extra else plan
 
 
+def _squash(text: str) -> str:
+    return re.sub(r"\s+", "", text)
+
+
+def listing_in_file(code: str, body: str) -> str | None:
+    """Листинг так, как он стоит в файле: от первой до последней совпавшей строки. Нужен, когда следующее задание
+    дополнило код листинга (в main добавлен вызов, в класс — метод). None — в файле этого кода нет."""
+    a = [x.strip() for x in code.splitlines()]
+    lines = body.splitlines()
+    sm = difflib.SequenceMatcher(lambda x: not x, a, [x.strip() for x in lines], autojunk=False)
+    blocks = [m for m in sm.get_matching_blocks() if m.size and any(a[m.a:m.a + m.size])]
+    if not blocks or sum(m.size for m in blocks) < 0.6 * sum(1 for x in a if x):
+        return None
+    solid = [m for m in blocks if any(len(x) > 3 for x in a[m.a:m.a + m.size])]  # не «}» и «{» где-то в стороне
+    start, end = solid[0].b, solid[-1].b + solid[-1].size
+    if HEADER.match(next((x for x in a if x), "")):  # листинг — файл целиком: и импорты, добавленные для сборки
+        while start > 0 and (HEADER.match(lines[start - 1]) or not lines[start - 1].strip()):
+            start -= 1
+    while end < len(lines) and any(m.b == end for m in blocks):  # закрывающие скобки сразу за кодом — его часть
+        end += next(m.size for m in blocks if m.b == end)
+    if end - start > 2 * len(a) + 30:
+        return None
+    return "\n".join(lines[start:end]).strip("\n")
+
+
+def shot_url(page: str, url: str) -> str:
+    """Адрес страницы снимка сайта на сервере: путь из плана («form.php», «/index.html?x=1») — от корня сайта, а не
+    от главной страницы (иначе вышло бы «…/order.php/form.php» — снова главная, и без стилей)."""
+    if not url or re.match(r"[a-z][a-z0-9+.-]*://", url, re.I) or not page.startswith("http"):
+        return url or page
+    root = page.split("/", 3)
+    return "/".join(root[:3]) + "/" + url.lstrip("/")
+
+
+def page_uri(root: Path, url: str) -> str:
+    """Страница сайта без сервера — file://-адрес в папке root («about.html#cont» → …/about.html#cont)."""
+    if re.match(r"[a-z][a-z0-9+.-]*:", url, re.I):
+        return url
+    m = re.match(r"([^?#]*)(.*)", url.lstrip("/"), re.S)
+    return Path(root, m[1]).as_uri() + m[2]
+
+
+def _in_hand_in(program: str, work: Path, hand_in: Path) -> str | None:
+    """Путь программы, как у студента (в папке сдачи), для заголовка консоли. Интерпретатор (python, node) — None:
+    тогда заголовок — его путь, как при обычном запуске."""
+    try:
+        rel = Path(program).resolve().relative_to(work.resolve())
+    except (ValueError, OSError):
+        return None
+    return str(hand_in / rel)
+
+
 def _tool_title(key: str) -> str:
     return getattr(languages, "TOOL_TITLES", {}).get(key, key)
 
 
 def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None) -> LabState:
-    """Сборка (с исправлениями, если есть модель) → снимки → листинги → копия в папку сдачи. Меняет st."""
+    """Сборка (с исправлениями, если есть модель) → листинги → копия в папку сдачи → снимки. Меняет st."""
     from forlabs.runner.shots import RunTarget
 
     emit = emit or (lambda text, kind="info": None)
@@ -173,8 +320,24 @@ def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None) 
     refs = {(r.section, r.block): r for r in plan.listings}
     for n, bi, b in _blocks(st):
         r = refs.get((n, bi))
-        if isinstance(b, Listing) and r is not None and r.code.strip():
-            b.code = r.code.rstrip()
+        if not isinstance(b, Listing) or r is None:
+            continue
+        code = r.code.rstrip() if r.code.strip() else b.code
+        f = plan.file(r.file)
+        got = listing_in_file(code, f.content) if f is not None else None
+        # задание дополнило код или для сборки добавлены импорты, а модель листинг не вернула — берём из файла
+        if got and (_squash(code) not in _squash(f.content) or
+                    (_squash(got) != _squash(code) and _squash(got).endswith(_squash(code)))):
+            code = got
+        b.code = code
+
+    # копия проекта в папку сдачи — до снимков: на снимках пути из неё, как при запуске самим студентом
+    hand_in = work
+    try:
+        hand_in = _copy_to_hand_in(pipe, st, plan, work)
+        info.folder = str(hand_in)
+    except OSError as e:
+        emit(f"Проект не скопировался в папку сдачи ({e})", "warn")
 
     # снимки
     shots = {(s.section, s.block): s for s in plan.shots}
@@ -207,9 +370,17 @@ def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None) 
             continue
         if spec is None:
             spec = languages.run_spec(plan, result.artifact if result else None, work, tools)
-        target = RunTarget(cmd=[] if spec.url and plan.language == "php" else list(spec.cmd), cwd=Path(spec.cwd),
-                           console=spec.console, url=spec.url or None, env=dict(spec.env or {}),
-                           server=list(spec.cmd) if spec.url and plan.language == "php" else None)
+        static = plan.language == "web"  # страница без сервера — из папки сдачи (адресная строка как у студента)
+        target = RunTarget(cmd=[] if spec.url and plan.language == "php" else list(spec.cmd),
+                           cwd=hand_in if static else Path(spec.cwd), console=spec.console,
+                           url=page_uri(hand_in, plan.entry) if static else spec.url or None,
+                           env=dict(spec.env or {}),
+                           server=list(spec.cmd) if spec.url and plan.language == "php" else None,
+                           title=_in_hand_in(spec.cmd[0], work, hand_in) if spec.cmd else None)
+        if spec.url.startswith("http") and shot.url:
+            shot = shot.model_copy(update={"url": shot_url(spec.url, shot.url)})
+        elif static and shot.url:
+            shot = shot.model_copy(update={"url": page_uri(hand_in, shot.url)})
         emit(f"Снимаю рисунок: {b.topic}")
         rel = f"assets/shot_{n}_{bi}_{uuid.uuid4().hex[:6]}.png"
         res = shooter.shoot(target, shot, lab / rel)
@@ -222,12 +393,6 @@ def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None) 
         pipe._sync(st, ["project/plan.json"])
     except Exception:
         pass
-
-    # копия проекта в папку сдачи
-    try:
-        info.folder = str(_copy_to_hand_in(pipe, st, plan, work))
-    except OSError as e:
-        emit(f"Проект не скопировался в папку сдачи ({e})", "warn")
     st.project = info
     st.docx_sha = None
     return st

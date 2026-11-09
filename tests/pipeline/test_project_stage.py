@@ -1,6 +1,7 @@
 """Этап «Проект»: из отчёта — настоящий проект, сборка с исправлениями, снимки окон, листинги из кода, папка сдачи."""
 
 import json
+from pathlib import Path
 
 from test_run import ANS, FIXTURE, RAW, setup
 
@@ -142,3 +143,159 @@ def test_plan_saved_for_cloud_and_rebuild(tmp_home, tmp_path):
     st = pipe.execute(st)
     saved = json.loads((pipe.lab_dir(st) / "project" / "plan.json").read_text(encoding="utf-8"))
     assert saved["name"] == "Сумма" and saved["files"][0]["path"] == "main.py"
+
+
+def test_project_name_with_colon_does_not_lose_the_stage(tmp_home, tmp_path):
+    pipe, fake, st = make(tmp_home, tmp_path, [{**PLAN, "name": "Сумма: «два» числа"}])
+    st = pipe.execute(st)
+    assert st.project and st.project.built and st.project.name == "Сумма два числа"
+    assert (Path(st.project.folder) / "main.py").exists() and ":" not in st.project.folder.split("/")[-1]
+
+
+def test_big_project_is_planned_in_parts_when_answer_is_cut(tmp_home, tmp_path):
+    cut = LLMError("bad_response", "finish_reason=length", "Ответ модели не поместился в лимит длины")
+    head = {**PLAN, "files": [{"path": "calc.py"}, {"path": "main.py"}]}
+    calc = {"path": "calc.py", "content": "def add(a, b):\n    return a + b\n"}
+    main = {"path": "main.py", "content": GOOD}
+    pipe, fake, st = make(tmp_home, tmp_path, [cut, head, calc, main])
+    st = pipe.execute(st)
+    assert st.project and st.project.built and figures(st)[0].image_path
+    work = tmp_path / "сдача" / "ПССИП" / "ЛР7" / "Проект Сумма"
+    assert (work / "main.py").read_text(encoding="utf-8") == GOOD and (work / "calc.py").exists()
+    ask_head, ask_calc, ask_main = ("\n".join(m["content"] for m in c) for c in fake.calls[5:8])
+    assert "без текста файлов" in ask_head and "[1.2]" in ask_head  # план — с листингами и снимками
+    assert "Напиши файл calc.py" in ask_calc and "Напиши файл main.py" in ask_main
+    assert "def add" in ask_main and "[1.2]" in ask_main  # уже написанное и свои листинги — в запросе
+
+
+def test_part_plan_is_not_tried_on_network_errors(tmp_home, tmp_path):
+    pipe, fake, st = make(tmp_home, tmp_path, [LLMError("network", "нет связи")])
+    st = pipe.execute(st)
+    assert len(fake.calls) == 5 and (st.project is None or not st.project.built)
+
+
+def test_teacher_data_file_beginning_goes_to_the_model(tmp_home, tmp_path):
+    from forlabs.core.models import Material
+    from forlabs.pipeline.project import lab_text
+
+    pipe, fake, st = make(tmp_home, tmp_path, [])
+    rows = "\n".join(f"01.10.2026;Товар {i};{i},50" for i in range(40))
+    st.materials = [Material(name="sales.csv", text="Дата;Товар;Цена\n" + rows), Material(name="task.py", text="x")]
+    text = lab_text(st)
+    assert "Начало файла sales.csv" in text and "Дата;Товар;Цена" in text and "всего строк: 41" in text
+    assert "Товар 30" not in text and "Начало файла task.py" not in text  # только начало и только данные
+
+
+def test_php_site_pages_open_from_site_root(tmp_home, tmp_path, monkeypatch):
+    from forlabs.runner.languages import BuildResult, Toolchain
+
+    tools = {"php": Toolchain("php", "php"), "edge": Toolchain("edge", "msedge")}
+    monkeypatch.setattr(languages, "build", lambda d, plan, tools, timeout=300: BuildResult(True, "", d / plan.entry))
+    site = {"language": "php", "kind": "web", "name": "Заказ", "entry": "order.php",
+            "files": [{"path": "index.html", "content": "<form action=\"order.php\" method=\"post\"></form>"},
+                      {"path": "order.php", "content": "<?php echo 'Сумма: ' . (2 * 3); ?>"}],
+            "shots": [{"section": 1, "block": 3, "mode": "browser", "url": "index.html"},
+                      {"section": 2, "block": 2, "mode": "manual", "reason": "нужно отправить форму"}]}
+    pipe, fake, st = make(tmp_home, tmp_path, [site], tools=tools, monkeypatch=monkeypatch)
+    st = pipe.execute(st)
+    target, shot = pipe.shooter.calls[0]
+    assert target.server and target.url.endswith("/order.php")
+    assert shot.url.startswith("http://127.0.0.1:") and shot.url.endswith("/index.html")
+    assert "order.php" not in shot.url  # не «…/order.php/index.html»: та же главная и без стилей
+    assert figures(st)[0].image_path
+
+
+def test_fix_request_names_listings_of_the_files(tmp_home, tmp_path):
+    broken = {**PLAN, "files": [{"path": "main.py", "content": "print(\"Сумма:\"\n"}]}
+    pipe, fake, st = make(tmp_home, tmp_path, [broken, {"files": [{"path": "main.py", "content": GOOD}]}])
+    pipe.execute(st)
+    assert "[1.2] из main.py" in "\n".join(m["content"] for m in fake.calls[5])
+
+
+def test_listing_follows_code_that_next_task_extended(tmp_home, tmp_path):
+    grown = GOOD.replace("print(", "print(\"Числа:\", a, b)\nprint(", 1)  # строка внутри кода листинга
+    pipe, fake, st = make(tmp_home, tmp_path, [{**PLAN, "files": [{"path": "main.py", "content": grown}]}])
+    st = pipe.execute(st)
+    assert st.report.sections[0].blocks[1].code == grown.rstrip("\n")  # модель листинг не вернула — взят из файла
+
+
+def test_listing_in_file_keeps_fragment_bounds():
+    from forlabs.pipeline.project import listing_in_file
+
+    body = ("def a():\n    return 1\n\n\ndef total(xs):\n    s = 0\n    for x in xs:\n        s += x\n"
+            "    return s\n\n\nprint(total([1, 2]))\n")
+    frag = "def total(xs):\n    s = 0\n    for x in xs:\n        s = s + x\n    return s"
+    assert listing_in_file(frag, body) == "def total(xs):\n    s = 0\n    for x in xs:\n        s += x\n    return s"
+    assert listing_in_file("x = input()\ny = x * 2\nprint(y)", body) is None  # чужого кода в файле нет
+
+
+def test_build_files_from_model_are_dropped_not_fatal(tmp_home, tmp_path):
+    extra = [{"path": "Сумма.csproj", "content": "<Project/>"}, {"path": "run.bat", "content": "python main.py"}]
+    pipe, fake, st = make(tmp_home, tmp_path, [{**PLAN, "files": [*PLAN["files"], *extra]}])
+    st = pipe.execute(st)
+    assert st.project and st.project.built and figures(st)[0].image_path
+    work = Path(st.project.folder)
+    assert (work / "main.py").exists() and not (work / "run.bat").exists() and not (work / "Сумма.csproj").exists()
+
+
+def test_build_files_in_fix_answer_are_ignored(tmp_home, tmp_path):
+    broken = {**PLAN, "files": [{"path": "main.py", "content": "print(\"Сумма:\"\n"}]}
+    fixed = {"files": [{"path": "go.mod", "content": "module x\n"}, {"path": "main.py", "content": GOOD}]}
+    pipe, fake, st = make(tmp_home, tmp_path, [broken, fixed])
+    st = pipe.execute(st)
+    assert st.project.built and st.project.fixes == 1 and not (Path(st.project.folder) / "go.mod").exists()
+
+
+def test_whole_file_listing_gets_imports_added_for_build(tmp_home, tmp_path):
+    listing = "import math\n\n" + GOOD.rstrip("\n")
+    body = "import sys\nimport math\n\n" + GOOD
+    sec = {"blocks": [{**b, "code": listing} if b["type"] == "listing" else b for b in PY_SEC["blocks"]]}
+    pipe, fake = setup(tmp_home, tmp_path, [{**RAW, "main_tasks": ["Сумма двух чисел", "Код в IDLE"]}, sec, PY_SEC2,
+                                            ANS, {**PLAN, "files": [{"path": "main.py", "content": body}]}])
+    pipe.projects, pipe.shooter = True, FakeShooter()
+    st = pipe.create_lab("ivanov", "psip", [(FIXTURE.name, FIXTURE.read_bytes())], number="7")
+    st = pipe.execute(pipe.confirm(pipe.parse(st, date="24.09.2026"), None))
+    assert st.report.sections[0].blocks[1].code == body.rstrip("\n")  # импорт для сборки — и в листинге
+
+
+CPP = "#include <iostream>\nint main() { int a, b; std::cin >> a >> b; std::cout << \"Сумма: \" << a + b; }\n"
+
+
+def test_console_title_is_the_program_in_hand_in_folder(tmp_home, tmp_path, monkeypatch):
+    from forlabs.runner.languages import BuildResult, Toolchain
+
+    exe = lambda d, plan, tools, timeout=300: BuildResult(True, "", Path(d) / "out" / "Summa.exe")  # noqa: E731
+    monkeypatch.setattr(languages, "build", exe)
+    plan = {**PLAN, "language": "cpp", "entry": "main.cpp", "files": [{"path": "main.cpp", "content": CPP}],
+            "listings": []}
+    pipe, fake, st = make(tmp_home, tmp_path, [plan], tools={"gpp": Toolchain("gpp", "g++")}, monkeypatch=monkeypatch)
+    st = pipe.execute(st)
+    target, _ = pipe.shooter.calls[0]
+    assert target.title == str(Path(st.project.folder) / "out" / "Summa.exe")  # как у студента, а не папка запуска
+    assert "ForLabs" not in Path(target.title).parts and str(pipe.lab_dir(st)) not in target.title
+
+
+def test_interpreter_keeps_its_own_console_title(tmp_home, tmp_path):
+    pipe, fake, st = make(tmp_home, tmp_path, [PLAN])
+    pipe.execute(st)
+    target, _ = pipe.shooter.calls[0]
+    assert target.title is None and target.cmd[-1] == "main.py"  # заголовок — путь python, как при обычном запуске
+
+
+def test_static_page_opens_from_hand_in_folder(tmp_home, tmp_path, monkeypatch):
+    from forlabs.runner.languages import Toolchain
+
+    site = {"language": "web", "kind": "web", "name": "Сайт", "entry": "index.html",
+            "files": [{"path": "index.html", "content": "<h1>Конвертер</h1><a href=\"about.html\">О нас</a>"},
+                      {"path": "about.html", "content": "<h1>О нас</h1>"}],
+            "shots": [{"section": 1, "block": 3, "mode": "browser", "url": "about.html#contacts"},
+                      {"section": 2, "block": 2, "mode": "browser"}]}
+    pipe, fake, st = make(tmp_home, tmp_path, [site], tools={"edge": Toolchain("edge", "msedge")},
+                          monkeypatch=monkeypatch)
+    st = pipe.execute(st)
+    folder = Path(st.project.folder)
+    (t1, s1), (t2, s2) = pipe.shooter.calls
+    assert t1.url == (folder / "index.html").as_uri() and t1.cwd == folder
+    assert s1.url == (folder / "about.html").as_uri() + "#contacts" and not s2.url  # без адреса — главная из t2.url
+    for url in (t1.url, s1.url):
+        assert "ForLabs" not in url and pipe.lab_dir(st).as_uri() not in url
