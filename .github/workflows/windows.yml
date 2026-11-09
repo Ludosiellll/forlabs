@@ -182,8 +182,14 @@ jobs:
           # удаление, как из «Параметры → Приложения»
           $p = Start-Process "$target\ForLabs.exe" -ArgumentList "--uninstall --silent" -Wait -PassThru
           if ($p.ExitCode -ne 0) { Fail "uninstall" "код $($p.ExitCode)" }
-          for ($i = 0; $i -lt 30 -and (Test-Path $target); $i++) { Start-Sleep -Seconds 1 }
-          if (Test-Path $target) { Fail "uninstall" "папка программы осталась: $target" }
+          for ($i = 0; $i -lt 60 -and (Test-Path $target); $i++) { Start-Sleep -Seconds 1 }
+          if (Test-Path $target) {
+            $left = Get-ChildItem $target -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 25 | ForEach-Object { $_.FullName.Substring($target.Length) }
+            Write-Output ("::error title=uninstall left files::" + ($left -join "%0A"))
+            $procs = Get-Process | Where-Object { $_.Path -and $_.Path.StartsWith($target) } | ForEach-Object { "$($_.Id) $($_.Path)" }
+            Write-Output ("::error title=uninstall processes::" + ($procs -join "%0A"))
+            Fail "ForLabsUninstall.log" "$env:TEMP\ForLabsUninstall.log"
+          }
           if (Test-Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\ForLabs") { Fail "uninstall" "строка в «Приложениях» осталась" }
           if (Test-Path $lnk) { Fail "uninstall" "ярлык остался" }
           Write-Output "Установка, проверка, обновление и удаление прошли"

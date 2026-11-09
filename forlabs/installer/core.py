@@ -367,9 +367,18 @@ def delayed_delete_command(target: Path, pid: int) -> list[str]:
     import base64
 
     path = str(target).replace("'", "''")
-    script = (f"Wait-Process -Id {int(pid)} -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 700; "
-              f"for ($i = 0; $i -lt 10 -and (Test-Path -LiteralPath '{path}'); $i++) {{ "
-              f"Remove-Item -LiteralPath '{path}' -Recurse -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 1 }}")
+    script = (
+        f"$p = '{path}'; $log = Join-Path $env:TEMP 'ForLabsUninstall.log'\n"
+        f"\"start $(Get-Date -Format o) wait={int(pid)}\" | Out-File $log -Encoding utf8\n"
+        f"Wait-Process -Id {int(pid)} -ErrorAction SilentlyContinue\n"
+        # помощники ForLabs из этой папки (драйвер браузера для схем и т. п.) держат файлы — закрыть их
+        "Get-Process | Where-Object { $_.Path -and $_.Path.StartsWith($p, [StringComparison]::OrdinalIgnoreCase) } |"
+        " Stop-Process -Force -ErrorAction SilentlyContinue\n"
+        "Start-Sleep -Milliseconds 700\n"
+        "for ($i = 0; $i -lt 15; $i++) { Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue;"
+        " if (-not (Test-Path -LiteralPath $p)) { break }; Start-Sleep -Seconds 1 }\n"
+        "\"done $(Get-Date -Format o) left=$(Test-Path -LiteralPath $p)\" | Out-File $log -Append -Encoding utf8\n"
+        "if (Test-Path -LiteralPath $p) { $Error | Out-String | Out-File $log -Append -Encoding utf8 }\n")
     encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
     return ["powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-EncodedCommand", encoded]
 

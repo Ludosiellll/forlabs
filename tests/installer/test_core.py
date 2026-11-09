@@ -183,7 +183,8 @@ def test_delayed_delete_command_is_safe_for_odd_paths():
     assert cmd[0].lower().startswith("powershell") and "-EncodedCommand" in cmd
     script = base64.b64decode(cmd[cmd.index("-EncodedCommand") + 1]).decode("utf-16-le")
     assert "Wait-Process -Id 4321" in script
-    assert "-LiteralPath '" + str(odd).replace("'", "''") + "'" in script
+    assert "$p = '" + str(odd).replace("'", "''") + "'" in script and "-LiteralPath $p" in script
+    assert "Stop-Process" in script and "ForLabsUninstall.log" in script
 
 
 def test_uninstall_keeps_entry_of_other_location(tmp_path, payload, shell):
