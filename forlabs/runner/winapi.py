@@ -240,10 +240,14 @@ def _send(inputs: list[INPUT]) -> None:
     user32.SendInput(len(inputs), arr, ctypes.sizeof(INPUT))
 
 
-def type_text(hwnd: int, text: str) -> None:
-    """Набрать текст в окне (Unicode — кириллица без раскладки). Окно выводится вперёд."""
-    if not foreground(hwnd):
-        raise OSError("окно не вышло на передний план")
+def type_text(hwnd: int, text: str, focus: bool = True) -> None:
+    """Набрать текст в окне (Unicode — кириллица без раскладки). Окно выводится вперёд; паузы — чтобы медленные
+    окна (tkinter, Swing) успевали принять каждое нажатие."""
+    if focus:
+        if user32.GetForegroundWindow() != hwnd:
+            if not foreground(hwnd):
+                raise OSError("окно не вышло на передний план")
+            time.sleep(0.6)
     for ch in text:
         if ch == "\n":
             press(hwnd, "enter", focus=False)
@@ -254,17 +258,19 @@ def type_text(hwnd: int, text: str) -> None:
         down = INPUT(type=1, u=_INPUTUNION(ki=KEYBDINPUT(0, ord(ch), KEYEVENTF_UNICODE, 0, 0)))
         up = INPUT(type=1, u=_INPUTUNION(ki=KEYBDINPUT(0, ord(ch), KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, 0, 0)))
         _send([down, up])
-        time.sleep(0.01)
+        time.sleep(0.04)
 
 
 def press(hwnd: int, key: str, focus: bool = True) -> None:
     """Нажать клавишу: enter, tab, esc, space, стрелки…"""
-    if focus and not foreground(hwnd):
-        raise OSError("окно не вышло на передний план")
+    if focus and user32.GetForegroundWindow() != hwnd:
+        if not foreground(hwnd):
+            raise OSError("окно не вышло на передний план")
+        time.sleep(0.6)
     vk = VK[key.lower()]
     _send([INPUT(type=1, u=_INPUTUNION(ki=KEYBDINPUT(vk, 0, 0, 0, 0))),
            INPUT(type=1, u=_INPUTUNION(ki=KEYBDINPUT(vk, 0, KEYEVENTF_KEYUP, 0, 0)))])
-    time.sleep(0.05)
+    time.sleep(0.3)
 
 
 def close_window(hwnd: int) -> None:

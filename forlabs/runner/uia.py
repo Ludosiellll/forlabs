@@ -42,9 +42,10 @@ def _ns():
 
 
 def root(hwnd: int):
+    A = _ns()  # сначала загрузка сборок: без неё пространства имён System ещё нет
     from System import IntPtr
 
-    return _ns().AutomationElement.FromHandle(IntPtr(hwnd))
+    return A.AutomationElement.FromHandle(IntPtr(hwnd))
 
 
 def find(win, target: str, timeout: float = 5.0):
