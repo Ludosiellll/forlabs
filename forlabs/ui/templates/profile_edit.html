@@ -68,6 +68,30 @@
           </div>
         </div>
       {% endfor %}
+      <details class="card add-subject" style="margin-bottom:10px">
+        <summary style="font-weight:600;cursor:pointer">＋ Добавить свой предмет <span class="small muted" style="font-weight:400">— если нужного нет в списке</span></summary>
+        <div class="grid2" style="margin-top:8px">
+          <div class="field"><label for="ns_name">Название предмета</label>
+            <input id="ns_name" name="new_subject_name" type="text" maxlength="200" placeholder="Технология разработки программного обеспечения"></div>
+          <div class="field"><label for="ns_short">Короткое название</label>
+            <input id="ns_short" name="new_subject_short" type="text" maxlength="30" placeholder="ТРПО — можно не заполнять"></div>
+        </div>
+        <div class="grid2">
+          <div class="field"><label for="ns_kind">Что делают на лабах</label>
+            <select id="ns_kind" name="new_subject_kind"><option value="code">Программы</option><option value="theory">Теория и схемы</option>
+              <option value="network">Сети</option><option value="1c">1С</option></select></div>
+          <div class="field"><label for="ns_teacher">Руководитель</label>
+            <input id="ns_teacher" name="new_subject_teacher" type="text" placeholder="А.А. Петров"></div>
+        </div>
+        <div class="grid2">
+          <div class="field"><label for="ns_variant">Вариант (по журналу)</label>
+            <input id="ns_variant" name="new_subject_variant" type="number" min="1" placeholder="например, 14"></div>
+          <div class="field"><label for="ns_style">Метки шапки</label>
+            <select id="ns_style" name="new_subject_style"><option value="long">«Тема работы:»</option>
+              <option value="short">«Тема:» + «Оснащение работы:»</option></select></div>
+        </div>
+        <div class="hint">Предмет добавится в список и сразу будет отмечен у этого студента. Оформление у всех предметов общее.</div>
+      </details>
     </fieldset>
     <div class="row"><button class="btn primary" type="submit">Сохранить</button>
       <a class="btn link" href="/profiles">Отмена</a></div>

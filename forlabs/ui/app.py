@@ -356,6 +356,19 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
             return redirect("/profiles", err="Профиль не найден")
         return render(request, "profile_edit.html", p=p, is_new=False, nav="profiles")
 
+    def abbreviation(name: str) -> str:
+        """«Технология разработки программного обеспечения» → «ТРПО», «Объектно-ориентированное …» → «ООП»."""
+        words = [w for w in re.split(r"[\s\-–]+", name) if len(w) >= 3 or w.isupper()]
+        short = "".join(w[0].upper() for w in words)
+        return short if len(short) >= 2 else name[:20]
+
+    def academic_year() -> str:
+        from datetime import date
+
+        d = date.today()
+        y = d.year if d.month >= 8 else d.year - 1
+        return f"{y}/{y + 1}"
+
     @app.post("/profiles/save")
     async def profile_save(request: Request):
         f = await request.form()
@@ -375,6 +388,17 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
                     variant=int(v) if v.isdigit() else subj.default_variant,
                     workplace=int(w) if w.isdigit() else None,
                     header_style="short" if f.get(f"enr_{sid}_style") == "short" else "long"))
+        new_name = (f.get("new_subject_name") or "").strip()
+        if new_name:  # нужного предмета нет в списке — свой, сразу отмеченный у этого студента
+            v = (f.get("new_subject_variant") or "").strip()
+            style = "short" if f.get("new_subject_style") == "short" else "long"
+            subj = await asyncio.to_thread(create_subject, new_name, f.get("new_subject_short") or "",
+                                           f.get("new_subject_kind") or "theory", style, int(v) if v.isdigit() else 1)
+            if not any(e.subject_id == subj.id for e in enrollments):
+                enrollments.append(Enrollment(
+                    subject_id=subj.id, title_subject=subj.name,
+                    teacher=(f.get("new_subject_teacher") or "").strip(), academic_year=academic_year(),
+                    variant=int(v) if v.isdigit() else subj.default_variant, header_style=style))
         old = await asyncio.to_thread(ctx.store.get_profile, pid)
         base = old.model_dump() if old else Profile(id=pid, full_name=full_name, title_name="").model_dump()
         for key in ("full_name", "title_name", "gender", "group", "specialty_code", "city", "doc_author",
@@ -400,18 +424,32 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         ctx.store.delete_profile(pid)
         return redirect("/profiles", msg="Профиль удалён")
 
-    @app.post("/subjects/add")
-    def subject_add(name: str = Form(...), short_name: str = Form(...), kind: str = Form("theory"),
-                    header_style: str = Form("long"), variant: int = Form(14)):
+    def create_subject(name: str, short_name: str = "", kind: str = "theory", header_style: str = "long",
+                       variant: int = 14) -> Subject:
+        """Свой предмет. Такой же по названию уже есть — он и возвращается (без дублей)."""
+        name = " ".join(name.split())
+        same = next((s for s in all_subjects().values() if s.name.lower() == name.lower()), None)
+        if same is not None:
+            return same
+        short_name = " ".join((short_name or "").split()) or abbreviation(name)
         sid, k = slug(short_name), 2
         base = sid
-        while sid in {getattr(x, 'id', x) for x in all_subjects()}:  # не заменять предмет с тем же сокращением
+        while sid in all_subjects():  # не заменять предмет с тем же сокращением
             sid, k = f"{base}-{k}", k + 1
-        ctx.add_subject(Subject(id=sid, name=name.strip(), short_name=short_name.strip(),
-                                   kind=kind if kind in ("theory", "code", "1c", "network") else "theory",
-                                   default_header_style="short" if header_style == "short" else "long",
-                                   default_variant=variant))
-        return redirect("/profiles", msg=f"Предмет «{name.strip()}» добавлен — отметь его в профиле")
+        subj = Subject(id=sid, name=name, short_name=short_name,
+                       kind=kind if kind in ("theory", "code", "1c", "network") else "theory",
+                       default_header_style="short" if header_style == "short" else "long",
+                       default_variant=max(1, variant))
+        ctx.add_subject(subj)
+        return subj
+
+    @app.post("/subjects/add")
+    def subject_add(name: str = Form(...), short_name: str = Form(""), kind: str = Form("theory"),
+                    header_style: str = Form("long"), variant: int = Form(14)):
+        if not name.strip():
+            return redirect("/profiles", err="Впиши название предмета")
+        subj = create_subject(name, short_name, kind, header_style, variant)
+        return redirect("/profiles", msg=f"Предмет «{subj.name}» добавлен — отметь его в профиле")
 
     # новая лаба
     @app.get("/labs/new", response_class=HTMLResponse)
