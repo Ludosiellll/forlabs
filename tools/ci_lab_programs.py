@@ -312,9 +312,18 @@ CREATE TABLE books (id INT PRIMARY KEY AUTO_INCREMENT, title VARCHAR(100), autho
 def mysql_variants(tools, report) -> None:
     """Диагностика: как запуск клиента MySQL доходит до программы (напрямую, через файл настроек, по имени)."""
     from forlabs.pipeline.project import start_mysql
+    from forlabs.runner import mysqlrun
+    from forlabs.runner.shots import run_dir
 
-    srv = start_mysql(tools["mysql"].path)  # как в ForLabs: папка запуска с меткой Low, сервер с пониженными правами
     out = {}
+    report["mysql_variants"] = out
+    try:  # для сравнения: тот же сервер с обычными правами
+        s2 = mysqlrun.start(tools["mysql"].path, run_dir(), low=False)
+        out["medium_il"] = "ok"
+        s2.stop()
+    except Exception as e:  # noqa: BLE001
+        out["medium_il"] = f"{e}: {getattr(e, 'detail', '')}"
+    srv = start_mysql(tools["mysql"].path)  # как в ForLabs: папка запуска с меткой Low, сервер с пониженными правами
     try:
         base = srv.client()
         r = subprocess.run([*base, "-e", "SELECT 'прямой запуск'"], capture_output=True, text=True, timeout=30)
@@ -347,7 +356,7 @@ def main() -> int:
     try:
         mysql_variants(tools, report)
     except Exception as e:  # noqa: BLE001
-        report["mysql_variants"] = {"error": f"{type(e).__name__}: {e}"}
+        report.setdefault("mysql_variants", {}).update(error=f"{type(e).__name__}: {e}", detail=getattr(e, "detail", ""))
     runs = [(name, raw, tools, {}) for name, raw in CASES.items()]
     # профиль студента с кириллицей и пробелом (C:\\Users\\Иван Петров): папки запуска и сервер MySQL — под ним
     runs.append(("mysql_cyrillic_profile", CASES["mysql_script"], tools,
@@ -396,7 +405,8 @@ def main() -> int:
                         lab_srv.stop()
                 res.update(ok=r.ok, reason=r.reason, seen=r.seen[:1500], cmd=list(target.cmd))
             except Exception as e:  # noqa: BLE001
-                res.update(ok=False, error=f"{type(e).__name__}: {e}", trace=traceback.format_exc()[-1500:])
+                res.update(ok=False, error=f"{type(e).__name__}: {e}", detail=getattr(e, "detail", ""),
+                           trace=traceback.format_exc()[-1500:])
             finally:
                 for k, v in saved.items():
                     if v is None:

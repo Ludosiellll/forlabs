@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import socket
@@ -18,10 +19,22 @@ from pathlib import Path
 WINDOWS = sys.platform == "win32"
 EXE = ".exe" if WINDOWS else ""
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+log = logging.getLogger(__name__)
 
 
 class MysqlError(Exception):
-    pass
+    """Сообщение — студенту; detail — для журнала и проверки в CI (код выхода, хвост журнала сервера)."""
+
+    def __init__(self, message: str, detail: str = ""):
+        super().__init__(message)
+        self.detail = detail
+
+
+def _tail(path: Path, n: int = 1200) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")[-n:]
+    except OSError:
+        return ""
 
 
 def _free_port() -> int:
@@ -167,6 +180,7 @@ def start(mysql_client: str, work_root: Path, timeout: float = 90, low: bool = T
     files, tmp, db = data / "files", data / "tmp", data / "db"
     base = mysqld.parent.parent
     as_root = ["--user=root"] if not WINDOWS and hasattr(os, "geteuid") and os.geteuid() == 0 else []
+    code = None
     if maria:
         ok = False
         if install is not None:  # Windows: mysql_install_db.exe знает, где у этой сборки лежат системные таблицы
@@ -179,17 +193,19 @@ def start(mysql_client: str, work_root: Path, timeout: float = 90, low: bool = T
             ok = _bootstrap(mysqld, base, db, as_root)
     else:
         p = _Proc([str(mysqld), "--no-defaults", f"--basedir={base}", f"--datadir={db}", "--initialize-insecure",
-                   *as_root], data, low)
+                   f"--tmpdir={tmp}", f"--log-error={data / 'init.err'}", *as_root], data, low)
         code = p.wait(300)
         p.kill()
         ok = code == 0 and db.is_dir()
     if not ok:
+        detail = f"код {code}; {_tail(data / 'init.err')}"
+        log.warning("mysqld: папка данных не подготовлена: %s", detail)
         shutil.rmtree(data, ignore_errors=True)
-        raise MysqlError("сервер MySQL не подготовил папку данных")
+        raise MysqlError("сервер MySQL не подготовил папку данных", detail)
     port = _free_port()
     args = [str(mysqld), "--no-defaults", f"--basedir={base}", f"--datadir={db}",
             f"--port={port}", "--bind-address=127.0.0.1", f"--secure-file-priv={files}", f"--tmpdir={tmp}",
-            f"--pid-file={data / 'server.pid'}", *as_root]
+            f"--pid-file={data / 'server.pid'}", f"--log-error={data / 'server.err'}", *as_root]
     if not WINDOWS:
         args.append(f"--socket={data / 'server.sock'}")
     if not maria:
@@ -198,8 +214,10 @@ def start(mysql_client: str, work_root: Path, timeout: float = 90, low: bool = T
     end = time.monotonic() + timeout
     while time.monotonic() < end:
         if not server.proc.alive():
+            detail = _tail(data / "server.err")
+            log.warning("mysqld не запустился: %s", detail)
             server.stop()
-            raise MysqlError("сервер MySQL не запустился")
+            raise MysqlError("сервер MySQL не запустился", detail)
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=1):
                 return server
