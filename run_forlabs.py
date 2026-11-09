@@ -14,6 +14,10 @@ import sys
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
+    if "--uninstall" not in argv:  # удалению PDF не нужен
+        from forlabs import frozen_fix
+
+        frozen_fix.apply()
     if "--selfcheck" in argv:
         from forlabs import selfcheck
 
