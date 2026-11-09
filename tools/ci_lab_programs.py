@@ -468,6 +468,26 @@ def main() -> int:
     finally:
         if srv is not None:
             srv.terminate()
+    try:  # после песочницы Python и Java по-прежнему запускаются как обычно (права выданы правильно)
+        from forlabs.runner import appcontainer, winapi
+
+        diag = {}
+        for key in ("python", "java", "php"):
+            t = tools.get(key)
+            if not t:
+                continue
+            root = appcontainer.tool_root(t.path)
+            diag[key] = {"rights": appcontainer.rights(root)[-1500:]}
+            r = subprocess.run([t.path, "--version" if key != "java" else "-version"], capture_output=True, text=True,
+                               timeout=60)
+            diag[key]["medium"] = r.returncode
+            app = winapi.spawn(subprocess.list2cmdline([t.path, "--version" if key != "java" else "-version"]),
+                               str(WORK), low=True, hidden=True)
+            diag[key]["low"] = app.wait(60)
+            app.close()
+        report["after_sandbox"] = diag
+    except Exception as e:  # noqa: BLE001
+        report["after_sandbox"] = {"error": f"{type(e).__name__}: {e}"}
     (OUT / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     bad = [k for k, v in report["cases"].items() if not v.get("ok")]
     print("НЕ ПРОШЛИ:", bad, flush=True)

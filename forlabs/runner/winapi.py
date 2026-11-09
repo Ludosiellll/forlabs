@@ -102,7 +102,7 @@ def process_names(pids: set[int] | None = None) -> dict[int, str]:
     return out
 
 
-HOSTS = {"conhost.exe", "cmd.exe", "openconsole.exe", "timeout.exe", "chcp.com"}
+HOSTS = {"conhost.exe", "cmd.exe", "openconsole.exe", "timeout.exe", "chcp.com", "forlabs.exe"}
 
 
 def program_alive(root: int) -> bool:

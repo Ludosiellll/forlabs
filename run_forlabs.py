@@ -5,6 +5,7 @@
     ForLabs.exe --selfcheck [--out f]   самопроверка сборки (CI, поддержка)
     ForLabs.exe --uninstall [--silent]  удаление (строка «Параметры → Приложения»)
     ForLabs.exe --console-helper <job>  ввод в окно консоли программы лабы (для снимка)
+    ForLabs.exe --console-host <job>    консоль для программы лабы, которая работает в песочнице
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ import sys
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    if "--console-helper" in argv:  # короткий помощник: без PDF и окна
+    if "--console-helper" in argv or "--console-host" in argv:  # короткий помощник: без PDF и окна
         from forlabs.runner import console
 
         return console.main(argv)

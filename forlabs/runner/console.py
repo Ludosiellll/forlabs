@@ -25,12 +25,53 @@ def console_command(cmd: list[str], workdir) -> str:
     Команда — в файле, потому что conhost по-своему разбирает вложенные кавычки и путь с пробелами
     («MySQL Server 8.4») разваливался. В файле: UTF-8 в консоли, программа, затем `timeout /nobreak` держит окно
     (ничего не печатает и не съедает нажатия клавиш, в отличие от `pause`)."""
+    return f'"{CONHOST}" cmd.exe /d /c "{console_script(cmd, workdir)}"'
+
+
+def console_script(cmd: list[str], workdir):
+    """Файл forlabs-run.cmd с программой (см. console_command)."""
     from pathlib import Path
 
     bat = Path(workdir) / "forlabs-run.cmd"
     line = " ".join(quote(a).replace("%", "%%") for a in cmd)
     bat.write_text("@chcp 65001>nul\r\n@echo off\r\n" + line + "\r\ntimeout /t 86400 /nobreak >nul\r\n", encoding="utf-8")
-    return f'"{CONHOST}" cmd.exe /d /c "{bat}"'
+    return bat
+
+
+def host_cmd() -> list[str]:
+    """Хозяин консоли для программы в песочнице: в установленной программе — ForLabs.exe, иначе — этот модуль."""
+    from forlabs.version import frozen
+
+    if frozen():
+        return [sys.executable, "--console-host"]
+    return [sys.executable, "-m", "forlabs.runner.console", "--console-host"]
+
+
+def host_main(job_file) -> int:
+    """ForLabs.exe --console-host <job.json>: окно консоли принадлежит этому процессу (не песочнице) — ввод для снимка
+    в него проходит; программа лабы работает в песочнице AppContainer, в этой же консоли."""
+    import ctypes
+    import time
+    from pathlib import Path
+
+    from forlabs.runner import appcontainer
+
+    job_file = Path(job_file)
+    job = json.loads(job_file.read_text(encoding="utf-8"))
+    k32 = ctypes.windll.kernel32
+    k32.SetConsoleCP(65001)
+    k32.SetConsoleOutputCP(65001)
+    if job.get("title"):
+        k32.SetConsoleTitleW(job["title"])
+    try:
+        program = appcontainer.spawn(job["cmd"], job["cwd"], job["sid"], env=job.get("env") or {},
+                                     internet=bool(job.get("internet")))
+    except Exception as e:  # noqa: BLE001 — причина уйдёт в снимок
+        job_file.with_suffix(".err").write_text(f"{type(e).__name__}: {e}", encoding="utf-8")
+        return 3
+    job_file.with_suffix(".pid").write_text(str(program.pid), encoding="utf-8")
+    while True:  # окно держится, пока ForLabs не закроет задание (вместе с программой)
+        time.sleep(3600)
 
 
 def helper_cmd() -> list[str]:
@@ -127,6 +168,8 @@ def main(argv: list[str] | None = None) -> int:
 
     argv = sys.argv[1:] if argv is None else argv
     job_file = Path([a for a in argv if not a.startswith("--")][-1])
+    if "--console-host" in argv:
+        return host_main(job_file)
     try:
         res = _helper(json.loads(job_file.read_text(encoding="utf-8")))
     except Exception as e:  # noqa: BLE001 - любой сбой — ответом, а не трассировкой

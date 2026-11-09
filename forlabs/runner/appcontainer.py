@@ -125,30 +125,30 @@ FULL = 0x001F01FF  # FILE_ALL_ACCESS
 
 
 def grant(path: str | Path, sid_text: str, access: int = READ_EXECUTE) -> bool:
-    """Разрешить контейнеру доступ к папке (и всему внутри — наследуемая запись). Уже есть — ничего не делать.
-    Папки пользователя меняет сам пользователь: прав администратора не нужно. False — не вышло."""
-    import win32security
+    """Разрешить контейнеру доступ к папке и всему внутри (наследуемая запись). Делает это icacls — стандартная
+    программа Windows: запись встаёт в правильном порядке, остальные права (пользователя, администраторов) не
+    меняются. Папки пользователя меняет сам пользователь: прав администратора не нужно. False — не вышло."""
+    import subprocess
 
-    path = str(path)
+    right = "F" if access == FULL else "RX"
+    system = os.environ.get("SystemRoot", r"C:\Windows")
+    icacls = os.path.join(system, "System32", "icacls.exe")
     try:
-        container = win32security.ConvertStringSidToSid(sid_text)
-        sd = win32security.GetNamedSecurityInfo(path, win32security.SE_FILE_OBJECT,
-                                                win32security.DACL_SECURITY_INFORMATION)
-        dacl = sd.GetSecurityDescriptorDacl()
-        for i in range(dacl.GetAceCount() if dacl else 0):
-            (ace_type, flags), mask, ace_sid = dacl.GetAce(i)[:3]
-            if ace_type == 0 and ace_sid == container and mask & access == access:
-                return True
-        if dacl is None:
-            return True  # нет DACL — доступ открыт всем
-        dacl.AddAccessAllowedAceEx(win32security.ACL_REVISION_DS,
-                                   win32security.OBJECT_INHERIT_ACE | win32security.CONTAINER_INHERIT_ACE,
-                                   access, container)
-        win32security.SetNamedSecurityInfo(path, win32security.SE_FILE_OBJECT,
-                                           win32security.DACL_SECURITY_INFORMATION, None, None, dacl, None)
-        return True
-    except Exception:  # noqa: BLE001 — нет доступа к папке и т.п.: запуск в контейнере не получится
+        r = subprocess.run([icacls, str(path), "/grant", f"*{sid_text}:(OI)(CI)({right})", "/C", "/Q"],
+                           capture_output=True, timeout=600, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.TimeoutExpired):
         return False
+    return r.returncode == 0
+
+
+def rights(path: str | Path) -> str:
+    """Права на папку текстом (для разбора на CI)."""
+    import subprocess
+
+    system = os.environ.get("SystemRoot", r"C:\Windows")
+    r = subprocess.run([os.path.join(system, "System32", "icacls.exe"), str(path)], capture_output=True, text=True,
+                       timeout=60, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    return r.stdout
 
 
 def open_to_all_containers(path: str | Path) -> bool:
