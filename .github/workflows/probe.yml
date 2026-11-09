@@ -1,0 +1,46 @@
+name: Probe
+
+on:
+  push:
+    branches: [probe-runner]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: probe-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONUTF8: "1"
+  PYTHONIOENCODING: utf-8
+
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Зависимости
+        run: python -m pip install ".[windows]" pythonnet
+      - name: Проверка запуска программ и снимков окон
+        shell: pwsh
+        run: python tools/ci_probe_exec.py
+      - name: Результаты в ветку probe-results
+        if: always()
+        shell: pwsh
+        run: |
+          git config user.name "forlabs-ci"; git config user.email "ci@forlabs.invalid"
+          $dst = "$env:RUNNER_TEMP\probe-out"
+          New-Item -ItemType Directory -Force $dst | Out-Null
+          Copy-Item -Recurse -Force build/probe/* $dst
+          git checkout --orphan probe-results
+          git rm -rf . -q
+          Copy-Item -Recurse -Force "$dst\*" .
+          git add -A
+          git commit -q -m "probe ${{ github.sha }}"
+          git push -f origin probe-results
