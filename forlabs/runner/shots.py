@@ -65,6 +65,20 @@ class FakeShooter:
         return ShotResult(True, image=out, seen=str(_get(shot, "expect", "") or ""))
 
 
+def browser_url(page: str, base: str, work: Path) -> str:
+    """Адрес страницы: «order.php» у сайта на PHP — от корня сервера (а не «index.php/order.php»); у сайта из файлов —
+    рядом с главной страницей; готовый адрес — как есть."""
+    from urllib.parse import urljoin
+
+    if page.startswith(("http://", "https://", "file:")):
+        return page
+    if not page:
+        return base or (work / "index.html").as_uri()
+    if base.startswith(("http://", "file:")):
+        return urljoin(base, page.lstrip("/") if base.startswith("file:") else "/" + page.lstrip("/"))
+    return (work / page.lstrip("/")).as_uri()
+
+
 def run_dir(base: Path | None = None) -> Path:
     """Папка запуска с меткой Low: программа с пониженными правами может писать только сюда (и в LocalLow)."""
     root = base or Path(os.environ.get("USERPROFILE", str(Path.home()))) / "AppData" / "LocalLow" / "ForLabs" / "runs"
@@ -261,11 +275,7 @@ class WindowsShooter:
                                                                         for a in target.server]),
                                   str(work), low=self.low, hidden=True)
             time.sleep(1.5)
-        url = _get(shot, "url") or target.url or ""
-        if url and not url.startswith(("http://127.0.0.1", "http://localhost", "file:")):
-            rel = url.lstrip("/")
-            url = (target.url.rstrip("/") + "/" + rel) if target.url and target.url.startswith("http") \
-                else (work / rel).as_uri()
+        url = browser_url(_get(shot, "url") or "", target.url or "", work)
         profile = run_dir() / "edge"
         cmd = (f'"{edge}" --user-data-dir="{profile}" --no-first-run --no-default-browser-check '
                f'--disable-features=msEdgeFirstRunExperience,msImplicitSignin --window-size=1200,800 --new-window "{url}"')
@@ -275,12 +285,36 @@ class WindowsShooter:
             if not w:
                 return ShotResult(False, reason="окно браузера не появилось")
             time.sleep(2.5)
+            steps = _get(shot, "steps", None) or []
+            if steps:  # форма на странице: поля по id из HTML, кнопки по тексту; клавиши — в окно браузера
+                from forlabs.runner import uia
+
+                ui = []
+                for step in steps:
+                    action, name, value = _get(step, "action"), _get(step, "target") or "", _get(step, "value") or ""
+                    if action in ("set", "select", "click", "check", "uncheck", "wait"):
+                        ui.append({"action": action, "target": name, "value": value})
+                        continue
+                    if ui:
+                        uia.perform(w.hwnd, ui, timeout=8)
+                        ui = []
+                    if action == "type":
+                        winapi.type_text(w.hwnd, value)
+                    elif action == "key":
+                        winapi.press(w.hwnd, value)
+                if ui:
+                    uia.perform(w.hwnd, ui, timeout=8)
+                time.sleep(2.0)  # страница после отправки формы
+            seen = _texts_with_timeout(w.hwnd) if (steps or _get(shot, "expect")) else w.title
+            expect = _get(shot, "expect") or ""
+            if expect and seen and expect not in seen:
+                return ShotResult(False, reason=f"на странице нет ожидаемого «{expect}»", seen=seen)
             img = winapi.capture(w.hwnd)
             if winapi.blank(img):
                 return ShotResult(False, reason="снимок окна браузера получился пустым")
             out.parent.mkdir(parents=True, exist_ok=True)
             img.save(out)
-            return ShotResult(True, image=out, seen=w.title)
+            return ShotResult(True, image=out, seen=seen)
         finally:
             app.close()
             if server is not None:

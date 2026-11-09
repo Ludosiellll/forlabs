@@ -329,3 +329,21 @@ def test_exe_named_after_project_not_program():
 
     assert _ascii("Массив", "program") == "Massiv" and _ascii("Учёт книг", "program") == "Uchet_knig"
     assert _ascii("123", "program") == "program_123"
+
+
+def test_go_module_name_never_reserved():
+    from forlabs.runner.languages import templates
+    from forlabs.runner.plan import ProjectPlan
+
+    p = ProjectPlan.model_validate({"language": "go", "kind": "console", "name": "Go", "entry": "main.go",
+                                    "files": [{"path": "main.go", "content": "package main\nfunc main() {}\n"}]})
+    assert templates(p)["go.mod"].startswith("module go_lab\n")
+
+
+def test_browser_url_from_site_root_and_next_to_page(tmp_path):
+    from forlabs.runner.shots import browser_url
+
+    assert browser_url("order.php", "http://127.0.0.1:5000/index.php", tmp_path) == "http://127.0.0.1:5000/order.php"
+    assert browser_url("", "http://127.0.0.1:5000/index.php", tmp_path) == "http://127.0.0.1:5000/index.php"
+    base = (tmp_path / "Проект" / "index.html").as_uri()
+    assert browser_url("about.html", base, tmp_path).endswith("/about.html") and "%D0%9F" in browser_url("about.html", base, tmp_path)

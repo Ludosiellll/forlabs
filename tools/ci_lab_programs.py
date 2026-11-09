@@ -268,6 +268,26 @@ echo "Сумма: " . ($a + $b) . PHP_EOL;
 </body>
 </html>
 '''}, {"mode": "browser", "url": "index.php"}),
+    "php_form_post": plan("php", "web", "Анкета", "index.php", {"index.php": '''<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="UTF-8"><title>Анкета</title></head>
+<body>
+<h1>Анкета студента</h1>
+<?php if ($_SERVER["REQUEST_METHOD"] === "POST"): ?>
+  <p>Здравствуйте, <?= htmlspecialchars($_POST["name"] ?? "") ?>! Ваша группа: <?= htmlspecialchars($_POST["group"] ?? "") ?></p>
+<?php else: ?>
+  <form method="post">
+    <label>Имя <input id="name" name="name"></label>
+    <label>Группа <input id="group" name="group"></label>
+    <button type="submit">Отправить</button>
+  </form>
+<?php endif; ?>
+</body>
+</html>
+'''}, {"mode": "browser", "url": "index.php", "expect": "Здравствуйте, Иван",
+       "steps": [{"action": "set", "target": "id:name", "value": "Иван"},
+                 {"action": "set", "target": "id:group", "value": "РС02-23"},
+                 {"action": "click", "target": "Отправить"}]}),
     "go_console": plan("go", "console", "Сумма", "main.go", {"main.go": '''package main
 
 import "fmt"

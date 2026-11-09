@@ -329,7 +329,10 @@ def templates(plan: ProjectPlan, tools: Mapping[str, Toolchain] | None = None) -
                              asm=project_name(plan))
         return {f"{project_name(plan)}.csproj": text}
     if plan.language == "go":
-        return {"go.mod": f"module {_ascii(plan.name, 'lab').lower()}\n\ngo {_go_version(tools)}\n"}
+        mod = _ascii(plan.name, "lab").lower()
+        if mod in ("go", "std", "cmd", "main", "builtin", "unsafe", "c") or "." in mod:
+            mod = f"{mod}_lab"  # имена, которые Go занимает сам («module go» роняет сборку)
+        return {"go.mod": f"module {mod}\n\ngo {_go_version(tools)}\n"}
     if plan.language == "javascript" and plan.file("package.json") is None:
         pkg = {"name": _ascii(plan.name, "lab").lower().replace("_", "-"), "version": "1.0.0", "private": True,
                "main": plan.entry}
