@@ -46,7 +46,8 @@ def test_frozen_build_is_cloud_only(fake, tmp_home, monkeypatch):
     monkeypatch.setattr(version, "frozen", lambda: True)
     assert load_settings().mode == "cloud"
     page = make_client(fake, tmp_home).get("/settings").text  # даже администратору — без «Локально»
-    assert 'value="local"' not in page
+    assert 'value="local"' not in page and 'name="api_key"' not in page and 'name="base_url"' not in page
+    assert 'name="model"' in page  # модель администратор выбирает
 
 
 def test_settings_closed_before_login_and_login_page_is_clean(fake, tmp_home):

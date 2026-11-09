@@ -136,6 +136,8 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
             except Exception:  # без связи или без таблицы поддержки — без значка
                 base["support_unread"] = 0
         base["show_tour"] = name == "home.html" and not ctx.settings.tour_done
+        m = base.get("member")
+        base["show_rules"] = not ctx.cloud or bool(m and m.role == "admin" and m.approved)
         base.update(kw)
         return tpl.TemplateResponse(request, name, base)
 
@@ -786,14 +788,20 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         return redirect(back, msg=f"Отчёт за семестр сохранён: {path}" + (f" ({notes})" if notes else ""))
 
     # правила
+    NOT_FOR_MEMBERS = "Правила для модели настраивает администратор. Свои пожелания пиши при создании лабы и в чате правок."
+
     @app.get("/rules", response_class=HTMLResponse)
     def rules_page(request: Request, file: str | None = None):
+        if not can_tune_model():  # студенту правила не нужны, а их текст не должен утекать из программы
+            return redirect("/", err=NOT_FOR_MEMBERS)
         files = ctx.rules().files()
         current = next((x for x in files if x.path == file), files[0] if files else None)
         return render(request, "rules.html", files=files, current=current, nav="rules")
 
     @app.post("/rules/save")
     def rules_save(path: str = Form(...), text: str = Form(...)):
+        if not can_tune_model():
+            return redirect("/", err=NOT_FOR_MEMBERS)
         try:
             ctx.rules().save_override(path, text)
         except KeyError:
@@ -803,6 +811,8 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
 
     @app.post("/rules/reset")
     def rules_reset(path: str = Form(...)):
+        if not can_tune_model():
+            return redirect("/", err=NOT_FOR_MEMBERS)
         try:
             ctx.rules().reset_override(path)
         except KeyError:
@@ -843,7 +853,9 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         f = await request.form()
         admin = can_tune_model()
         data = ctx.settings.model_dump()
-        keys = ("soffice_path", "tesseract_path", "browser_channel") + (("mode", "base_url", "model") if admin else ())
+        local_ok = admin and not _version.frozen()  # режим, адрес API и свой ключ — только вне установленной программы
+        keys = ("soffice_path", "tesseract_path", "browser_channel") + (("model",) if admin else ()) + (
+            ("mode", "base_url") if local_ok else ())
         for key in keys:
             if key in f:
                 data[key] = (f.get(key) or "").strip() or None
@@ -855,7 +867,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         ctx.settings = Settings.model_validate(data)
         save_settings(ctx.settings)
         ctx.notice = ""
-        key = (f.get("api_key") or "").strip() if admin else ""
+        key = (f.get("api_key") or "").strip() if local_ok else ""
         if key and not set_api_key(key):
             os.environ["FORLABS_API_KEY"] = key
         ctx.reset()

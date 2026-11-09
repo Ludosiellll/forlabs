@@ -33,13 +33,17 @@
             {% for m in model_choices %}<option value="{{ m }}" {{ 'selected' if s.model == m }}>{{ m }}{{ ' — по умолчанию' if loop.first }}</option>{% endfor %}
             {% if s.model not in model_choices %}<option value="{{ s.model }}" selected>{{ s.model }}</option>{% endif %}
           </select></div>
+        {% if show_mode %}
         <div class="field"><label for="base_url">Адрес API (для локального режима)</label>
           <input id="base_url" name="base_url" type="text" value="{{ s.base_url }}" list="presets">
           <datalist id="presets">{% for k, pr in presets.items() %}<option value="{{ pr.base_url }}">{{ pr.title }}</option>{% endfor %}</datalist></div>
+        {% endif %}
       </div>
+      {% if show_mode %}
       <div class="field"><label for="api_key">Ключ API (для локального режима)</label>
         <input id="api_key" name="api_key" type="password" autocomplete="off" placeholder="{{ 'Ключ сохранён — вставь новый, чтобы заменить' if has_key else 'sk-…' }}">
         <div class="hint">Хранится в диспетчере учётных данных Windows, не в файлах.</div></div>
+      {% endif %}
     </fieldset>
     {% endif %}
     <fieldset><legend>Программы на этом ПК</legend>
