@@ -53,6 +53,11 @@ class AppContext:
         self.running: set[str] = set()
         self.form_tokens: dict[str, str] = {}  # одноразовые токены формы «Новая лаба» → адрес созданной лабы
         self._lock = threading.Lock()
+        from forlabs.core.update import Updater, spawn_detached
+
+        self.updater = Updater()  # только в установленной программе на Windows; иначе выключен
+        self.spawn_installer = spawn_detached
+        self.quit: Callable[[], None] | None = None  # закрыть окно ForLabs (задаёт запуск окна)
         if self.cloud:
             self.auth.load_session()
 
@@ -130,6 +135,15 @@ class AppContext:
     def busy(self) -> bool:
         """Идёт работа: задача по лабе или фоновое обновление памяти после сдачи."""
         return bool(self.running) or bool(self._pipeline is not None and self._pipeline.background)
+
+    def update_status(self) -> dict | None:
+        """Для шапки: есть ли новая версия (проверка — в фоне, не чаще раза в несколько часов)."""
+        try:
+            self.updater.check_in_background()
+            s = self.updater.status()
+        except Exception:
+            return None
+        return s if s["state"] in ("available", "downloading", "ready", "installing", "error") and s["version"] else None
 
     def claim(self, key: str) -> bool:
         """Занять лабу под короткое действие в запросе (сдача). False — по ней уже идёт работа."""

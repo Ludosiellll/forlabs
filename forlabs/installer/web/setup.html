@@ -343,6 +343,7 @@ async function poll() {
     S.warnings = s.warnings || [];
     renderFoot();
     setTimeout(() => go(3), 500);
+    if (S.auto) setTimeout(() => api.finish(true), 1600);
   } else if (s.state === "error") {
     $("prog").classList.add("hidden");
     $("rows").classList.add("hidden");
@@ -384,6 +385,11 @@ async function init() {
   movePill(0, 0);
   renderSteps();
   renderPage();
+  if (S.d.auto && !S.d.error) { // обновление из приложения: сразу ставить, потом открыть новую версию
+    S.launch = true;
+    S.auto = true;
+    startInstall();
+  }
 }
 if (window.pywebview && window.pywebview.api) init(); else window.addEventListener("pywebviewready", init);
 </script>

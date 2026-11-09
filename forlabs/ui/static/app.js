@@ -227,3 +227,91 @@ window.addEventListener("pageshow", function () {
   }
   setInterval(tick, 10000);
 })();
+
+// обновление из приложения: карточка в углу «Доступно обновление» → «Обновить» → загрузка с полосой →
+// установщик ставит новую версию, ForLabs закрывается и открывается уже обновлённым
+(function () {
+  var box = document.querySelector("[data-update]");
+  if (!box) return;
+  var title = box.querySelector("[data-update-title]"), text = box.querySelector("[data-update-text]"),
+      go = box.querySelector("[data-update-go]"), actions = box.querySelector("[data-update-actions]"),
+      track = box.querySelector("[data-update-track]"), bar = box.querySelector("[data-update-bar]");
+  var version = box.getAttribute("data-version");
+  function open() { if (box.hidden) { box.hidden = false; box.classList.add("in"); } }
+  function show(s) {
+    if (s.version) version = s.version;
+    box.setAttribute("data-state", s.state);
+    track.hidden = s.state !== "downloading";
+    actions.hidden = s.state === "downloading" || s.state === "installing" || s.state === "ready";
+    box.querySelector(".update-x").hidden = !(s.state === "available" || s.state === "error"); // начатое не прячется
+    if (s.state === "available") {
+      title.textContent = "Доступно обновление";
+      text.textContent = "ForLabs " + version + (s.size_mb ? " · " + s.size_mb + " МБ" : "") +
+        ". Лабы, профили и настройки останутся.";
+      go.textContent = "Обновить"; go.disabled = false;
+    } else if (s.state === "downloading") {
+      title.textContent = "Скачиваю ForLabs " + version;
+      bar.style.width = s.percent + "%";
+      text.textContent = s.note || (s.percent + "% · можно продолжать работу");
+    } else if (s.state === "ready") {
+      title.textContent = "Обновление скачано";
+      text.textContent = "Устанавливаю…";
+    } else if (s.state === "error") {
+      title.textContent = "Обновление не удалось";
+      text.textContent = (s.error || "Что-то пошло не так.").replace(/^./, function (c) { return c.toUpperCase(); });
+      go.textContent = "Повторить"; go.disabled = false;
+    }
+  }
+  function post(url) {
+    return fetch(url, { method: "POST", credentials: "same-origin" })
+      .then(function (r) { return r.json().then(function (j) { j.httpStatus = r.status; return j; }); });
+  }
+  function install() {
+    post("/update/install").then(function (r) {
+      if (r.ok) {
+        title.textContent = "Перезапускаю ForLabs";
+        text.textContent = "Окно закроется, и примерно через минуту откроется ForLabs " + version + ".";
+        actions.hidden = true; track.hidden = true;
+      } else if (r.httpStatus === 409 && /лаб/.test(r.error || "")) {
+        title.textContent = "Обновление скачано";
+        text.textContent = r.error; // «Сейчас выполняется лаба — обновлю, когда работа закончится»
+        setTimeout(install, 5000);
+      } else {
+        show({ state: "error", error: r.error });
+      }
+    }).catch(function () { setTimeout(install, 3000); }); // ForLabs уже закрывается — это нормально
+  }
+  function poll() {
+    fetch("/update/status", { credentials: "same-origin" }).then(function (r) { return r.json(); }).then(function (s) {
+      show(s);
+      if (s.state === "downloading") setTimeout(poll, 400);
+      else if (s.state === "ready") install();
+    }).catch(function () { setTimeout(poll, 2000); });
+  }
+  go.addEventListener("click", function () {
+    go.disabled = true;
+    post("/update/start").then(function (s) { show(s); poll(); })
+      .catch(function () { show({ state: "error", error: "ForLabs не ответил — нажми ещё раз." }); });
+  });
+  box.querySelectorAll("[data-update-later]").forEach(function (b) {
+    b.addEventListener("click", function () {
+      box.hidden = true;
+      post("/update/later").catch(function () {});
+    });
+  });
+  var st = box.getAttribute("data-state");
+  if (!box.hidden && (st === "downloading" || st === "ready")) poll(); // загрузка идёт (переход на другую страницу)
+  if (box.hidden) { // проверка при запуске идёт в фоне — карточка появится, когда найдёт новую версию
+    [2000, 7000, 20000].forEach(function (ms) {
+      setTimeout(function () {
+        if (!box.hidden) return;
+        fetch("/update/status", { credentials: "same-origin" }).then(function (r) { return r.json(); }).then(function (s) {
+          if (!s.dismissed && (s.state === "available" || s.state === "downloading" || s.state === "ready")) {
+            show(s); open();
+            if (s.state !== "available") poll();
+          }
+        }).catch(function () {});
+      }, ms);
+    });
+  }
+})();

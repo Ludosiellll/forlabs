@@ -353,3 +353,22 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .subject-mem .until { flex-wrap: wrap; gap: 6px; }
 .subject-mem input[type=text] { width: 100%; }
 .subject-mem ul { padding-left: 16px; margin: 6px 0; }
+
+/* обновление из приложения: карточка в правом нижнем углу (Fluent 2: тень 16, появление 250 мс decelerateMax) */
+.update-toast { position: fixed; right: 20px; bottom: 20px; z-index: 900; width: 340px; max-width: calc(100vw - 32px);
+  background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px 12px;
+  box-shadow: 0 8px 16px rgba(0, 0, 0, .14), 0 0 2px rgba(0, 0, 0, .12); font-size: 13.5px; }
+.update-toast[hidden] { display: none; }
+.update-toast.in { animation: update-in 250ms cubic-bezier(0.1, 0.9, 0.2, 1); }
+@keyframes update-in { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+.update-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+.update-head b { font-weight: 600; font-size: 14px; }
+.update-x { border: 0; background: none; color: var(--muted); padding: 4px; border-radius: 4px; cursor: pointer; line-height: 0; }
+.update-x:hover { background: var(--line-soft); }
+.update-x[hidden] { display: none; }
+.update-text { margin: 0 0 10px; color: var(--muted); }
+.update-track { display: block; height: 4px; border-radius: 2px; background: var(--line-soft); overflow: hidden; margin: 2px 0 8px; }
+.update-track[hidden], .update-actions[hidden] { display: none; }
+.update-bar { display: block; height: 100%; width: 0; background: var(--accent); transition: width 300ms ease; }
+.update-actions { display: flex; justify-content: flex-end; gap: 8px; }
+@media (max-width: 420px) { .update-toast { right: 16px; left: 16px; bottom: 16px; width: auto; } }

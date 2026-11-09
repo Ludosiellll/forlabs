@@ -8,6 +8,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import uuid
 from pathlib import Path
 
@@ -202,6 +203,41 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
 
     # Последним добавлен — значит, срабатывает первым: чужое имя хоста (DNS rebinding) отсекается сразу.
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts or LOCAL_HOSTS)
+
+    # обновление из приложения
+    @app.get("/update/status")
+    def update_status():
+        return ctx.updater.status()
+
+    @app.post("/update/start")
+    def update_start():
+        if ctx.synchronous:
+            ctx.updater.download()
+            return {"ok": ctx.updater.state == "ready", **ctx.updater.status()}
+        return {"ok": ctx.updater.start_download(), **ctx.updater.status()}
+
+    @app.post("/update/later")
+    def update_later():
+        ctx.updater.dismissed = True  # до следующего запуска ForLabs не напоминать
+        return {"ok": True}
+
+    @app.post("/update/install")
+    def update_install():
+        if ctx.updater.state != "ready":
+            return JSONResponse({"ok": False, "error": "Обновление ещё не скачано."}, status_code=409)
+        if ctx.busy():
+            return JSONResponse({"ok": False, "error": "Сейчас выполняется лаба — обновлю, когда работа закончится."},
+                                status_code=409)
+        try:
+            ctx.updater.install(os.getpid(), spawn=ctx.spawn_installer)
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": f"Установщик не запустился: {e}"}, status_code=500)
+        if callable(ctx.quit):  # окно закрывается — установщик дождётся, поставит новую версию и откроет её
+            if ctx.synchronous:
+                ctx.quit()
+            else:
+                threading.Timer(1.5, ctx.quit).start()
+        return {"ok": True}
 
     @app.post("/focus")
     def focus():

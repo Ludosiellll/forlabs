@@ -19,6 +19,7 @@ from forlabs.installer.core import (
     check_target,
     components,
     default_target,
+    forlabs_running,
     install,
     installed,
 )
@@ -27,6 +28,23 @@ from forlabs.version import __version__
 log = logging.getLogger("forlabs.setup")
 WEB = Path(__file__).parent / "web"
 WEBVIEW2_GUID = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+WAIT_STEP = 0.5  # секунд между проверками, закрылся ли ForLabs (обновление из приложения)
+WAIT_LIMIT = 120.0  # секунд ждать, пока ForLabs закроется после «Обновить»
+
+
+def wait_for_forlabs_exit() -> bool:
+    """Обновление из приложения: ForLabs закрывается сам, установщик ждёт, пока он отпустит папку."""
+    import time
+
+    end = time.monotonic() + WAIT_LIMIT
+    while forlabs_running():
+        if time.monotonic() > end:
+            return False
+        time.sleep(WAIT_STEP)
+    return True
+
+
+WAIT_ERROR = ("ForLabs не закрылся — закрой его окно (и дождись конца работы над лабой), потом нажми «Повторить».")
 
 
 def _mb(n: int) -> str:
@@ -50,8 +68,9 @@ class SetupApi:
     """Методы, которые вызывает страница установщика (pywebview.api.*). Каждый — короткий; установка — в потоке."""
 
     def __init__(self, payload: Path, shell, *, launcher: Callable[[Path], None] = launch,
-                 folder_picker: Callable[[str], str | None] | None = None):
+                 folder_picker: Callable[[str], str | None] | None = None, auto: bool = False):
         self._payload, self._shell = Path(payload), shell
+        self._auto = auto  # обновление из приложения: без вопросов, после установки — сразу открыть
         self._launcher, self._picker = launcher, folder_picker
         self._lock = threading.Lock()
         self._cancel = threading.Event()
@@ -75,6 +94,7 @@ class SetupApi:
             desktop = False
         total = sum(c.size for c in comps)
         return {"version": __version__, "installed": inst.version if inst else None, "target": str(target),
+                "auto": self._auto,
                 "desktop": desktop, "size_mb": max(1, round(total / 2**20)),
                 "components": [{"name": c.name, "size": _mb(c.size)} for c in comps]}
 
@@ -111,6 +131,8 @@ class SetupApi:
 
     def _work(self, target: Path, desktop: bool) -> None:
         try:
+            if self._auto and not wait_for_forlabs_exit():
+                raise InstallError(WAIT_ERROR)
             self._result = install(self._payload, target, shell=self._shell, desktop=desktop,
                                    progress=self._on_progress, cancelled=self._cancel.is_set)
             self._state = {"state": "done", "percent": 100, "component": FINAL, "fractions": [1] * len(COMPONENTS),
@@ -167,6 +189,8 @@ def silent(payload: Path, argv: list[str], *, shell=None) -> int:
     try:
         inst = installed(shell)
         target = Path(_arg(argv, "--target") or (inst.location if inst else default_target()))
+        if "--update" in argv and not wait_for_forlabs_exit():
+            raise InstallError(WAIT_ERROR)
         res = install(payload, target, shell=shell, desktop="--no-desktop" not in argv)
         out.write_text(f"ForLabs {__version__} установлен в {res.target} ({res.files} файлов)\n"
                        + "".join(w + "\n" for w in res.warnings), encoding="utf-8")
@@ -255,15 +279,16 @@ def run(payload: Path, bundle: Path, argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if "--silent" in argv:
         return silent(payload, argv)
+    update = "--update" in argv  # из приложения: «Обновить» — без вопросов, потом сразу открыть
     from forlabs.installer.winshell import WindowsShell
 
     shell = WindowsShell()
     try:
         import webview
     except ImportError:
-        return _plain_install(payload, shell)
+        return silent(payload, [*argv, "--launch"]) if update else _plain_install(payload, shell)
     if sys.platform == "win32" and not webview2_ready() and not _offer_webview2(bundle):
-        return _plain_install(payload, shell)
+        return silent(payload, [*argv, "--launch"]) if update else _plain_install(payload, shell)
 
     def pick(initial: str) -> str | None:
         kind = getattr(getattr(webview, "FileDialog", None), "FOLDER", None) or webview.FOLDER_DIALOG
@@ -271,7 +296,7 @@ def run(payload: Path, bundle: Path, argv: list[str] | None = None) -> int:
         res = window.create_file_dialog(kind, directory=start_dir if os.path.isdir(start_dir) else "")
         return res[0] if res else None
 
-    api = SetupApi(payload, shell, folder_picker=pick)
+    api = SetupApi(payload, shell, folder_picker=pick, auto=update)
     window = webview.create_window("Установка ForLabs", html=(WEB / "setup.html").read_text("utf-8"), js_api=api,
                                    width=760, height=480, resizable=False, frameless=True, easy_drag=False,
                                    background_color="#202020")

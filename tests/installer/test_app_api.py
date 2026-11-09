@@ -117,3 +117,46 @@ def test_page_has_no_external_resources():
     html = (Path(core.__file__).parent / "web" / "setup.html").read_text("utf-8")
     assert "http://" not in html and "https://" not in html  # установка без интернета
     assert "pywebviewready" in html and "pywebview-drag-region" in html
+
+
+def test_update_mode_waits_for_old_program_then_installs(payload, shell, tmp_path, monkeypatch):
+    from forlabs.installer import app as setup_app
+
+    core.install(payload, tmp_path / "ForLabs", shell=shell, desktop=False)
+    running = iter([True, True, False])
+    monkeypatch.setattr(setup_app, "forlabs_running", lambda: next(running, False))
+    monkeypatch.setattr(setup_app, "WAIT_STEP", 0.01)
+    api = SetupApi(payload, shell, auto=True)
+    d = api.defaults()
+    assert d["auto"] is True and d["target"] == str(tmp_path / "ForLabs")
+    assert api.start(d["target"], d["desktop"]) == {"ok": True}
+    assert _wait(api)["state"] == "done"
+
+
+def test_update_mode_gives_up_if_program_does_not_close(payload, shell, tmp_path, monkeypatch):
+    from forlabs.installer import app as setup_app
+
+    monkeypatch.setattr(setup_app, "forlabs_running", lambda: True)
+    monkeypatch.setattr(setup_app, "WAIT_STEP", 0.01)
+    monkeypatch.setattr(setup_app, "WAIT_LIMIT", 0.05)
+    api = SetupApi(payload, shell, auto=True)
+    api.start(str(tmp_path / "ForLabs"), False)
+    s = _wait(api)
+    assert s["state"] == "error" and "закрой" in s["error"].lower()
+
+
+def test_silent_update_waits_too(payload, shell, tmp_path, monkeypatch):
+    from forlabs.installer import app as setup_app
+
+    running = iter([True, False])
+    monkeypatch.setattr(setup_app, "forlabs_running", lambda: next(running, False))
+    monkeypatch.setattr(setup_app, "WAIT_STEP", 0.01)
+    log = tmp_path / "setup.log"
+    code = silent(payload, ["--silent", "--update", "--target", str(tmp_path / "ForLabs"), "--log", str(log)],
+                  shell=shell)
+    assert code == 0 and (tmp_path / "ForLabs" / "ForLabs.exe").exists()
+
+
+def test_page_runs_update_without_questions():
+    html = (Path(core.__file__).parent / "web" / "setup.html").read_text("utf-8")
+    assert "S.d.auto" in html  # в режиме обновления окно само ставит и запускает новую версию

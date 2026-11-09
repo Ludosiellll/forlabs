@@ -93,6 +93,8 @@ def _open_window(url: str, ctx=None) -> None:
     except Exception:
         pass
     if ctx is not None:
+        ctx.quit = window.destroy  # «Обновить»: окно закрывается, установщик ставит новую версию и открывает её
+
         def focus():  # второй запуск ForLabs: вывести это окно вперёд
             try:
                 window.restore()
@@ -173,6 +175,8 @@ def main() -> None:
         if not server.started:
             raise RuntimeError("Сервер ForLabs не запустился — подробности в forlabs.log")
         write_instance(port, token)
+        ctx.updater.check_in_background()  # есть ли новая версия — в фоне, карточка в углу появится сама
+        ctx.quit = lambda: setattr(server, "should_exit", True)  # без окна; окно заменит на своё закрытие
         if no_window:
             ctx.focus = lambda: webbrowser.open(url)
             print(f"ForLabs открыт в браузере: http://127.0.0.1:{port}/  (закрыть — Ctrl+C)")
