@@ -146,6 +146,32 @@ async function setup(req: Request): Promise<Response> {
   return json(200, { bot: username, link: `https://t.me/${username}?start=${code}`, bound: cfg.owner_chat_id !== null });
 }
 
+const HOW_TO_BIND = "Это бот поддержки ForLabs. Чтобы сообщения студентов приходили сюда: в ForLabs открой Админ → Поддержка, " +
+  "нажми «Подключить Telegram» и открой ссылку, которая там появится (она действует 30 минут).";
+
+/** Проверка бота для страницы администратора: токен, вебхук, к какому чату подключено. Без изменений. */
+async function check(req: Request): Promise<Response> {
+  const who = await signedIn(req);
+  if (!who || who.member.role !== "admin" || !who.member.approved) return err(403, "only admin");
+  const cfg = await config();
+  const out: Record<string, unknown> = { secrets: !!(BOT && SECRET), bound: cfg.owner_chat_id !== null,
+    code_active: !!(cfg.bind_code && cfg.bind_expires && new Date(cfg.bind_expires) > new Date()) };
+  if (!BOT || !SECRET) return json(200, out);
+  const me = await tg("getMe", {});
+  const username = (me?.result as { username?: string } | undefined)?.username ?? null;
+  out.token_ok = !!username;
+  out.bot = username;
+  if (username) {
+    const info = await tg("getWebhookInfo", {});
+    const r = (info?.result ?? {}) as { url?: string; last_error_message?: string; pending_update_count?: number };
+    const url = `${Deno.env.get("SUPABASE_URL")}/functions/v1/support/telegram`;
+    out.webhook_ok = r.url === url;
+    out.webhook_error = r.last_error_message ?? null;
+    out.pending = r.pending_update_count ?? 0;
+  }
+  return json(200, out);
+}
+
 async function telegram(req: Request): Promise<Response> {
   if (!SECRET || req.headers.get("X-Telegram-Bot-Api-Secret-Token") !== SECRET) return err(403, "bad secret");
   const update = await req.json().catch(() => ({}));
@@ -156,7 +182,11 @@ async function telegram(req: Request): Promise<Response> {
     if (fresh) {
       await admin.rpc("support_config_set", { owner: action.chatId, bot: cfg.bot_username, code: null, expires: null });
       await tg("sendMessage", { chat_id: action.chatId, text: "Готово: сюда будут приходить сообщения поддержки ForLabs. Отвечай на них реплаем." });
+    } else if (action.chatId !== cfg.owner_chat_id) {  // старая или чужая ссылка
+      await tg("sendMessage", { chat_id: action.chatId, text: "Ссылка устарела. " + HOW_TO_BIND });
     }
+  } else if (action.kind === "how_to_bind") {
+    await tg("sendMessage", { chat_id: action.chatId, text: HOW_TO_BIND });
   } else if (action.kind === "reply") {
     const { data: mapped } = await admin.from("support_tg").select("user_id")
       .eq("tg_chat_id", cfg.owner_chat_id).eq("tg_message_id", action.replyTo).maybeSingle();
@@ -192,5 +222,6 @@ Deno.serve(async (req: Request) => {
   if (path.endsWith("/send")) return send(req);
   if (path.endsWith("/setup")) return setup(req);
   if (path.endsWith("/telegram")) return telegram(req);
-  return err(404, "only /send, /setup, /telegram");
+  if (path.endsWith("/check")) return check(req);
+  return err(404, "only /send, /setup, /telegram, /check");
 });

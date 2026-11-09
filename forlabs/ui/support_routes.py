@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from fastapi import FastAPI, File, Form, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from forlabs.cloud.auth import CloudError
 from forlabs.cloud.support import MAX_IMAGES, Support, valid_path
@@ -113,6 +113,16 @@ def register_support(app: FastAPI, ctx, render, redirect) -> None:
         telegram, bot = sup.status()
         return render(request, "admin_support.html", nav="admin", threads=threads, members=members,
                       telegram=telegram, bot=bot, thread=None, setup=result, setup_error=setup_error)
+
+    @app.get("/admin/support/check")
+    def admin_support_check():
+        sup = support()
+        if sup is None or not is_admin():
+            return JSONResponse({"error": "только администратор"}, status_code=403)
+        try:
+            return sup.check()
+        except CloudError as e:
+            return {"bound": False, "bot": None, "items": [{"ok": False, "text": e.message_ru}]}
 
     @app.get("/admin/support/{uid}/log", response_class=HTMLResponse)
     def admin_support_log(request: Request, uid: str):

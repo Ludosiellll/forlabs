@@ -197,6 +197,39 @@ class Support:
         row = rows[0] if rows else {}
         return bool(row.get("telegram")), row.get("bot_username")
 
+    def check(self) -> dict:
+        """Проверка бота: {"bound", "bot", "items": [{"ok", "text"}]} — по пунктам, что работает и что сделать."""
+        r = self._fn("check", {})
+        self.s._check(r)
+        d = r.json()
+        items: list[dict] = []
+
+        def item(ok: bool, text: str) -> None:
+            items.append({"ok": ok, "text": text})
+
+        bot = d.get("bot")
+        if not d.get("secrets"):
+            item(False, "В Supabase не заданы секреты TELEGRAM_BOT_TOKEN и TELEGRAM_WEBHOOK_SECRET "
+                        "(Edge Functions → Secrets).")
+        elif d.get("token_ok") is False:
+            item(False, "Telegram не принял токен бота. Возьми токен у @BotFather (команда /token) и вставь его "
+                        "в TELEGRAM_BOT_TOKEN: Supabase → Edge Functions → Secrets.")
+        else:
+            item(True, f"Токен принят: бот @{bot}." if bot else "Токен принят.")
+            if not d.get("webhook_ok"):
+                item(False, "Бот ещё не настроен на ForLabs — нажми «Подключить Telegram».")
+            elif d.get("webhook_error"):
+                item(False, f"Telegram не может достучаться до ForLabs: {d['webhook_error']}. Нажми «Подключить "
+                            "Telegram» ещё раз.")
+            if d.get("bound"):
+                item(True, f"Подключено: сообщения студентов приходят в твой чат с @{bot}." if bot else
+                     "Подключено: сообщения студентов приходят тебе в Telegram.")
+            elif d.get("code_active"):
+                item(False, "Жду: открой ссылку ниже в Telegram и нажми «Запустить».")
+            elif d.get("webhook_ok"):
+                item(False, "Чат ещё не подключён — нажми «Подключить Telegram» и открой ссылку.")
+        return {"bound": bool(d.get("bound")), "bot": bot, "items": items}
+
     def setup(self) -> dict:
         r = self._fn("setup", {})
         if r.status_code == 503:

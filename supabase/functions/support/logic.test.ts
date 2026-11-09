@@ -27,9 +27,11 @@ test("чужие сообщения и не-текст — игнор", () => {
   assert.deepEqual(telegramAction(msg({ photo: [{}], reply_to_message: { message_id: 42 } }), OWNER), { kind: "hint", chatId: OWNER });
 });
 
-test("/start без кода от владельца — подсказка, от чужого — игнор", () => {
+test("/start без кода от владельца — подсказка, от чужого — как подключить", () => {
   assert.deepEqual(telegramAction(msg({ text: "/start" }), OWNER), { kind: "hint", chatId: OWNER });
-  assert.deepEqual(telegramAction(msg({ chat: { id: 9 }, text: "/start" }), OWNER), { kind: "ignore" });
+  assert.deepEqual(telegramAction(msg({ chat: { id: 9 }, text: "/start" }), OWNER), { kind: "how_to_bind", chatId: 9 });
+  assert.deepEqual(telegramAction(msg({ chat: { id: 9 }, text: "/start" }), null), { kind: "how_to_bind", chatId: 9 });
+  assert.deepEqual(telegramAction(msg({ chat: { id: 9 }, text: "привет" }), null), { kind: "ignore" });
 });
 
 test("текст сообщения: обрезка, пустое — null", () => {

@@ -4,7 +4,8 @@ export type Action =
   | { kind: "ignore" }
   | { kind: "bind"; code: string; chatId: number }
   | { kind: "reply"; replyTo: number; text: string; photo: string | null }
-  | { kind: "hint"; chatId: number };
+  | { kind: "hint"; chatId: number }
+  | { kind: "how_to_bind"; chatId: number };
 
 type TgMessage = {
   message_id?: number;
@@ -32,7 +33,9 @@ export function telegramAction(update: { message?: TgMessage } & Record<string, 
   const text = typeof m.text === "string" ? m.text.trim() : "";
   const start = /^\/start(?:@\w+)?\s+([A-Za-z0-9]{6,32})$/.exec(text);
   if (start) return { kind: "bind", code: start[1], chatId };
-  if (chatId !== ownerChatId) return { kind: "ignore" };
+  if (chatId !== ownerChatId) {  // /start без кода: открыли бота не по ссылке из ForLabs — подсказать, как подключить
+    return /^\/start(?:@\w+)?$/.test(text) ? { kind: "how_to_bind", chatId } : { kind: "ignore" };
+  }
   const replyTo = m.reply_to_message?.message_id;
   const photo = largestPhoto(m);
   const body = (text || (typeof m.caption === "string" ? m.caption.trim() : "")).slice(0, 4000);

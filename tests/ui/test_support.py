@@ -161,3 +161,26 @@ def test_pending_member_sees_approval_without_waiting(fake, tmp_home):
     c.get("/")
     fake.tables["members"][0]["approved"] = True  # администратор одобрил
     assert "ждёт одобрения" not in c.get("/").text
+
+
+def test_admin_bot_check_explains_each_problem(admin, fake):
+    fake.support_check = {"secrets": True, "bound": False, "code_active": False, "token_ok": False, "bot": None}
+    r = admin.get("/admin/support/check").json()
+    bad = " ".join(i["text"] for i in r["items"] if not i["ok"])
+    assert r["bound"] is False and "токен" in bad and "@BotFather" in bad
+    fake.support_check = {"secrets": True, "bound": False, "code_active": False, "token_ok": True,
+                          "bot": "forlabs_help_bot", "webhook_ok": False, "webhook_error": None}
+    bad = " ".join(i["text"] for i in admin.get("/admin/support/check").json()["items"] if not i["ok"])
+    assert "Подключить Telegram" in bad
+    fake.support_check = {"secrets": True, "bound": False, "code_active": True, "token_ok": True,
+                          "bot": "forlabs_help_bot", "webhook_ok": True, "webhook_error": None}
+    texts = " ".join(i["text"] for i in admin.get("/admin/support/check").json()["items"])
+    assert "«Запустить»" in texts
+    fake.support_check = {"secrets": True, "bound": True, "code_active": False, "token_ok": True,
+                          "bot": "forlabs_help_bot", "webhook_ok": True, "webhook_error": "Connection timed out"}
+    r = admin.get("/admin/support/check").json()
+    assert r["bound"] is True and any("Connection timed out" in i["text"] for i in r["items"])
+    fake.support_secrets = False
+    fake.support_check = {"secrets": False, "bound": False, "code_active": False}
+    bad = " ".join(i["text"] for i in admin.get("/admin/support/check").json()["items"] if not i["ok"])
+    assert "TELEGRAM_BOT_TOKEN" in bad

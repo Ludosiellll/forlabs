@@ -54,6 +54,7 @@ class FakeSupabase:
         self.no_trial_columns = False  # база без миграции 0005
         self.support_bound = False  # владелец привязал Telegram
         self.support_secrets = True  # секреты бота заданы в Supabase
+        self.support_check: dict = {}  # ответ проверки бота (/support/check)
         self.no_support = False  # сервер без миграции 0006 и функции support
         self.shared_key = None  # (last4, set_at) общего ключа в админке
         self.autoconfirm = False  # в Supabase выключено «Confirm email»: регистрация сразу даёт вход
@@ -159,6 +160,9 @@ class FakeSupabase:
             rows.append({"id": len(rows) + 1, "user_id": UID, "from_admin": False, "text": text[:4000], "images": images,
                          "created_at": f"2026-11-08T12:{len(rows):02d}:00+00:00", "read_at": None})
             return httpx.Response(200, json={"ok": True, "id": len(rows), "telegram": self.support_bound})
+        if path == "/functions/v1/support/check":
+            return httpx.Response(200, json=self.support_check or {"secrets": self.support_secrets,
+                                                                   "bound": self.support_bound, "code_active": False})
         if path == "/functions/v1/support/setup":
             if not self.support_secrets:
                 return httpx.Response(503, json={"error": {"message": "telegram secrets missing"}})
