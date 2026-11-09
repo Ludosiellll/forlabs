@@ -59,6 +59,7 @@ def test_missing_tool_offers_retry(tmp_home, tmp_path, monkeypatch):
     c, ctx, url = lab(tmp_home, tmp_path, monkeypatch, tools={})
     page = c.get(url).text
     assert "Нужно от тебя: 2" in page and "Python" in page and url + "/project/retry" in page
+    assert 'data-tool-missing="python"' in page and "Скачать и установить" in page  # поставить прямо отсюда
     monkeypatch.undo()  # Python установили
     r = c.post(url + "/project/retry", follow_redirects=False)
     assert r.status_code == 303

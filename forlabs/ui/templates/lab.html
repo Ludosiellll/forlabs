@@ -21,7 +21,9 @@
       <h2 id="prog-h" class="small">Программа</h2>
       <p class="small"><b>{{ pr.name }}</b> · {{ {'csharp': 'C#', 'cpp': 'C++', 'python': 'Python', 'java': 'Java', 'javascript': 'JavaScript', 'web': 'HTML/CSS', 'php': 'PHP', 'go': 'Go', 'mysql': 'MySQL'}.get(pr.language, pr.language) }} ·
         {% if pr.built %}<span class="ok">собрана</span>{% elif pr.missing %}<span class="bad">не собрана</span>{% else %}<span class="bad">не собралась</span>{% endif %}</p>
-      {% if pr.missing %}<p class="small">Не хватает: {{ pr.missing|map('tool_title')|join(', ') }}. Установи и нажми «Повторить».</p>{% endif %}
+      {% if pr.missing %}<p class="small">Не хватает: {{ pr.missing|map('tool_title')|join(', ') }}. Установи и нажми «Повторить».</p>
+        {% for key in pr.missing %}{% if key in ctx.tools.tools %}{% with tool=ctx.tools.tool_status(key) %}{% include "_tool_missing.html" %}{% endwith %}{% endif %}{% endfor %}
+      {% endif %}
       {% if pr.blocked %}<p class="small muted">Сам не запускал: {{ pr.blocked[0] }}</p>{% endif %}
       {% if pr.note and not pr.built and not pr.missing %}<p class="small muted">{{ pr.note }}</p>{% endif %}
       <div class="row until">
