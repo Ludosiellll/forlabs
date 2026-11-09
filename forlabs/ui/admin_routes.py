@@ -272,7 +272,7 @@ def register_admin(app: FastAPI, ctx, render, redirect) -> None:
             return home()
         if action == "clear":
             ctx.store.admin_clear_shared_key()
-            return redirect("/admin", msg="Общий ключ убран — модель работает только у тех, кому выдан свой ключ")
+            return redirect("/admin", msg="Общий ключ убран: модель работает только у тех, кому выдан свой ключ")
         try:
             last4 = ctx.store.admin_set_shared_key(api_key)
         except ValueError as e:
@@ -329,7 +329,7 @@ def register_admin(app: FastAPI, ctx, render, redirect) -> None:
         if uid == me.user_id:
             return redirect(card_url(uid), err="Свой доступ администратор не меняет")
         messages = {"daily": "Дневной лимит изменён", "extend": "Подписка продлена", "trial": "Пробный доступ выдан",
-                    "full": "Пробные ограничения сняты — полный доступ", "until": "Срок подписки изменён", "unlimited": "Подписка без срока",
+                    "full": "Пробные ограничения сняты, доступ полный", "until": "Срок подписки изменён", "unlimited": "Подписка без срока",
                     "revoke": "Подписка забрана", "approve": "Участник одобрен", "disable": "Участник отключён"}
         if action not in messages:
             return redirect(card_url(uid), err="Непонятное действие")
@@ -356,7 +356,7 @@ def register_admin(app: FastAPI, ctx, render, redirect) -> None:
             raw = daily.replace(" ", "").replace("\u00a0", "")
             if not raw:
                 ctx.store.admin_update_member(uid, daily_tokens=None)
-                return redirect(card_url(uid), msg=f"Дневной лимит — общий ({fmt_int(DEFAULT_DAILY_TOKENS)} токенов)")
+                return redirect(card_url(uid), msg=f"Дневной лимит: общий ({fmt_int(DEFAULT_DAILY_TOKENS)} токенов)")
             n = _int_in(raw, 1000, 1_000_000_000)
             if n is None:
                 return redirect(card_url(uid), err="Лимит токенов в день — число от 1 000 до 1 000 000 000 (пусто — общий)")
@@ -413,7 +413,7 @@ def register_admin(app: FastAPI, ctx, render, redirect) -> None:
         local = ctx.store.local.home / "admin_downloads" / safe_name(uid) / safe_name(p) / safe_name(s) / \
             f"ЛР{safe_name(n)}.docx"
         if not ctx.store.download_member_report(uid, p, s, n, local):
-            return redirect(card_url(uid), err=f"Отчёта ЛР {n} в облаке нет — участник его ещё не свёрстал")
+            return redirect(card_url(uid), err=f"Отчёта ЛР {n} в облаке нет: участник его ещё не свёрстал")
         subj = all_subjects().get(s)
         return FileResponse(local, filename=f"ЛР{n}_{subj.short_name if subj else s}_{p}.docx",
                             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")

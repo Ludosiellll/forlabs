@@ -4,7 +4,7 @@
 <main class="page narrow">
   {% include "_flash.html" %}
   <h1>Новая лаба</h1>
-  <p class="muted">Добавь методичку — приложение разберёт тему, цель, задания, вариант и контрольные вопросы. Перед выполнением всё покажет на проверку.</p>
+  <p class="muted">ForLabs найдёт в методичке тему, задания, вариант и вопросы, а перед выполнением покажет их на проверку.</p>
   <form method="post" action="/labs/new" enctype="multipart/form-data" data-once>
     <input type="hidden" name="form_token" value="{{ form_token }}">
     <div class="grid3">
@@ -32,7 +32,7 @@
         <label class="btn link small">Прикрепить фото<input id="wish-images" class="visually-hidden" type="file" name="wish_images" accept="image/png,image/jpeg,image/webp" multiple data-images-input></label>
         <span class="small muted" data-images-picked="wish-images"></span>
       </div>
-      <div class="hint">Необязательно. Можно приложить фото записи преподавателя — приложение прочитает её. Учтётся при разборе и при написании всех заданий; замечания после выполнения — в чат «Правки» на экране лабы.</div></div>
+      <div class="hint">Необязательно. Учтётся при разборе и во всех заданиях. Замечания к готовой лабе — в чат «Правки».</div></div>
     <div class="grid2">
       <div class="field"><label for="linked">Связанные прошлые лабы</label>
         <input id="linked" name="linked" type="text" maxlength="60" placeholder="например: 1, 27">
@@ -40,7 +40,7 @@
           <label class="btn link small">Общий отчёт с ними (DOCX, PDF)<input id="linked-report" class="visually-hidden" type="file" name="linked_report" accept=".docx,.pdf" data-images-input></label>
           <span class="small muted" data-images-picked="linked-report"></span>
         </div>
-        <div class="hint">Если тема и приложение берутся из прошлых лаб. Из общего отчёта ForLabs вырежет только эти лабы, а если у какой-то нет заголовка — её найдёт модель по короткому скелету отчёта. Весь отчёт модель не читает, лимит не тратится.</div></div>
+        <div class="hint">Если тема и приложение берутся из прошлых лаб. Из общего отчёта ForLabs возьмёт только эти лабы: весь отчёт модель не читает, лимит на него не тратится.</div></div>
       <div class="field"><span style="display:block;font-weight:500;margin-bottom:4px">Файлы к лабе</span>
         <div class="row attach-row">
           <label class="btn small">Выбрать файлы<input id="materials-in" class="visually-hidden" type="file" name="materials" multiple accept="{{ materials_accept }}" data-images-input></label>

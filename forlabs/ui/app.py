@@ -86,7 +86,7 @@ EVENT_WAITERS = __import__("concurrent.futures").futures.ThreadPoolExecutor(max_
 MAX_UPLOAD = 50_000_000  # байт на файл методички или фото
 ELSEWHERE = ("Эта лаба сейчас выполняется на другом компьютере. Дождись окончания там (или 15 минут, если тот "
              "компьютер выключили) и обнови страницу.")
-BUSY_MESSAGE = "Сейчас идёт работа над лабой — дождись её окончания, потом меняй настройки или выходи."
+BUSY_MESSAGE = "Сейчас идёт работа над лабой. Дождись её окончания, потом меняй настройки или выходи."
 
 
 def _q(s: str) -> str:
@@ -156,7 +156,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
     def lab_url(p: str, s: str, n: str) -> str:
         return f"/labs/{_q(p)}/{_q(s)}/{_q(n)}"
 
-    BUSY = "По этой лабе сейчас идёт работа — дождись, пока она закончится."
+    BUSY = "По этой лабе сейчас идёт работа, дождись её окончания."
 
     def busy_lab(p: str, s: str, n: str) -> bool:
         return f"{p}/{s}/{n}" in ctx.running
@@ -226,7 +226,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         if ctx.updater.state != "ready":
             return JSONResponse({"ok": False, "error": "Обновление ещё не скачано."}, status_code=409)
         if ctx.busy():
-            return JSONResponse({"ok": False, "error": "Сейчас выполняется лаба — обновлю, когда работа закончится."},
+            return JSONResponse({"ok": False, "error": "Сейчас выполняется лаба. Обновлю, когда она закончится."},
                                 status_code=409)
         try:
             ctx.updater.install(os.getpid(), spawn=ctx.spawn_installer)
@@ -259,8 +259,8 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
 
         logging.getLogger("forlabs").error("Ошибка на %s %s", request.method, request.url.path, exc_info=exc)
         text = os_error_text(exc) if isinstance(exc, OSError) else (str(exc) or type(exc).__name__)
-        response = render(request, "error.html", message="Что-то пошло не так. Подробности записаны в журнал "
-                                                         "forlabs.log в папке данных.", detail=text[:300])
+        response = render(request, "error.html", message="Что-то пошло не так. Подробности — в журнале forlabs.log "
+                                                         "в папке данных.", detail=text[:300])
         response.status_code = 500
         return response
 
@@ -449,7 +449,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         if not name.strip():
             return redirect("/profiles", err="Впиши название предмета")
         subj = create_subject(name, short_name, kind, header_style, variant)
-        return redirect("/profiles", msg=f"Предмет «{subj.name}» добавлен — отметь его в профиле")
+        return redirect("/profiles", msg=f"Предмет «{subj.name}» добавлен, отметь его в профиле")
 
     # новая лаба
     @app.get("/labs/new", response_class=HTMLResponse)
@@ -473,14 +473,14 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
                 if done is None:
                     ctx.form_tokens[form_token] = "pending"
             if done == "pending":
-                return redirect("/", msg="Лаба уже создаётся — она появится в списке")
+                return redirect("/", msg="Лаба уже создаётся и появится в списке")
             if done:
                 return RedirectResponse(done, status_code=303)
         data = []
         back = f"/labs/new?profile={_q(profile_id)}&subject={_q(subject_id)}"
         for uf in [*(files or []), *(wish_images or []), *(materials or []), *([linked_report] if linked_report else [])]:
             if uf.filename and (uf.size or 0) > MAX_UPLOAD:
-                return redirect(back, err=f"Файл «{uf.filename}» больше {MAX_UPLOAD // 1_000_000} МБ — оставь только "
+                return redirect(back, err=f"Файл «{uf.filename}» больше {MAX_UPLOAD // 1_000_000} МБ. Оставь только "
                                           "страницы своей лабы или сожми его.")
         for uf in files or []:
             if uf.filename:
@@ -508,7 +508,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
                 st, problems = await asyncio.to_thread(ctx.pipeline.add_materials, st, extra)
                 notes += problems
             except Exception as e:
-                notes.append(f"Файлы к лабе не добавились ({getattr(e, 'message_ru', None) or e}) — добавь их на "
+                notes.append(f"Файлы к лабе не добавились ({getattr(e, 'message_ru', None) or e}). Добавь их на "
                              "странице лабы, слева.")
         key = ctx.pipeline.key(st)
         result = {}
@@ -523,8 +523,8 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
             try:
                 result["st"], _ = ctx.pipeline.set_links(done, numbers, report)
             except Exception as e:
-                ctx.bus.publish(new_key, f"Связанные лабы не сохранены ({getattr(e, 'message_ru', None) or e}) — "
-                                         "укажи их на странице лабы, слева.", "warn")
+                ctx.bus.publish(new_key, f"Связанные лабы не сохранены ({getattr(e, 'message_ru', None) or e}). "
+                                         "Укажи их на странице лабы, слева.", "warn")
             finally:
                 if claimed:
                     ctx.release(new_key)
@@ -680,7 +680,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         if not st.report:
             return redirect(lab_url(p, s, n), err="Чат правок работает после выполнения лабы")
         if not lab_complete(st):
-            return redirect(lab_url(p, s, n), err="Лаба дописана не до конца — сначала нажми «Продолжить»")
+            return redirect(lab_url(p, s, n), err="Лаба дописана не до конца, сначала нажми «Продолжить»")
         if len(photos) > MAX_IMAGES:
             return redirect(lab_url(p, s, n), err=f"Не больше {MAX_IMAGES} фото за раз")
         try:
@@ -715,13 +715,13 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         if busy_lab(p, s, n):
             return redirect(lab_url(p, s, n), err=BUSY)
         if linked_report is not None and (linked_report.size or 0) > MAX_UPLOAD:
-            return redirect(lab_url(p, s, n), err=f"Отчёт больше {MAX_UPLOAD // 1_000_000} МБ — сожми картинки в нём.")
+            return redirect(lab_url(p, s, n), err=f"Отчёт больше {MAX_UPLOAD // 1_000_000} МБ, сожми в нём картинки.")
         st = await asyncio.to_thread(load, p, s, n)
         report = (linked_report.filename, await linked_report.read()) if linked_report and linked_report.filename else None
         # с отчётом может понадобиться модель (лаба без заголовка) — в фоне, итог появится в блоке слева
         ctx.run(ctx.pipeline.key(st), ctx.pipeline.set_links, st, parse_numbers(linked), report)
         if report:
-            return redirect(lab_url(p, s, n), msg="Ищу связанные лабы в отчёте — что нашлось, появится слева")
+            return redirect(lab_url(p, s, n), msg="Ищу связанные лабы в отчёте, найденные появятся слева")
         return redirect(lab_url(p, s, n), msg="Связанные лабы сохранены" if linked.strip() else "Связанные лабы убраны")
 
     @app.post("/labs/{p}/{s}/{n}/materials")
@@ -739,7 +739,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         st, problems = await asyncio.to_thread(ctx.pipeline.add_materials, st, data)
         if problems:
             return redirect(lab_url(p, s, n), err=" ".join(problems))
-        return redirect(lab_url(p, s, n), msg="Файлы добавлены — модель прочитает их в каждом задании")
+        return redirect(lab_url(p, s, n), msg="Файлы добавлены, модель прочитает их в каждом задании")
 
     @app.post("/labs/{p}/{s}/{n}/materials/remove")
     def lab_materials_remove(p: str, s: str, n: str, name: str = Form("")):
@@ -779,7 +779,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         try:
             if apply == "1":
                 ctx.run(ctx.pipeline.key(st), ctx.pipeline.apply_profile_change, st, msg_id, True)
-                return redirect(lab_url(p, s, n), msg="Профиль обновлён — документ пересобирается")
+                return redirect(lab_url(p, s, n), msg="Профиль обновлён, документ пересобирается")
             ctx.pipeline.apply_profile_change(st, msg_id, False)
         except PipelineError as e:
             return redirect(lab_url(p, s, n), err=str(e))
@@ -814,7 +814,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
             return JSONResponse({"error": "Пустая картинка"}, status_code=400)
         suffix = ".jpg" if (name.lower().endswith((".jpg", ".jpeg")) or "jpeg" in ctype) else ".png"
         if not any(sn == sec and bi == blk for sn, bi, _ in ctx.pipeline.slots(st)):
-            return JSONResponse({"error": "Этого места для скриншота уже нет — обнови страницу"}, status_code=400)
+            return JSONResponse({"error": "Этого места для скриншота уже нет, обнови страницу"}, status_code=400)
         try:
             normalize_screenshot(data)  # проверка сразу: ошибка видна у места для снимка, а не в журнале
         except ValueError as e:
@@ -860,7 +860,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
     def lab_docx(p: str, s: str, n: str):
         st = load(p, s, n, strict=False)
         if not docx_fresh(st, ctx.store.lab_dir(p, s, n)):
-            return redirect(lab_url(p, s, n), err="Документ устарел или ещё не свёрстан — нажми «Пересобрать документ».")
+            return redirect(lab_url(p, s, n), err="Документ устарел или ещё не свёрстан. Нажми «Пересобрать документ».")
         subj = get_subject(s)
         return FileResponse(st.docx_path, filename=f"ЛР{n}_{subj.short_name}.docx",
                             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
@@ -869,7 +869,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
     def lab_open(p: str, s: str, n: str, what: str = Form("docx")):
         st = load(p, s, n, strict=False)
         if what == "docx" and not docx_fresh(st, ctx.store.lab_dir(p, s, n)):
-            return redirect(lab_url(p, s, n), err="Документ устарел или ещё не свёрстан — нажми «Пересобрать документ».")
+            return redirect(lab_url(p, s, n), err="Документ устарел или ещё не свёрстан. Нажми «Пересобрать документ».")
         target = st.docx_path if what == "docx" else str(ctx.store.lab_dir(p, s, n))
         if target and Path(target).exists():
             _open_local(target)
@@ -1050,7 +1050,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         except (LLMError, CloudError) as e:
             if "trial needs lab tag" in (getattr(e, "detail", "") or ""):  # пробный: модель отвечает только в лабе
                 return redirect("/settings", msg="Связь с сервером есть. В пробном доступе модель отвечает только "
-                                                 "внутри лабы — проверка без лабы не считается.")
+                                                 "внутри лабы, поэтому здесь её не проверить.")
             return redirect("/settings", err=getattr(e, "message_ru", str(e)))
         return redirect("/settings", msg=f"Связь есть, модель отвечает: {model}")
 

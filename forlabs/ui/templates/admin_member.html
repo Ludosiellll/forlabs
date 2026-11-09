@@ -19,7 +19,7 @@
           <form method="post" action="/admin/u/{{ m.user_id }}/access" class="row">
             <button class="btn small primary" type="submit" name="action" value="approve">Одобрить аккаунт</button>
           </form>
-          <p class="hint">Новый аккаунт. После одобрения доступ без срока — ограничь его кнопками ниже.</p>
+          <p class="hint">После одобрения доступ без срока, ограничить его можно кнопками ниже.</p>
           {% endif %}
           <form method="post" action="/admin/u/{{ m.user_id }}/access" class="row until">
             <input type="hidden" name="action" value="extend">
@@ -55,7 +55,7 @@
           <input id="daily" type="text" inputmode="numeric" name="daily" value="{{ m.daily_tokens or '' }}" placeholder="общий: 1 000 000">
           <button class="btn small" type="submit">Сохранить</button>
         </form>
-        <p class="hint">Пусто — общий лимит. Лаба с правками — обычно до ~100 000 токенов. Лимит проверяет сервер, день — по Минску.</p>
+        <p class="hint">Пусто — общий лимит. Лаба с правками обычно тратит до ~100 000 токенов. Лимит проверяет сервер, сутки считаются по Минску.</p>
       </section>
 
       <section class="box" aria-labelledby="b-trial">
@@ -156,7 +156,7 @@
         {% else %}
           <p class="small muted">Лаб пока нет.</p>
         {% endif %}
-        {% if unmatched %}<p class="small muted" style="margin-top:8px">Без привязки к лабе: {{ fmt_tokens(unmatched) }} токенов — проверка связи, удалённые лабы, запросы до обновления.</p>{% endif %}
+        {% if unmatched %}<p class="small muted" style="margin-top:8px">Без привязки к лабе: {{ fmt_tokens(unmatched) }} токенов (проверка связи, удалённые лабы, запросы до обновления).</p>{% endif %}
       </section>
 
       <section aria-labelledby="s-hist">

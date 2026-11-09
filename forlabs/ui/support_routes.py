@@ -85,8 +85,8 @@ def register_support(app: FastAPI, ctx, render, redirect) -> None:
             return redirect("/support", err=str(e))
         except CloudError as e:
             return redirect("/support", err=e.message_ru)
-        return redirect("/support", msg="Отправлено — ответ появится здесь" if telegram
-                        else "Отправлено — администратор увидит сообщение в разделе «Админ»")
+        return redirect("/support", msg="Отправлено, ответ появится здесь" if telegram
+                        else "Отправлено. Администратор увидит сообщение, когда откроет раздел «Админ»")
 
     @app.get("/admin/support")
     def admin_support(request: Request):
@@ -160,4 +160,4 @@ def register_support(app: FastAPI, ctx, render, redirect) -> None:
             sup.reply(uid, text.strip()[:4000], data)
         except ValueError as e:
             return redirect(f"/admin/support/{uid}", err=str(e))
-        return redirect(f"/admin/support/{uid}", msg="Ответ отправлен — студент увидит его в ForLabs")
+        return redirect(f"/admin/support/{uid}", msg="Ответ отправлен, студент увидит его в ForLabs")

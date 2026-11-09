@@ -156,7 +156,7 @@
     if (!out) return;
     var n = input.files ? input.files.length : 0;
     var photos = /^image\//.test(input.getAttribute("accept") || "");
-    out.textContent = !n ? "" : photos ? ("Фото: " + n + (n > 4 ? " — можно не больше 4" : ""))
+    out.textContent = !n ? "" : photos ? ("Фото: " + n + (n > 4 ? ", можно не больше 4" : ""))
       : Array.prototype.map.call(input.files, function (f) { return f.name; }).join(", ");
   }
   document.querySelectorAll("[data-images-input]").forEach(function (input) {
@@ -274,7 +274,7 @@ window.addEventListener("pageshow", function () {
         actions.hidden = true; track.hidden = true;
       } else if (r.httpStatus === 409 && /лаб/.test(r.error || "")) {
         title.textContent = "Обновление скачано";
-        text.textContent = r.error; // «Сейчас выполняется лаба — обновлю, когда работа закончится»
+        text.textContent = r.error; // «Сейчас выполняется лаба. Обновлю, когда она закончится.»
         setTimeout(install, 5000);
       } else {
         show({ state: "error", error: r.error });
@@ -291,7 +291,7 @@ window.addEventListener("pageshow", function () {
   go.addEventListener("click", function () {
     go.disabled = true;
     post("/update/start").then(function (s) { show(s); poll(); })
-      .catch(function () { show({ state: "error", error: "ForLabs не ответил — нажми ещё раз." }); });
+      .catch(function () { show({ state: "error", error: "ForLabs не ответил, нажми ещё раз." }); });
   });
   box.querySelectorAll("[data-update-later]").forEach(function (b) {
     b.addEventListener("click", function () {
