@@ -199,6 +199,8 @@ def _path_problem(path: str) -> str | None:
     if BAD_CHARS.search(path):
         return 'недопустимые в Windows символы (< > " | ? * и управляющие)'
     for s in segs:
+        if s[:1] in ("-", "@"):  # имя-опция: компилятор прочёл бы его как ключ или файл с ключами
+            return f"«{s}»: имя не может начинаться с «-» или «@»"
         if s.split(".")[0].strip().upper() in RESERVED:
             return f"«{s}» — зарезервированное имя Windows"
         if s.endswith((".", " ")):

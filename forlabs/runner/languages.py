@@ -470,7 +470,8 @@ def trim_log(text: str, project_dir: Path, drop: set[str] = frozenset(), max_lin
 
 
 def _sources(plan: ProjectPlan, exts: set[str]) -> list[str]:
-    return sorted(f.path for f in plan.files if PurePosixPath(f.path).suffix.lower() in exts)
+    """Исходники как пути «./…»: имя файла никогда не станет ключом компилятора или node."""
+    return sorted("./" + f.path for f in plan.files if PurePosixPath(f.path).suffix.lower() in exts)
 
 
 def _exe(d: Path, plan: ProjectPlan) -> Path:
@@ -568,7 +569,7 @@ def _build_script(d: Path, plan: ProjectPlan, tools, timeout) -> BuildResult:
     lang = plan.language
     if lang == "python":
         t = tools["python"]
-        code, log = _run([t.path, *t.args, "-B", "-c", PY_CHECK, *_sources(plan, {".py", ".pyw"})], d, PY_ENV,
+        code, log = _run([t.path, *t.args, "-I", "-B", "-c", PY_CHECK, *_sources(plan, {".py", ".pyw"})], d, PY_ENV,
                          timeout)
         ok = code == 0
     elif lang == "javascript":

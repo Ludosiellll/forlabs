@@ -346,23 +346,30 @@ def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None) 
     result = None
     shutil.rmtree(work, ignore_errors=True)
     languages.materialize(plan, work, tools)
-    if not info.missing:
+    # опасный код не собирается вовсе: сборка и проверка синтаксиса — тоже запуск чужих инструментов над ним
+    info.blocked = safety.scan(plan)
+    if not info.missing and not info.blocked:
         emit("Собираю программу")
         result = languages.build(work, plan, tools)
         while not result.ok and llm is not None and info.fixes < MAX_FIXES:
             info.fixes += 1
             emit(f"Исправляю ошибки сборки ({info.fixes} из {MAX_FIXES})")
-            plan = _with_materials(fix_project(plan, result.log, llm), st)
-            if validate(plan):
+            fixed = _with_materials(fix_project(plan, result.log, llm), st)
+            if validate(fixed):
                 break
+            plan = fixed
             shutil.rmtree(work, ignore_errors=True)
             languages.materialize(plan, work, tools)
+            info.blocked = safety.scan(plan)  # исправление тоже проверяется до сборки
+            if info.blocked:
+                break
             result = languages.build(work, plan, tools)
-        info.built = bool(result.ok)
+        info.built = bool(result.ok) and not info.blocked
         if not result.ok:
             info.note = "Программу не собрал: ошибки остались. Проект в папке сдачи, снимки сделай сам."
+    if info.blocked:
+        info.note = f"Сам не собирал и не запускал: {info.blocked[0]}"
     (pdir / "plan.json").write_text(plan.model_dump_json(indent=1), encoding="utf-8")
-    info.blocked = safety.scan(plan)
 
     # листинги отчёта — как в коде проекта
     refs = {(r.section, r.block): r for r in plan.listings}
@@ -407,11 +414,11 @@ def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None) 
             b.need_tool = info.missing[0]
             b.auto_note = f"Для снимка нужна программа {_tool_title(info.missing[0])}: установи её и нажми «Повторить»."
             continue
-        if not info.built:
-            b.auto_note = "Программа не собралась, снимок сделай сам."
-            continue
         if info.blocked:
             b.auto_note = f"Сам не запускал: {info.blocked[0]}"
+            continue
+        if not info.built:
+            b.auto_note = "Программа не собралась, снимок сделай сам."
             continue
         if shooter is None:
             b.auto_note = "Снимки окон ForLabs делает только в Windows."

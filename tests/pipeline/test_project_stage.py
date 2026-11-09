@@ -332,3 +332,12 @@ def test_no_typing_into_a_program_that_reads_nothing(tmp_home, tmp_path):
     pipe.execute(st)
     assert pipe.shooter.calls[0][1].input == ""  # лишний Enter закрыл бы «pause» и окно консоли
     # программа с input() ввод сохраняет — см. test_project_built_shot_taken_and_copied_to_hand_in_folder
+
+
+def test_dangerous_code_is_not_even_built(tmp_home, tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(languages, "build", lambda *a, **k: calls.append(1) or languages.BuildResult(True, "", None))
+    bad = {**PLAN, "files": [{"path": "main.py", "content": "import os\nos.system(\"calc\")\n" + GOOD}]}
+    pipe, fake, st = make(tmp_home, tmp_path, [bad])
+    st = pipe.execute(st)
+    assert calls == [] and st.project.blocked and not st.project.built  # сборки не было: опасное — до неё
