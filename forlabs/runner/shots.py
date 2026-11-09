@@ -300,7 +300,7 @@ class WindowsShooter:
             raise appcontainer.ContainerError("папка запуска не открылась для песочницы")
         tmp = root / ".tmp"
         tmp.mkdir(exist_ok=True)
-        appcontainer.ensure_read(_tool_dirs(cmd, work), sid)
+        appcontainer.ensure_read(_tool_dirs(cmd, work))
         extra = {"TEMP": str(tmp), "TMP": str(tmp), "PYTHONNOUSERSITE": "1"}
         return appcontainer.spawn(line, str(work), sid, env={**(env or {}), **extra}, internet=self._network)
 
@@ -314,7 +314,7 @@ class WindowsShooter:
             raise appcontainer.ContainerError("папка запуска не открылась для песочницы")
         tmp = root / ".tmp"
         tmp.mkdir(exist_ok=True)
-        appcontainer.ensure_read(_tool_dirs(cmd, work), sid)
+        appcontainer.ensure_read(_tool_dirs(cmd, work))
         script = console.console_script(cmd, work)
         system = os.environ.get("SystemRoot", r"C:\Windows")
         job = {"cmd": f'"{system}\\System32\\cmd.exe" /d /c "{script}"', "cwd": str(work), "sid": sid,
@@ -322,7 +322,9 @@ class WindowsShooter:
                "internet": self._network, "title": target.title or (cmd[0] if cmd else "")}
         job_file = root / "console-host.json"
         job_file.write_text(json.dumps(job, ensure_ascii=False), encoding="utf-8")
-        return winapi.spawn(self._line(console.host_cmd() + [str(job_file)]), str(work), low=False, new_console=True)
+        # conhost явно: иначе Windows 11 откроет консоль во вкладке Windows Terminal, и окно не найти
+        return winapi.spawn(f'"{console.CONHOST}" ' + self._line(console.host_cmd() + [str(job_file)]), str(work),
+                            low=False, new_console=True)
 
     def _remap(self, target: RunTarget, work: Path) -> list[str]:
         """Пути в команде — на копию в папке запуска."""

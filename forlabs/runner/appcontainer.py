@@ -188,11 +188,19 @@ def tool_dirs(cmd: list[str], work: Path) -> list[Path]:
     return out
 
 
-_GRANTED_FILE = "container-grants.json"
+_GRANTED_FILE = "container-grants-v2.json"  # v1 выдавал права своей песочнице
 
 
-def ensure_read(paths: list[str | Path], sid_text: str) -> list[str]:
-    """Чтение для контейнера на папки инструментов (один раз: помнится в data_home). Возвращает то, что не вышло."""
+ALL_PACKAGES = "S-1-15-2-1"  # «все песочницы» — так Windows открывает Program Files
+
+
+def ensure_read(paths: list[str | Path], sid_text: str = ALL_PACKAGES) -> list[str]:
+    """Чтение для песочниц на папки инструментов (один раз: помнится в data_home). Возвращает то, что не вышло.
+
+    Чтение выдаётся «всем песочницам», как у Program Files, а не своей: запись с SID конкретной песочницы на папке
+    Python ломает его обычный запуск с уровнем Low (Windows не находит DLL — проверено на CI). В папках инструментов
+    нет личных данных — открыть их всем песочницам безопасно."""
+    sid_text = ALL_PACKAGES
     from forlabs.core.paths import data_home
 
     memo = data_home() / _GRANTED_FILE
