@@ -20,12 +20,17 @@ def quote(arg: str) -> str:
     return '"' + arg.replace('"', '""') + '"'
 
 
-def console_command(cmd: list[str]) -> str:
-    """conhost (а не Windows Terminal: окно должно принадлежать процессу программы) → cmd с UTF-8 → программа;
-    после выхода программы окно держит `timeout /nobreak`: ничего не печатает и не съедает нажатия клавиш
-    (`pause` съел бы набранный ввод, если программа завершилась раньше, и окно закрылось бы)."""
-    line = " ".join(quote(a) for a in cmd)
-    return f'"{CONHOST}" cmd.exe /d /s /c "chcp 65001>nul & {line} & timeout /t 86400 /nobreak >nul"'
+def console_command(cmd: list[str], workdir) -> str:
+    """conhost (а не Windows Terminal: окно должно принадлежать процессу программы) → cmd → файл .cmd с программой.
+    Команда — в файле, потому что conhost по-своему разбирает вложенные кавычки и путь с пробелами
+    («MySQL Server 8.4») разваливался. В файле: UTF-8 в консоли, программа, затем `timeout /nobreak` держит окно
+    (ничего не печатает и не съедает нажатия клавиш, в отличие от `pause`)."""
+    from pathlib import Path
+
+    bat = Path(workdir) / "forlabs-run.cmd"
+    line = " ".join(quote(a).replace("%", "%%") for a in cmd)
+    bat.write_text("@chcp 65001>nul\r\n@echo off\r\n" + line + "\r\ntimeout /t 86400 /nobreak >nul\r\n", encoding="utf-8")
+    return f'"{CONHOST}" cmd.exe /d /c "{bat}"'
 
 
 def helper_cmd() -> list[str]:

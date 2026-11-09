@@ -143,7 +143,7 @@ class WindowsShooter:
         from forlabs.runner import console, winapi
 
         cmd = self._remap(target, work)
-        app = winapi.spawn(console.console_command(cmd), str(work), low=self.low, env=target.env or None)
+        app = winapi.spawn(console.console_command(cmd, work), str(work), low=self.low, env=target.env or None)
         try:
             w = winapi.wait_window({app.pid}, self.timeout,
                                    lambda x: x.cls == "ConsoleWindowClass" and min(winapi.size_of(x.hwnd)) > 40)
