@@ -315,3 +315,165 @@ window.addEventListener("pageshow", function () {
     });
   }
 })();
+
+// программы для лаб (Настройки и блок «нет программы» на странице лабы): «Скачать и установить» с полосой,
+// «У меня есть ссылка» — сначала сайт и размер, потом загрузка в «Загрузки» и открытие файла
+(function () {
+  var rows = Array.prototype.slice.call(document.querySelectorAll("[data-tool]"));
+  if (!rows.length) return;
+  var timer = null, linkRow = null, vcredist = null, first = true;
+  function q(row, sel) { return row.querySelector(sel); }
+  function busy(st) { return st === "downloading" || st === "installing"; }
+  function watched(row) { return row.getAttribute("data-watch") || row.getAttribute("data-tool"); }
+  function post(url, data) {
+    var body = new FormData();
+    Object.keys(data || {}).forEach(function (k) { body.append(k, data[k]); });
+    return fetch(url, { method: "POST", body: body, credentials: "same-origin" })
+      .then(function (r) { return r.json(); });
+  }
+  function button(text, primary, onClick) {
+    var b = document.createElement("button");
+    b.type = "button"; b.className = "btn small" + (primary ? " primary" : ""); b.textContent = text;
+    b.addEventListener("click", onClick);
+    return b;
+  }
+  function extra(row, buttons) {
+    var box = q(row, "[data-tool-extra]");
+    box.innerHTML = "";
+    (buttons || []).forEach(function (b) { box.appendChild(b); });
+    box.hidden = !box.children.length;
+  }
+  function say(row, text, err) {
+    var m = q(row, "[data-tool-msg]");
+    m.textContent = text || "";
+    m.classList.toggle("err", !!err);
+  }
+  function bar(row, on, percent) {
+    q(row, "[data-tool-track]").hidden = !on;
+    q(row, "[data-tool-bar]").style.width = (percent == null ? 3 : percent) + "%";
+  }
+  function showTool(row, t) {
+    var st = t.state, missing = row.hasAttribute("data-missing");
+    row.setAttribute("data-state", st);
+    bar(row, busy(st), st === "installing" ? 100 : t.percent);
+    var found = q(row, "[data-tool-found]");
+    if (found && t.key === row.getAttribute("data-tool")) {
+      found.textContent = t.found ? "есть" : "нет"; found.classList.toggle("yes", t.found);
+      var path = q(row, "[data-tool-path]");
+      path.textContent = [t.version, t.path].filter(Boolean).join(" · ");
+      path.hidden = !t.found;
+    }
+    q(row, "[data-tool-act]").hidden = busy(st) || st === "done" || (t.found && !missing && st !== "error");
+    if (st === "downloading") {
+      say(row, t.note_now || ("Скачиваю " + t.name + "… " + (t.percent != null ? t.percent + "%" : t.done_mb + " МБ")));
+    } else if (st === "installing") {
+      say(row, t.note_now || "Устанавливаю…");
+    } else if (st === "done") {
+      say(row, missing ? "Готово — нажми «Повторить»." : "Готово" + (t.installed_version ? ": " + t.installed_version : "") + ".");
+    } else if (st === "error") {
+      say(row, t.error, true);
+      var b = row.querySelector('[data-tool-install="' + t.key + '"]');
+      if (b) b.textContent = "Повторить";
+    }
+    if (st === "error" && t.help === "vcredist" && vcredist) {
+      extra(row, [button("Скачать Visual C++ (≈" + vcredist.size_mb + " МБ)", true, function () {
+        check(row, vcredist.url, "");
+      })]);
+    }
+  }
+  function mb(x) { return x != null ? x + " МБ" : "размер неизвестен"; }
+  function showLink(row, l) {
+    if (l.state === "ready") {
+      var where = l.host + (l.final_host && l.final_host !== l.host ? " → " + l.final_host : "");
+      say(row, "Сайт: " + where + " · " + l.filename + " · " + mb(l.size_mb));
+      extra(row, [button("Скачать", true, function () {
+        extra(row, []);
+        q(row, "[data-tool-link]").hidden = true;
+        post("/tools/link", { url: l.url, key: l.key, go: "1" }).then(function (r) {
+          if (!r.ok) { say(row, r.error, true); return; }
+          poll();
+        });
+      }), button("Отмена", false, function () { say(row, ""); extra(row, []); linkRow = null; })]);
+    } else if (l.state === "downloading") {
+      bar(row, true, l.percent);
+      say(row, l.note || ("Скачиваю " + l.filename + "… " + (l.percent != null ? l.percent + "%" : l.done_mb + " МБ")));
+      extra(row, []);
+    } else if (l.state === "done") {
+      bar(row, false);
+      var again = row.hasAttribute("data-missing") ? "«Повторить»" : "«Проверить снова»";
+      if (l.unpack) {
+        say(row, "Скачано: " + l.filename + ". Это архив " + l.unpack_name + ".");
+        extra(row, [button("Распаковать для ForLabs", true, function () {
+          row.setAttribute("data-watch", l.unpack); linkRow = null; extra(row, []);
+          post("/tools/link/unpack").then(function (r) { if (!r.ok) say(row, r.error, true); poll(); });
+        }), button("Открыть", false, function () { post("/tools/link/open"); })]);
+      } else {
+        say(row, "Скачано в «Загрузки»: " + l.filename + ". " +
+          (l.opened ? "Файл открыт — установи программу и нажми " + again + "." : (l.note || "")));
+        extra(row, [button("Открыть ещё раз", false, function () { post("/tools/link/open"); })]);
+      }
+    } else if (l.state === "error") {
+      bar(row, false);
+      say(row, l.error, true);
+      extra(row, []);
+    }
+  }
+  function poll(refresh) {
+    clearTimeout(timer);
+    fetch("/tools/status" + (refresh ? "?refresh=1" : ""), { credentials: "same-origin" })
+      .then(function (r) { return r.json(); })
+      .then(function (s) {
+        vcredist = s.vcredist || vcredist;
+        rows.forEach(function (row) {
+          var t = s.tools[watched(row)];
+          if (t && (t.state !== "idle" || refresh || row !== linkRow)) showTool(row, t);
+        });
+        if (first && s.link.key && s.link.state !== "idle" && s.link.state !== "ready") { // после перехода
+          linkRow = document.querySelector('[data-tool="' + s.link.key + '"]');               // со страницы
+        }
+        first = false;
+        if (linkRow && s.link.state !== "idle") showLink(linkRow, s.link);
+        var going = s.link.state === "downloading" || rows.some(function (row) {
+          var t = s.tools[watched(row)];
+          return t && busy(t.state);
+        });
+        if (going) timer = setTimeout(poll, 500);
+      })
+      .catch(function () { timer = setTimeout(poll, 2000); });
+  }
+  function check(row, url, key) {
+    say(row, "Проверяю ссылку…");
+    linkRow = row;
+    post("/tools/link", { url: url, key: key }).then(function (r) {
+      if (!r.ok) { say(row, r.error, true); return; }
+      showLink(row, r.link);
+    }).catch(function () { say(row, "ForLabs не ответил — попробуй ещё раз.", true); });
+  }
+  rows.forEach(function (row) {
+    row.querySelectorAll("[data-tool-install]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        row.setAttribute("data-watch", b.getAttribute("data-tool-install"));
+        if (linkRow === row) linkRow = null;
+        extra(row, []);
+        say(row, "Начинаю…");
+        q(row, "[data-tool-act]").hidden = true;
+        post("/tools/" + encodeURIComponent(watched(row)) + "/install").then(function (r) {
+          if (!r.ok) { say(row, r.error, true); q(row, "[data-tool-act]").hidden = false; return; }
+          poll();
+        }).catch(function () { setTimeout(poll, 1000); });
+      });
+    });
+    var form = q(row, "[data-tool-link]");
+    q(row, "[data-tool-link-show]").addEventListener("click", function () {
+      form.hidden = !form.hidden;
+      if (!form.hidden) form.querySelector("input[name=url]").focus();
+    });
+    form.addEventListener("submit", function (e) {
+      e.preventDefault();
+      check(row, form.querySelector("input[name=url]").value, form.querySelector("input[name=key]").value);
+    });
+  });
+  var recheck = document.querySelector("[data-tools-recheck]");
+  if (recheck) recheck.addEventListener("click", function () { poll(true); });
+  poll(); // загрузка могла идти, пока студент был на другой странице
+})();

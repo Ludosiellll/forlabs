@@ -58,6 +58,7 @@ class AppContext:
         self.updater = Updater()  # только в установленной программе на Windows; иначе выключен
         self.spawn_installer = spawn_detached
         self.quit: Callable[[], None] | None = None  # закрыть окно ForLabs (задаёт запуск окна)
+        self._tools = None  # программы для лаб: создаются при первом обращении
         if self.cloud:
             self.auth.load_session()
 
@@ -131,6 +132,19 @@ class AppContext:
                                       soffice=self.settings.soffice_path, memory=self.memory(),
                                       tesseract=self.settings.tesseract_path)
         return self._pipeline
+
+    @property
+    def tools(self):
+        """Программы для лаб (runner/tools.py): что есть на компьютере, установка, загрузка по ссылке."""
+        if self._tools is None:
+            from forlabs.runner.tools import ToolManager
+
+            self._tools = ToolManager()
+        return self._tools
+
+    @tools.setter
+    def tools(self, value) -> None:
+        self._tools = value
 
     def busy(self) -> bool:
         """Идёт работа: задача по лабе или фоновое обновление памяти после сдачи."""

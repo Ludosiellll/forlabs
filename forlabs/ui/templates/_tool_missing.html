@@ -1,0 +1,8 @@
+{# Снимок не сделан: нет программы. Включение в странице лабы:
+     {% with tool=ctx.tools.tool_status(key) %}{% include "_tool_missing.html" %}{% endwith %}
+   или подгрузка готового блока: GET /tools/<key>/missing. Кнопки и полосу оживляет app.js; когда программа
+   встала — «Готово — нажми «Повторить»» (кнопка повтора снимка — на странице лабы). #}
+{% from "_tools.html" import tool_box %}
+<div class="tool-missing" data-tool-missing="{{ tool.key }}">
+  {{ tool_box(tool, missing=True) }}
+</div>

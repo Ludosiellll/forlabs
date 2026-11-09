@@ -987,7 +987,15 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
             except CloudError:
                 pass
         admin = can_tune_model()
+        try:  # программы для лаб — студенту тоже: это его компьютер
+            lab_tools = list(ctx.tools.status()["tools"].values())
+        except Exception:
+            import logging
+
+            logging.getLogger("forlabs").exception("Список программ для лаб не собрался")
+            lab_tools = []
         return render(request, "settings.html", s=ctx.settings, presets=API_PRESETS, has_key=bool(get_api_key()),
+                      lab_tools=lab_tools,
                       show_mode=not _version.frozen() and admin, show_model=admin,
                       word=word_com.available(), soffice=libreoffice.find_soffice(ctx.settings.soffice_path),
                       nav="settings", my_balance=my_balance, balance_state=balance_state,
@@ -1058,6 +1066,9 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
     from forlabs.ui.support_routes import register_support
 
     register_support(app, ctx, render, redirect)
+    from forlabs.ui.tools_routes import register_tools
+
+    register_tools(app, ctx, render, redirect)
 
     return app
 

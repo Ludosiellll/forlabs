@@ -79,7 +79,7 @@ p { margin: 0 0 10px; }
 .spacer { flex: 1; }
 label { display: block; font-weight: 500; margin: 0 0 4px; }
 .hint { color: var(--muted); font-size: 12.5px; font-weight: 400; margin-top: 3px; }
-input[type=text], input[type=email], input[type=password], input[type=number], select, textarea {
+input[type=text], input[type=email], input[type=password], input[type=number], input[type=url], select, textarea {
   width: 100%; font: inherit; color: var(--ink); background: var(--bg); border: 1px solid #C5CAD0;
   border-radius: var(--radius); padding: 7px 10px; min-height: 36px; }
 textarea { min-height: 90px; resize: vertical; line-height: 1.5; }
@@ -372,3 +372,21 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .update-bar { display: block; height: 100%; width: 0; background: var(--accent); transition: width 300ms ease; }
 .update-actions { display: flex; justify-content: flex-end; gap: 8px; }
 @media (max-width: 420px) { .update-toast { right: 16px; left: 16px; bottom: 16px; width: auto; } }
+
+/* программы для лаб: строки в Настройках и блок «нет программы» на странице лабы */
+.tools { margin-top: 22px; }
+.tools-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.tool { padding: 10px 0; border-top: 1px solid var(--line-soft); }
+.tool-line { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.tool-found { font-size: 13px; color: var(--muted); white-space: nowrap; }
+.tool-found.yes { color: var(--ok); }
+.tool-path { margin-top: 2px; overflow-wrap: anywhere; }
+.tool-act, .tool-link, [data-tool-extra] { margin-top: 6px; }
+.tool-act[hidden], .tool-link[hidden], .tool-path[hidden], [data-tool-extra][hidden] { display: none; }
+.tool-msg { margin: 4px 0 0; }
+.tool-msg:empty { display: none; }
+.tool-msg.err { color: var(--err); }
+.tool-note, .tool-why { margin: 4px 0 0; }
+.tool-link input[type=url] { flex: 1 1 260px; min-width: 0; }
+.tool-missing { border: 1px solid var(--warn-line); background: var(--warn-soft); border-radius: var(--radius); padding: 0 14px 10px; margin: 8px 0; }
+.tool-missing .tool { border-top: 0; }

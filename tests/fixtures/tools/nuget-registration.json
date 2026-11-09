@@ -1,0 +1,17 @@
+{
+ "count": 5,
+ "items": [
+  {
+   "@id": "https://api.nuget.org/v3/registration5-gz-semver2/python/page/3.13.0-b3/3.15.0-rc3.json",
+   "count": 64,
+   "lower": "3.13.0-b3",
+   "upper": "3.15.0-rc3"
+  },
+  {
+   "@id": "https://api.nuget.org/v3/registration5-gz-semver2/python/page/3.15.0/3.16.0-a1.json",
+   "count": 4,
+   "lower": "3.15.0",
+   "upper": "3.16.0-a1"
+  }
+ ]
+}

@@ -1,0 +1,30 @@
+{# Строка программы для лаб: есть / нет, «Скачать и установить», «У меня есть ссылка», полоса загрузки.
+   t — ToolManager.tool_status(key). missing — блок на странице лабы («нужен для рисунка»). Живёт за счёт app.js. #}
+{% macro tool_box(t, missing=False) %}
+<div class="tool" data-tool="{{ t.key }}" data-state="{{ t.state }}"{% if missing %} data-missing{% endif %}>
+  <div class="tool-line">
+    <span><b>{{ t.name }}</b> <span class="muted small">· {{ t.for }}</span></span>
+    {% if not missing %}<span class="tool-found{{ ' yes' if t.found }}" data-tool-found>{{ 'есть' if t.found else 'нет' }}</span>{% endif %}
+  </div>
+  {% if missing %}<p class="small tool-why">Для этого рисунка нужен {{ t.name }}, а на компьютере его нет.</p>{% endif %}
+  <div class="small muted mono tool-path" data-tool-path{{ '' if t.found and not missing else ' hidden' }}>{{ t.version }}{{ ' · ' if t.version and t.path }}{{ t.path }}</div>
+  <div class="row tool-act" data-tool-act{{ ' hidden' if t.found and not missing }}>
+    {% if t.kind == 'portable' %}
+    <button class="btn small primary" type="button" data-tool-install="{{ t.key }}">Скачать и установить (≈{{ t.size_mb }} МБ)</button>
+    {% else %}
+    <a class="btn small" href="{{ t.page }}" target="_blank" rel="noopener">Открыть сайт</a>
+    {% if t.alternative and missing %}<button class="btn small primary" type="button" data-tool-install="{{ t.alternative }}">Поставить {{ t.alt_name }} (≈{{ t.alt_size_mb }} МБ)</button>{% endif %}
+    {% endif %}
+    <button class="btn small" type="button" data-tool-link-show>У меня есть ссылка</button>
+  </div>
+  <form class="row tool-link" data-tool-link hidden>
+    <input type="url" name="url" placeholder="https://…" aria-label="Ссылка на файл" required>
+    <input type="hidden" name="key" value="{{ t.key }}">
+    <button class="btn small" type="submit">Проверить ссылку</button>
+  </form>
+  {% if t.note and (missing or not t.found) %}<p class="small muted tool-note">{{ t.note }}</p>{% endif %}
+  <span class="update-track" data-tool-track hidden><span class="update-bar" data-tool-bar></span></span>
+  <p class="small tool-msg" data-tool-msg role="status" aria-live="polite">{% if t.state == 'error' %}{{ t.error }}{% elif t.state == 'done' and missing %}Готово — нажми «Повторить».{% endif %}</p>
+  <div class="row" data-tool-extra hidden></div>
+</div>
+{% endmacro %}

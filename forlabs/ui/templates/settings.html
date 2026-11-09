@@ -59,5 +59,13 @@
     <button class="btn" type="submit">Проверить подключение к модели</button></form>
   <form method="post" action="/tour/restart" style="margin-top:8px">
     <button class="btn" type="submit">Пройти обучение заново</button></form>
+  {% if lab_tools %}{% from "_tools.html" import tool_box %}
+  <section class="pane sub-pane tools" aria-label="Программы для лаб" data-tools>
+    <div class="tools-head"><h2>Программы для лаб</h2>
+      <button class="btn small link" type="button" data-tools-recheck>Проверить снова</button></div>
+    <p class="small muted">Нужны, чтобы ForLabs сам запускал программы из лаб и делал скриншоты. Ставятся в папку ForLabs, без прав администратора.</p>
+    {% for t in lab_tools %}{{ tool_box(t) }}{% endfor %}
+  </section>
+  {% endif %}
 </main>
 {% endblock %}

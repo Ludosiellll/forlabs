@@ -1,0 +1,21 @@
+[
+ {"tag_name": "16.1.0posix-14.0.0-ucrt-r1", "name": "GCC 16.1.0 (pre-release)", "draft": false, "prerelease": true,
+  "assets": [{"name": "winlibs-x86_64-posix-seh-gcc-16.1.0-mingw-w64ucrt-14.0.0-r1.zip", "size": 270000000,
+              "browser_download_url": "https://github.com/brechtsanders/winlibs_mingw/releases/download/16.1.0posix-14.0.0-ucrt-r1/winlibs-x86_64-posix-seh-gcc-16.1.0-mingw-w64ucrt-14.0.0-r1.zip",
+              "digest": "sha256:1600000000000000000000000000000000000000000000000000000000000000"}]},
+ {"tag_name": "15.2.0posix-13.0.0-ucrt-r3", "name": "GCC 15.2.0 + MinGW-w64 13.0.0 (UCRT) - release 3", "draft": false, "prerelease": false,
+  "assets": [
+   {"name": "winlibs-i686-posix-dwarf-gcc-15.2.0-mingw-w64ucrt-13.0.0-r3.zip", "size": 250000000,
+    "browser_download_url": "https://github.com/brechtsanders/winlibs_mingw/releases/download/15.2.0posix-13.0.0-ucrt-r3/winlibs-i686-posix-dwarf-gcc-15.2.0-mingw-w64ucrt-13.0.0-r3.zip",
+    "digest": "sha256:1500000000000000000000000000000000000000000000000000000000000000"},
+   {"name": "winlibs-x86_64-posix-seh-gcc-15.2.0-llvm-21.1.4-mingw-w64ucrt-13.0.0-r3.zip", "size": 720000000,
+    "browser_download_url": "https://github.com/brechtsanders/winlibs_mingw/releases/download/15.2.0posix-13.0.0-ucrt-r3/winlibs-x86_64-posix-seh-gcc-15.2.0-llvm-21.1.4-mingw-w64ucrt-13.0.0-r3.zip",
+    "digest": "sha256:1501000000000000000000000000000000000000000000000000000000000000"},
+   {"name": "winlibs-x86_64-posix-seh-gcc-15.2.0-mingw-w64ucrt-13.0.0-r3.zip", "size": 262000000,
+    "browser_download_url": "https://github.com/brechtsanders/winlibs_mingw/releases/download/15.2.0posix-13.0.0-ucrt-r3/winlibs-x86_64-posix-seh-gcc-15.2.0-mingw-w64ucrt-13.0.0-r3.zip",
+    "digest": "sha256:1502000000000000000000000000000000000000000000000000000000000000"},
+   {"name": "winlibs-x86_64-posix-seh-gcc-15.2.0-mingw-w64ucrt-13.0.0-r3.zip.sha256", "size": 129,
+    "browser_download_url": "https://github.com/brechtsanders/winlibs_mingw/releases/download/15.2.0posix-13.0.0-ucrt-r3/winlibs-x86_64-posix-seh-gcc-15.2.0-mingw-w64ucrt-13.0.0-r3.zip.sha256",
+    "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"}
+  ]}
+]

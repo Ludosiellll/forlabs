@@ -21,6 +21,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from forlabs.core import download
+from forlabs.core.download import RETRY_PAUSES
 from forlabs.version import __version__
 
 REPO = "Ludosiellll/forlabs"
@@ -31,25 +33,13 @@ MAX_SETUP = 600 * 2**20  # установщик больше 600 МБ — это
 log = logging.getLogger("forlabs")
 
 
-RETRY_PAUSES = (3.0, 8.0, 20.0)  # секунд перед повторами после обрыва связи
-
-
-class _Retry(Exception):
-    """Временный сбой связи — загрузка продолжится с того же места."""
-
-
-class _Stop(Exception):
-    """Повтор не поможет без действия человека (портал Wi-Fi, нет файла) — недокачанное удаляется."""
-
-
-def _net_reason(e: Exception) -> str:
-    import httpx
-
-    if isinstance(e, httpx.TimeoutException):
-        return "сервер долго не отвечал"
-    if isinstance(e, httpx.ConnectError):
-        return "нет связи с сервером"
-    return "связь оборвалась посреди загрузки"
+# докачка, повторы и портал Wi-Fi — общие с загрузкой программ для лаб (core/download.py)
+_Retry, _Stop = download.Retry, download.Stop
+TEXTS = download.Texts(
+    portal="вместо обновления пришла веб-страница — похоже, сеть просит войти (Wi-Fi колледжа, гостиница). "
+           "Войди в сеть в браузере и нажми «Повторить».",
+    missing="обновление не найдено на сервере (ответ {code}) — попробуй позже.",
+    too_big="файл обновления больше ожидаемого — нажми «Повторить», он скачается заново.")
 
 
 def parse_version(v: str) -> tuple[int, ...]:
@@ -189,19 +179,18 @@ class Updater:
                     self.installer, self.state, self.done = final, "ready", rel.size
                 return
             final.unlink(missing_ok=True)
-            attempt = 0
-            while True:
-                try:
-                    self._fetch(rel, part)
-                    break
-                except _Retry as e:
-                    attempt += 1
-                    if attempt > len(self.pauses):
-                        self._fail(f"не удалось скачать обновление: {e}. Проверь интернет и нажми «Повторить» — "
-                                   "загрузка продолжится с того же места.")
-                        return
-                    self.note = f"Связь прервалась — продолжаю загрузку (попытка {attempt + 1})…"
-                    time.sleep(self.pauses[attempt - 1])
+
+            def note(attempt: int) -> None:
+                self.note = f"Связь прервалась — продолжаю загрузку (попытка {attempt + 1})…"
+
+            try:
+                download.fetch_retrying(self._http, rel.url, part, pauses=self.pauses, on_retry=note,
+                                        sleep=time.sleep, size=rel.size, looks_right=lambda b: b.startswith(b"MZ"),
+                                        progress=self._progress, texts=TEXTS, opener=open)
+            except _Retry as e:
+                self._fail(f"не удалось скачать обновление: {e}. Проверь интернет и нажми «Повторить» — "
+                           "загрузка продолжится с того же места.")
+                return
             self.note = ""
             if not self._valid(part, rel):
                 part.unlink(missing_ok=True)
@@ -223,47 +212,8 @@ class Updater:
             log.exception("Сбой загрузки обновления")
             self._fail(f"не удалось скачать обновление ({type(e).__name__}). Нажми «Повторить».")
 
-    def _fetch(self, rel: Release, part: Path) -> None:
-        import httpx
-
-        have = part.stat().st_size if part.exists() else 0
-        if have > rel.size:
-            part.unlink()
-            have = 0
-        self.done = have
-        if have == rel.size:
-            return
-        try:
-            with self._http() as http, http.stream("GET", rel.url, headers={"Range": f"bytes={have}-"} if have else None
-                                                   ) as r:
-                if r.status_code == 206 and have:
-                    mode = "ab"
-                elif r.status_code == 200:
-                    mode, have = "wb", 0  # сервер не умеет докачку — сначала
-                elif r.status_code == 416:
-                    part.unlink(missing_ok=True)
-                    raise _Retry("сервер не принял докачку")
-                elif r.status_code >= 500 or r.status_code == 429:
-                    raise _Retry(f"сервер ответил {r.status_code}")
-                else:
-                    raise _Stop(f"обновление не найдено на сервере (ответ {r.status_code}) — попробуй позже.")
-                self.done = have
-                first = mode == "wb"
-                with open(part, mode) as f:
-                    for chunk in r.iter_bytes():  # как пришло — при обрыве на диске всё полученное
-                        if first and chunk:
-                            first = False
-                            if not chunk.startswith(b"MZ"):
-                                raise _Stop("вместо обновления пришла веб-страница — похоже, сеть просит войти "
-                                            "(Wi-Fi колледжа, гостиница). Войди в сеть в браузере и нажми «Повторить».")
-                        if self.done + len(chunk) > rel.size:
-                            raise _Stop("файл обновления больше ожидаемого — нажми «Повторить», он скачается заново.")
-                        f.write(chunk)
-                        self.done += len(chunk)
-        except httpx.TransportError as e:  # обрыв, таймаут, сеть пропала — докачаем
-            raise _Retry(_net_reason(e)) from e
-        if self.done < rel.size:
-            raise _Retry("связь оборвалась посреди загрузки")
+    def _progress(self, done: int, total: int | None) -> None:
+        self.done = done
 
     @staticmethod
     def _valid(path: Path, rel: Release) -> bool:
