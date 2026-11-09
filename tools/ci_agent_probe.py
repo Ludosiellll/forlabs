@@ -302,6 +302,14 @@ def visual_studio_project(res):
                 break
         res["seen"] = seen
         res["elements_sample"] = elements_dump(obs, 60)
+        from forlabs.agent import winuia
+
+        t2 = time.time()
+        try:
+            raw = winuia._collect(desk._foreground() or desk.main, 8.0)
+            res["uia_direct"] = {"count": len(raw), "sec": round(time.time() - t2, 1), "sample": [r[:2] for r in raw[:15]]}
+        except Exception as e:  # noqa: BLE001
+            res["uia_direct"] = {"error": f"{type(e).__name__}: {e}", "trace": traceback.format_exc()[-800:]}
         desk.capture("window").save(OUT / "vs_final.png")
         assert res.get("project_open"), "проект в Visual Studio так и не открылся"
     finally:
@@ -404,6 +412,69 @@ def paint_drag_draws_a_line(res):
         assert after[0] < before[0] - 50, "линия не нарисовалась — перетаскивание не дошло"
     finally:
         kill_tree(desk.root)
+
+
+@case
+def typing_stops_when_another_window_takes_focus(res):
+    import threading
+
+    from forlabs.runner import winapi
+
+    folder = WORK / "смена окна"
+    folder.mkdir(parents=True, exist_ok=True)
+    desk, f = notepad(folder)
+    got = folder / "в чужом окне.txt"
+    code = textwrap.dedent(f"""
+        import tkinter as tk
+        r = tk.Tk(); r.title("Мессенджер"); r.geometry("400x120+50+50")
+        e = tk.Entry(r, width=40); e.pack(); e.focus_set()
+        def done():
+            open(r"{got}", "w", encoding="utf-8").write(e.get()); r.destroy()
+        r.after(9000, done); r.mainloop()
+    """)
+    tk = subprocess.Popen([sys.executable, "-c", code])
+    try:
+        time.sleep(3)
+        obs = desk.observe()
+        ed = editor_of(obs)
+        desk.act(Action(do="click", el=ed.id), obs)
+        tk_win = winapi.wait_window({tk.pid}, 10)
+
+        def steal():
+            time.sleep(0.8)
+            winapi.foreground(tk_win.hwnd)
+
+        threading.Thread(target=steal, daemon=True).start()
+        try:
+            desk.act(Action(do="type", text="А" * 600), obs)
+            raise AssertionError("набор не остановился, когда окно сменилось")
+        except Blocked as e:
+            res["blocked"] = str(e)
+        tk.wait(15)
+        leaked = got.read_text(encoding="utf-8") if got.exists() else ""
+        res["leaked_chars"] = len(leaked)
+        assert len(leaked) <= 8, f"в чужое окно ушло {len(leaked)} знаков"
+    finally:
+        tk.kill()
+        kill_tree(desk.root)
+
+
+@case
+def overlay_three_times_in_one_process(res):
+    import gc
+
+    from forlabs.agent import watch
+
+    for i in range(3):
+        w = watch.Watch(f"Программа {i}")
+        w.start()
+        w.say(f"шаг {i}")
+        time.sleep(0.4)
+        res[f"overlay_{i}"] = bool(w._hwnd)
+        w.stop()
+        del w
+        gc.collect()
+    assert all(res[f"overlay_{i}"] for i in range(3))
 
 
 def main() -> int:

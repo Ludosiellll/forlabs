@@ -138,8 +138,8 @@ class WinDesk:
         перезапускают себя (Visual Studio, Word, VS Code), — и по имени. Сам ForLabs и браузеры (ссылка «Войти» в
         программе открывает браузер) — никогда."""
         pids = winapi.process_tree({self.root}) | (self._by_name() if self.app.single else set())
-        names = winapi.process_names(pids)
-        return {pid for pid in pids if pid != os.getpid() and names.get(pid, "").lower() not in BROWSERS}
+        names = winapi.process_names(pids)  # только живые: process_tree возвращает и уже завершённый корень
+        return {pid for pid in pids if pid in names and pid != os.getpid() and names[pid].lower() not in BROWSERS}
 
     def _mine(self, owned: bool = True) -> list:
         return [w for w in winapi.windows_of(self.targets(), owned) if w.hwnd not in self.pre]
