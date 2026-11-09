@@ -231,6 +231,9 @@ def run(pipe, st: LabState, llm, emit=None, before=None, after=None, desk_factor
                         b.image_path, b.auto_note, b.need_tool = rel, None, None
                         pipe._sync(st, [rel])
                         emit(f"Снял: «{b.topic}»", "done")
+                    elif getattr(watch, "reason", None):  # остановил студент: не ошибка, продолжим по кнопке
+                        b.auto_note = (f"Остановлено: {watch.reason}. Нажми «Сделать снимки в программах», чтобы "
+                                       "продолжить.")
                     else:
                         b.auto_note = f"Сам не снял: {res.reason}."
                         emit(f"Не снял «{b.topic}»: {res.reason}", "warn")

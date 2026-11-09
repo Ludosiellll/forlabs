@@ -14,13 +14,9 @@ from ctypes import wintypes
 from pathlib import Path
 
 from forlabs.agent import apps
-from forlabs.agent.core import Action, Blocked, Element, Observation, Stopped
+from forlabs.agent.core import Action, AppError, Blocked, Element, Observation, Stopped  # noqa: F401
 from forlabs.agent.keys import EXTENDED, EXTENDED_VK, KEYUP, UNICODE, absolute, utf16_units, vkey
 from forlabs.runner import winapi
-
-
-class AppError(Exception):
-    """Программа не запустилась или ею нельзя управлять — причина для студента."""
 
 
 _u = ctypes.WinDLL("user32", use_last_error=True) if hasattr(ctypes, "WinDLL") else None
@@ -64,6 +60,27 @@ class MONITORINFO(ctypes.Structure):
                 ("dwFlags", wintypes.DWORD)]
 
 
+def _elevated(pid: int | None) -> bool:
+    """Процесс с правами администратора (None — сам ForLabs). Узнать не удалось — False: проверка лишь подсказка,
+    дальше всё равно сработает «действия ничего не меняют»."""
+    try:
+        import win32api
+        import win32con
+        import win32security
+
+        if pid is None:
+            h = win32api.GetCurrentProcess()
+        else:
+            try:
+                h = win32api.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+            except Exception:  # noqa: BLE001 — не пускают даже посмотреть: почти наверняка администратор
+                return True
+        tok = win32security.OpenProcessToken(h, win32con.TOKEN_QUERY)
+        return bool(win32security.GetTokenInformation(tok, win32security.TokenElevation))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _send(items: list[INPUT]) -> None:
     arr = (INPUT * len(items))(*items)
     if _u.SendInput(len(items), arr, ctypes.sizeof(INPUT)) != len(items):
@@ -98,7 +115,16 @@ class WinDesk:
             raise AppError(f"программа «{self.app.title}» не запустилась: {e}") from e
         self.root = self.proc.pid
         self.main = self._wait_main(launch_timeout)
+        if _elevated(self._pid_of(self.main)) and not _elevated(None):
+            raise AppError(f"программа «{self.app.title}» запущена от имени администратора — Windows не даёт "
+                           "ForLabs нажимать в ней. Закрой её и нажми «Сделать снимки в программах» снова.")
         self._fit(self.main)
+
+    @staticmethod
+    def _pid_of(hwnd: int) -> int:
+        pid = wintypes.DWORD()
+        _u.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        return pid.value
 
     # --- какие окна наши ---
     def _by_name(self) -> set[int]:

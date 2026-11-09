@@ -229,7 +229,8 @@ def student_escape_and_overlay(res):
 
 @case
 def app_missing_or_broken(res):
-    from forlabs.agent.windesk import AppError, WinDesk
+    from forlabs.agent.core import AppError
+    from forlabs.agent.windesk import WinDesk
 
     try:
         WinDesk("notepad", str(WORK / "нет такой программы.exe"), [], WORK)

@@ -137,7 +137,7 @@ class Task(BaseModel):
     folder: str = ""
     allow: list[str] = Field(default_factory=list)
     kind: str = ""  # ide, db, console, office, network, 1c, browser — от него зависят проверки набираемого
-    steps: int = 30  # сколько раз можно спросить модель о следующем шаге
+    steps: int = 25  # сколько раз можно спросить модель о следующем шаге (на лабу — до 300 запросов)
     seconds: int = 300  # и сколько времени на всё
     verify_tries: int = 2
 
@@ -153,6 +153,10 @@ class Result:
 
 class Blocked(Exception):
     """Действие не выполнено: нельзя (guard) или вне окна программы (desk). Причина уходит модели в ход работы."""
+
+
+class AppError(Exception):
+    """Программа не запустилась или ею нельзя управлять — причина для студента."""
 
 
 class Stopped(Exception):
