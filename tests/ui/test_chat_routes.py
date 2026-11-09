@@ -228,3 +228,13 @@ def test_profile_offer_buttons_apply_and_decline(lab):
     assert "Поменяно в профиле" in client.get(url + "?tab=report").text
     r = client.post(url + f"/chat/profile/{msg_id}", data={"apply": "1"}, follow_redirects=False)
     assert "err=" in r.headers["location"]
+
+
+def test_subject_memory_visible_and_theme_editable(lab):
+    client, ctx, url = lab
+    page = client.get(url).text
+    assert "Что ForLabs помнит о предмете" in page and 'name="theme"' in page
+    r = client.post(url + "/memory/theme", data={"theme": "сайт кофейни «Зерно»"}, follow_redirects=False)
+    assert r.status_code == 303
+    assert ctx.memory().theme("ivanov_ivan_petrovich", "psip") == "сайт кофейни «Зерно»"
+    assert "сайт кофейни «Зерно»" in client.get(url).text

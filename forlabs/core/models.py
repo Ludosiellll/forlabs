@@ -194,6 +194,13 @@ class LabVersion(BaseModel):
 MAX_VERSIONS = 10
 
 
+class Material(BaseModel):
+    """Файл к лабе от преподавателя (данные, текст, заготовка кода) — текстом, модель читает его целиком."""
+
+    name: str
+    text: str
+
+
 class LabState(BaseModel):
     profile_id: str
     subject_id: str
@@ -216,6 +223,9 @@ class LabState(BaseModel):
     chat: list[ChatMessage] = Field(default_factory=list)
     versions: list[LabVersion] = Field(default_factory=list)
     wishes: str = ""  # пожелания, введённые при создании (до разбора)
+    linked: list[str] = Field(default_factory=list)  # номера прошлых лаб, на которых строится эта (выбрал студент)
+    linked_texts: dict[str, str] = Field(default_factory=dict)  # их текст из прикреплённого отчёта (только выбранные)
+    materials: list[Material] = Field(default_factory=list)  # файлы к лабе (данные, текст, код) — целиком в модель
     wish_images: list[str] = Field(default_factory=list)  # фото к пожеланиям
     wish_images_text: str = ""  # что модель прочитала с этих фото
     rev: int = 0  # номер записи в облаке: запись с другого компьютера не затирается молча

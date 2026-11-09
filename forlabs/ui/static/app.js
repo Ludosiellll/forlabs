@@ -155,10 +155,20 @@
     var out = document.querySelector('[data-images-picked="' + input.id + '"]');
     if (!out) return;
     var n = input.files ? input.files.length : 0;
-    out.textContent = n ? ("Фото: " + n + (n > 4 ? " — можно не больше 4" : "")) : "";
+    var photos = /^image\//.test(input.getAttribute("accept") || "");
+    out.textContent = !n ? "" : photos ? ("Фото: " + n + (n > 4 ? " — можно не больше 4" : ""))
+      : Array.prototype.map.call(input.files, function (f) { return f.name; }).join(", ");
   }
   document.querySelectorAll("[data-images-input]").forEach(function (input) {
     input.addEventListener("change", function () { picked(input); });
+  });
+  document.querySelectorAll("[data-autosubmit]").forEach(function (input) { // файл выбран — сразу загрузить
+    input.addEventListener("change", function () {
+      if (!input.files || !input.files.length) return;
+      var label = input.closest("label");
+      if (label && label.firstChild) label.firstChild.textContent = "Загружаю…";
+      if (input.form.requestSubmit) input.form.requestSubmit(); else input.form.submit();
+    });
   });
   document.querySelectorAll("[data-paste-images]").forEach(function (area) {
     var input = document.getElementById(area.getAttribute("data-paste-images"));

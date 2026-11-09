@@ -15,6 +15,43 @@
         </li>
       {% endfor %}
     </ol>
+    <details class="rules-mem subject-mem lab-inputs"{{ ' open' if st.linked or materials }}>
+      <summary class="small">Связанные лабы и файлы{% if st.linked or materials %} ({{ st.linked|length + materials|length }}){% endif %}</summary>
+      <form method="post" action="{{ base_url }}/links" enctype="multipart/form-data" class="stack" data-once>
+        <label class="small" for="linked">Номера прошлых лаб, на которых строится эта</label>
+        <input id="linked" name="linked" type="text" maxlength="60" value="{{ st.linked|join(', ') }}" placeholder="например: 1, 27">
+        <label class="btn link small filebtn">Общий отчёт с ними (DOCX, PDF)
+          <input class="visually-hidden" type="file" name="linked_report" accept=".docx,.pdf" data-images-input id="linked-report"></label>
+        <span class="small muted" data-images-picked="linked-report"></span>
+        <button class="btn small" type="submit">Сохранить</button>
+      </form>
+      {% if link_notes %}<ul class="small">{% for m in link_notes %}<li>{{ m }}</li>{% endfor %}</ul>{% endif %}
+      <div class="hint">Из общего отчёта берутся только эти лабы, остальное модель не читает. Лаба, сделанная в ForLabs, берётся целиком, с кодом.</div>
+
+      <h3 class="small" style="margin:12px 0 4px">Файлы к лабе</h3>
+      {% if materials %}<ul class="small mats">{% for name, pg in materials %}
+        <li><span>{{ name }} · ≈{{ pg }} стр.</span>
+          <form method="post" action="{{ base_url }}/materials/remove" class="inline"><input type="hidden" name="name" value="{{ name }}">
+            <button class="btn link small" type="submit" aria-label="Убрать {{ name }}">Убрать</button></form></li>
+      {% endfor %}</ul>{% endif %}
+      <form method="post" action="{{ base_url }}/materials" enctype="multipart/form-data" class="row until" data-once>
+        <label class="btn small filebtn">Добавить файл
+          <input class="visually-hidden" type="file" name="materials" multiple accept="{{ materials_accept }}" data-autosubmit></label>
+        <noscript><button class="btn small" type="submit">Загрузить</button></noscript>
+      </form>
+      <div class="hint">Данные, текст или код, которые выдал преподаватель. Модель читает их целиком в каждом задании. На все файлы — до {{ materials_pages }} страниц.</div>
+    </details>
+
+    <details class="rules-mem subject-mem">
+      <summary class="small">Что ForLabs помнит о предмете{% if subject_theme %}: {{ subject_theme }}{% endif %}</summary>
+      <form method="post" action="{{ base_url }}/memory/theme" class="row until" style="margin:6px 0">
+        <label class="visually-hidden" for="theme">Тематика предмета</label>
+        <input id="theme" name="theme" type="text" maxlength="300" value="{{ subject_theme }}" placeholder="Тематика: например «сайт кофейни „Зерно“»">
+        <button class="btn small" type="submit">Сохранить</button>
+      </form>
+      {% if subject_memory %}<ul class="small">{% for line in subject_memory %}<li>{{ line }}</li>{% endfor %}</ul>{% endif %}
+      <div class="hint">Тематика и выжимки прошлых лаб передаются модели во всех лабах предмета. Если методичка ссылается на прошлую лабу («из ЛР №1»), ForLabs берёт её целиком.</div>
+    </details>
 
     {% if slot_items %}
     <h2 style="margin-top:18px">Нужно от тебя: {{ slot_items|length }}</h2>

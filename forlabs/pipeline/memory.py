@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Callable
 
 from forlabs.core import paths
@@ -10,7 +11,7 @@ from forlabs.core.models import LabState
 from forlabs.core.store import safe_name
 from forlabs.pipeline.write import section_text
 
-MAX_CHARS = 3000
+MAX_CHARS = 8000  # ~13 лаб по 600 символов: хватает на семестр
 MAX_LAB_SUMMARY = 600  # одна лаба не вытесняет память о прежних
 
 
@@ -23,7 +24,56 @@ def _merge(old: str, number: str, summary: str) -> str:
     return "\n".join(lines)
 PROMPT = ("Сожми выполненную лабораторную работу в 2–5 коротких строк для памяти следующих работ этого предмета: "
           "выбранная тема/проект/предметная область, ключевые имена (файлы, классы, объекты, страницы), "
-          "что уже сделано. Без оценок и воды, по-русски, обычным текстом без markdown.")
+          "что уже сделано. Если работа задаёт или продолжает сквозную тему или проект, который продолжат следующие "
+          "работы (например сайт кофейни «Зерно», база данных библиотеки), первой строкой напиши «Тематика: …» "
+          "коротко. Без оценок и воды, по-русски, обычным текстом без markdown.")
+
+_LAB_REF = re.compile(r"(?:лабораторн\w*\s+работ\w*|\bЛР|\bл\.?\s*/?\s*р\.?)\s*(?:№\s*)?(\d+(?:\.\d+)?)",
+                      re.IGNORECASE)
+_PREV_REF = re.compile(r"(?:предыдущ|прошл)\w*\s+(?:лабораторн\w*\s+)?работ", re.IGNORECASE)
+
+
+_NUM = re.compile(r"\d+(?:\.\d+)?")
+_HEAD = re.compile(r"^[ \t]*(?:Отч[её]т\s+по\s+)?(?:лабораторн|практическ)\w*\s+работ\w*\s*№?\s*(\d+(?:\.\d+)?)",
+                   re.IGNORECASE | re.MULTILINE)
+LINKED_MAX = 12000  # символов одной прошлой лабы — модель видит её, но лимиты не съедаются
+LINKED_TOTAL = 36000  # на все связанные лабы вместе (уходят в каждое задание)
+
+
+def parse_numbers(raw: str) -> list[str]:
+    """«1, 27; ЛР 5.2 и 30» → ["1", "27", "5.2", "30"] (без повторов, не больше пяти)."""
+    out: list[str] = []
+    for n in _NUM.findall(raw or ""):
+        if n not in out:
+            out.append(n)
+    return out[:5]
+
+
+def split_labs(text: str) -> dict[str, str]:
+    """Общий отчёт → {номер: текст этой лабы} по заголовкам «Лабораторная работа №N». У одного номера несколько
+    кусков (строка оглавления и сама лаба) — берётся самый длинный."""
+    heads = list(_HEAD.finditer(text or ""))
+    out: dict[str, str] = {}
+    for i, m in enumerate(heads):
+        end = heads[i + 1].start() if i + 1 < len(heads) else len(text)
+        part = text[m.start():end].strip()
+        if len(part) > len(out.get(m.group(1), "")):
+            out[m.group(1)] = part
+    return out
+
+
+def referenced_labs(text: str, current: str) -> list[str]:
+    """Номера прошлых лаб, на которые ссылается методичка («из ЛР №1», «лабораторной работы 3»), и «previous» для
+    «предыдущей работы». Своя лаба (заголовок «Лабораторная работа №7») не считается; не больше трёх."""
+    cur = (current or "").split("-")[0]
+    out: list[str] = []
+    for m in _LAB_REF.finditer(text or ""):
+        n = m.group(1)
+        if n != cur and n not in out:
+            out.append(n)
+    if _PREV_REF.search(text or "") and "previous" not in out:
+        out.append("previous")
+    return out[:3]
 
 
 def teacher_key(rule: str) -> str:
@@ -63,9 +113,22 @@ class SubjectMemory:
         summary = llm.chat([{"role": "system", "content": PROMPT},
                             {"role": "user", "content": f"ЛР №{st.number}. Тема: {st.spec.topic}\n\n{body[:20000]}"}],
                            temperature=0.2).strip()
+        lines = summary.splitlines()
+        if lines and lines[0].lower().startswith("тематика:"):
+            theme = lines[0].split(":", 1)[1].strip(" .«»\"")
+            summary = "\n".join(lines[1:]).strip()
+            if theme and not self.theme(st.profile_id, st.subject_id):  # первая тематика; правка студента — главнее
+                self.set_theme(st.profile_id, st.subject_id, lines[0].split(":", 1)[1].strip(" ."))
         text = _merge(self.read(st.profile_id, st.subject_id), st.number, summary)
         self.write(st.profile_id, st.subject_id, text)
         return text
+
+    # тематика предмета (сквозной проект): отдельная запись, не вытесняется выжимками лаб, правится студентом
+    def theme(self, profile_id: str, subject_id: str) -> str:
+        return self._read(profile_id, f"{subject_id}.theme").strip()
+
+    def set_theme(self, profile_id: str, subject_id: str, text: str) -> None:
+        self._write(profile_id, f"{subject_id}.theme", " ".join((text or "").split())[:300])
 
     # требования преподавателя: отдельная запись, не обрезается вместе с выжимками лаб
     MAX_TEACHER = 30

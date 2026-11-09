@@ -33,6 +33,21 @@
         <span class="small muted" data-images-picked="wish-images"></span>
       </div>
       <div class="hint">Необязательно. Можно приложить фото записи преподавателя — приложение прочитает её. Учтётся при разборе и при написании всех заданий; замечания после выполнения — в чат «Правки» на экране лабы.</div></div>
+    <div class="grid2">
+      <div class="field"><label for="linked">Связанные прошлые лабы</label>
+        <input id="linked" name="linked" type="text" maxlength="60" placeholder="например: 1, 27">
+        <div class="row attach-row">
+          <label class="btn link small">Общий отчёт с ними (DOCX, PDF)<input id="linked-report" class="visually-hidden" type="file" name="linked_report" accept=".docx,.pdf" data-images-input></label>
+          <span class="small muted" data-images-picked="linked-report"></span>
+        </div>
+        <div class="hint">Если тема и приложение берутся из прошлых лаб. Из общего отчёта ForLabs вырежет только эти лабы — остальное модель не читает, лимит не тратится.</div></div>
+      <div class="field"><span style="display:block;font-weight:500;margin-bottom:4px">Файлы к лабе</span>
+        <div class="row attach-row">
+          <label class="btn small">Выбрать файлы<input id="materials-in" class="visually-hidden" type="file" name="materials" multiple accept="{{ materials_accept }}" data-images-input></label>
+          <span class="small muted" data-images-picked="materials-in"></span>
+        </div>
+        <div class="hint">Если преподаватель выдал данные, текст или заготовку кода. Модель прочитает их целиком. На все файлы — до {{ materials_pages }} страниц.</div></div>
+    </div>
     <div class="row"><button class="btn primary" type="submit">Разобрать методичку</button>
       <a class="btn link" href="/">Отмена</a></div>
   </form>

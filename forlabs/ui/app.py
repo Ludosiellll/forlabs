@@ -46,6 +46,8 @@ from forlabs.core.settings import (
 from forlabs.core.store import safe_file_name, safe_name
 from forlabs.core.subjects import Subject, all_subjects, get_subject
 from forlabs.pipeline.images import MAX_IMAGES, normalize_screenshot, prepare_image
+from forlabs.pipeline.materials import ACCEPT as MATERIALS_ACCEPT, MATERIALS_MAX, PAGE_CHARS, pages
+from forlabs.pipeline.memory import parse_numbers
 from forlabs import version as _version
 from forlabs.pipeline.run import (
     PipelineError,
@@ -382,12 +384,15 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         if not profiles:
             return redirect("/profiles/new", err="Сначала создай профиль")
         return render(request, "lab_new.html", profiles=profiles, profile_id=profile or profiles[0].id,
-                      subject_id=subject, nav="home", form_token=uuid.uuid4().hex)
+                      subject_id=subject, nav="home", form_token=uuid.uuid4().hex,
+                      materials_accept=MATERIALS_ACCEPT, materials_pages=MATERIALS_MAX // PAGE_CHARS)
 
     @app.post("/labs/new")
     async def lab_new(profile_id: str = Form(...), subject_id: str = Form(...), number: str = Form(""),
                       text: str = Form(""), wishes: str = Form(""), files: list[UploadFile] | None = File(None),
-                      wish_images: list[UploadFile] | None = File(None), form_token: str = Form("")):
+                      wish_images: list[UploadFile] | None = File(None), form_token: str = Form(""),
+                      linked: str = Form(""), linked_report: UploadFile | None = File(None),
+                      materials: list[UploadFile] | None = File(None)):
         if form_token:  # двойной клик или повторная отправка формы — одна лаба
             with ctx._lock:
                 done = ctx.form_tokens.get(form_token)
@@ -399,7 +404,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
                 return RedirectResponse(done, status_code=303)
         data = []
         back = f"/labs/new?profile={_q(profile_id)}&subject={_q(subject_id)}"
-        for uf in [*(files or []), *(wish_images or [])]:
+        for uf in [*(files or []), *(wish_images or []), *(materials or []), *([linked_report] if linked_report else [])]:
             if uf.filename and (uf.size or 0) > MAX_UPLOAD:
                 return redirect(back, err=f"Файл «{uf.filename}» больше {MAX_UPLOAD // 1_000_000} МБ — оставь только "
                                           "страницы своей лабы или сожми его.")
@@ -410,10 +415,22 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
             return redirect(f"/labs/new?profile={_q(profile_id)}&subject={_q(subject_id)}",
                             err="Добавь файл методички или вставь её текст")
         photos = [(uf.filename, await uf.read()) for uf in (wish_images or []) if uf.filename]
+        extra = [(uf.filename, await uf.read()) for uf in (materials or []) if uf.filename]
+        report = (linked_report.filename, await linked_report.read()) if linked_report and linked_report.filename else None
+        numbers = parse_numbers(linked)
+        notes: list[str] = []
         try:
             st = await asyncio.to_thread(ctx.pipeline.create_lab, profile_id, subject_id, data,
                                          number=number.strip() or None, pasted_text=text, wishes=wishes,
                                          wish_images=photos)
+            if numbers or report:
+                try:
+                    st, _ = await asyncio.to_thread(ctx.pipeline.set_links, st, numbers, report)
+                except PipelineError as e:  # лаба создаётся и без отчёта; номера сохраняются
+                    notes.append(str(e))
+                    st, _ = await asyncio.to_thread(ctx.pipeline.set_links, st, numbers, None)
+            if extra:
+                st, notes = await asyncio.to_thread(ctx.pipeline.add_materials, st, extra)
         except Exception as e:  # лаба не создана — форму можно отправить снова
             if form_token:
                 ctx.form_tokens.pop(form_token, None)
@@ -431,7 +448,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         url = lab_url(profile_id, subject_id, final.number)
         if form_token:
             ctx.form_tokens[form_token] = url
-        return redirect(url)
+        return redirect(url, err=" ".join(notes) or None)
 
     # лаба
     def load(p: str, s: str, n: str, strict: bool = True):
@@ -490,10 +507,19 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
             teacher_rules = ctx.memory().teacher_list(p, s)
         except Exception:
             teacher_rules = []
+        try:
+            subject_theme = ctx.memory().theme(p, s)
+            subject_memory = [ln for ln in ctx.memory().read(p, s).splitlines() if ln.strip()]
+        except Exception:
+            subject_theme, subject_memory = "", []
         fresh = docx_fresh(st, ctx.store.lab_dir(p, s, n))  # документ — от последней удачной вёрстки этой лабы
         preview_here = fresh and bool(st.pages) and all(Path(x).exists() for x in st.pages)
         docx_here = fresh
         return render(request, "lab.html", st=st, profile=profile, subject=get_subject(s), busy=busy,
+                      subject_theme=subject_theme, subject_memory=subject_memory,
+                      link_notes=[f.message for f in st.findings if f.rule_id.startswith("spec.linked")],
+                      materials=[(m.name, pages(len(m.text))) for m in st.materials],
+                      materials_accept=MATERIALS_ACCEPT, materials_pages=MATERIALS_MAX // PAGE_CHARS,
                       preview_here=preview_here, docx_here=docx_here, teacher_rules=teacher_rules,
                       elsewhere=running_elsewhere(st),
                       complete=lab_complete(st),
@@ -595,6 +621,54 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         if not f.exists():
             return JSONResponse({"error": "нет такого фото"}, status_code=404)
         return FileResponse(f, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})
+
+    @app.post("/labs/{p}/{s}/{n}/links")
+    async def lab_links(p: str, s: str, n: str, linked: str = Form(""),
+                        linked_report: UploadFile | None = File(None)):
+        if busy_lab(p, s, n):
+            return redirect(lab_url(p, s, n), err=BUSY)
+        if linked_report is not None and (linked_report.size or 0) > MAX_UPLOAD:
+            return redirect(lab_url(p, s, n), err=f"Отчёт больше {MAX_UPLOAD // 1_000_000} МБ — сожми картинки в нём.")
+        st = await asyncio.to_thread(load, p, s, n)
+        report = (linked_report.filename, await linked_report.read()) if linked_report and linked_report.filename else None
+        try:
+            st, missing = await asyncio.to_thread(ctx.pipeline.set_links, st, parse_numbers(linked), report)
+        except PipelineError as e:
+            return redirect(lab_url(p, s, n), err=str(e))
+        if missing:
+            return redirect(lab_url(p, s, n), err="Нет ни в ForLabs, ни в отчёте: "
+                            + ", ".join(m if m[:1].isalpha() else f"ЛР {m}" for m in missing)
+                            + ". Прикрепи общий отчёт с ними или опиши их в пожеланиях.")
+        return redirect(lab_url(p, s, n), msg="Связанные лабы сохранены" if st.linked else "Связанные лабы убраны")
+
+    @app.post("/labs/{p}/{s}/{n}/materials")
+    async def lab_materials(p: str, s: str, n: str, materials: list[UploadFile] | None = File(None)):
+        if busy_lab(p, s, n):
+            return redirect(lab_url(p, s, n), err=BUSY)
+        files = [uf for uf in (materials or []) if uf.filename]
+        if not files:
+            return redirect(lab_url(p, s, n), err="Выбери файл")
+        for uf in files:
+            if (uf.size or 0) > MAX_UPLOAD:
+                return redirect(lab_url(p, s, n), err=f"Файл «{uf.filename}» больше {MAX_UPLOAD // 1_000_000} МБ")
+        st = await asyncio.to_thread(load, p, s, n)
+        data = [(uf.filename, await uf.read()) for uf in files]
+        st, problems = await asyncio.to_thread(ctx.pipeline.add_materials, st, data)
+        if problems:
+            return redirect(lab_url(p, s, n), err=" ".join(problems))
+        return redirect(lab_url(p, s, n), msg="Файлы добавлены — модель прочитает их в каждом задании")
+
+    @app.post("/labs/{p}/{s}/{n}/materials/remove")
+    def lab_materials_remove(p: str, s: str, n: str, name: str = Form("")):
+        if busy_lab(p, s, n):
+            return redirect(lab_url(p, s, n), err=BUSY)
+        ctx.pipeline.remove_material(load(p, s, n), name)
+        return redirect(lab_url(p, s, n), msg="Файл убран")
+
+    @app.post("/labs/{p}/{s}/{n}/memory/theme")
+    def lab_memory_theme(p: str, s: str, n: str, theme: str = Form("")):
+        ctx.memory().set_theme(p, s, theme)
+        return redirect(lab_url(p, s, n), msg="Тематика предмета сохранена" if theme.strip() else "Тематика убрана")
 
     @app.post("/labs/{p}/{s}/{n}/teacher/remove/{key}")
     def lab_teacher_remove(p: str, s: str, n: str, key: str):
