@@ -341,3 +341,87 @@ def test_dangerous_code_is_not_even_built(tmp_home, tmp_path, monkeypatch):
     pipe, fake, st = make(tmp_home, tmp_path, [bad])
     st = pipe.execute(st)
     assert calls == [] and st.project.blocked and not st.project.built  # сборки не было: опасное — до неё
+
+
+def test_hand_in_copy_keeps_previous_project_if_swap_fails(tmp_home, tmp_path, monkeypatch):
+    pipe, fake, st = make(tmp_home, tmp_path, [PLAN, PLAN])
+    st = pipe.execute(st)
+    out = tmp_path / "сдача" / "ПССИП" / "ЛР7" / "Проект Сумма"
+    (out / "мои заметки.txt").write_text("не трогать", encoding="utf-8")
+    import pathlib
+
+    real_rename = pathlib.Path.rename
+
+    def locked(self, target):  # в Windows папку не переименовать, пока файл в ней открыт в редакторе
+        if self == out:
+            raise PermissionError("файл открыт")
+        return real_rename(self, target)
+
+    monkeypatch.setattr(pathlib.Path, "rename", locked)
+    st = pipe.retry_project(st)
+    assert (out / "main.py").read_text(encoding="utf-8") == GOOD and (out / "мои заметки.txt").exists()
+    assert not [p for p in out.parent.iterdir() if p.name.endswith((".new", ".old"))]  # без мусора рядом
+
+
+def test_shot_with_bad_url_becomes_manual_not_whole_project(tmp_home, tmp_path):
+    bad = {**PLAN, "shots": [{"section": 1, "block": 3, "mode": "browser", "url": "../../Desktop/secret.pdf"},
+                             {"section": 2, "block": 2, "mode": "manual", "reason": "окно среды разработки"}]}
+    pipe, fake, st = make(tmp_home, tmp_path, [bad])
+    st = pipe.execute(st)
+    assert st.project and st.project.built  # проект собран, плохой снимок просто остался студенту
+    assert pipe.shooter.calls == [] and not figures(st)[0].image_path
+
+
+SHOP = "DROP DATABASE IF EXISTS shop;\nCREATE DATABASE shop;\nUSE shop;\nCREATE TABLE t (n INT);\nINSERT INTO t VALUES (17);\n"
+MYSQL_PLAN = {"language": "mysql", "kind": "sql", "name": "Магазин", "entry": "shop.sql",
+              "files": [{"path": "shop.sql", "content": SHOP}],
+              "shots": [{"section": 1, "block": 3, "mode": "console", "input": "source shop.sql\nSELECT n FROM shop.t;\n"},
+                        {"section": 2, "block": 2, "mode": "console", "input": "SHOW DATABASES;\n"}]}
+
+
+class _Server:
+    def __init__(self, log):
+        self.log = log
+
+    def client(self):
+        return ["/opt/mysql/bin/mysql", "--no-defaults", "-u", "root", "-h", "127.0.0.1", "--port=40404"]
+
+    def stop(self):
+        self.log.append("stop")
+
+
+def test_mysql_shots_go_to_own_clean_server_never_to_students(tmp_home, tmp_path, monkeypatch):
+    from forlabs.pipeline import project
+    from forlabs.runner.languages import Toolchain
+
+    log = []
+    monkeypatch.setattr(project, "start_mysql", lambda client: log.append(("start", client)) or _Server(log))
+    pipe, fake, st = make(tmp_home, tmp_path, [MYSQL_PLAN], tools={"mysql": Toolchain("mysql", "/opt/mysql/bin/mysql")},
+                          monkeypatch=monkeypatch)
+    st = pipe.execute(st)
+    calls = pipe.shooter.calls
+    assert len(calls) == 2 and all(f.image_path for f in figures(st))
+    for target, _ in calls:  # обе — к своему серверу на свободном порту, не к серверу студента на 3306
+        assert target.cmd == _Server(log).client() and target.console
+    assert log == [("start", "/opt/mysql/bin/mysql"), "stop"]  # один сервер на лабу, погашен в конце
+
+
+def test_mysql_server_that_did_not_start_leaves_notes_not_errors(tmp_home, tmp_path, monkeypatch):
+    from forlabs.pipeline import project
+    from forlabs.runner import mysqlrun
+    from forlabs.runner.languages import Toolchain
+
+    tries = []
+
+    def broken(client):
+        tries.append(client)
+        raise mysqlrun.MysqlError("рядом с mysql нет сервера (mysqld)")
+
+    monkeypatch.setattr(project, "start_mysql", broken)
+    pipe, fake, st = make(tmp_home, tmp_path, [MYSQL_PLAN], tools={"mysql": Toolchain("mysql", "/opt/mysql/bin/mysql")},
+                          monkeypatch=monkeypatch)
+    st = pipe.execute(st)
+    assert pipe.shooter.calls == [] and len(tries) == 1  # второй раз не пробует
+    for f in figures(st):
+        assert not f.image_path and "нет сервера (mysqld)" in f.auto_note
+    assert st.project.built and st.docx_path  # отчёт собран, проект в папке сдачи

@@ -650,6 +650,6 @@ def run_spec(plan: ProjectPlan, artifact: Path | str | None, project_dir: Path |
                        url=f"http://127.0.0.1:{port}/{quote(plan.entry)}")
     if lang == "php":
         return RunSpec([tools["php"].path, plan.entry], d, console)
-    if lang == "mysql":  # пароль (если есть) добавит конвейер: --defaults-extra-file первым аргументом
+    if lang == "mysql":  # для снимков конвейер заменит команду на клиент своего сервера (pipeline/project.start_mysql)
         return RunSpec([tools["mysql"].path, "--default-character-set=utf8mb4", "--user=root"], d, True)
     return RunSpec([], d, False, url=a.resolve().as_uri())

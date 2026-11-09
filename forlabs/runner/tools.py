@@ -13,10 +13,9 @@
 Своя ссылка («У меня есть ссылка»): файл с https-адреса качается в «Загрузки» и открывается — установщик студент
 проходит сам, ForLabs ничего не запускает молча. Архив известной программы можно вместо этого распаковать в tools.
 
-MySQL для снимков: при установке mysqld готовит пустую базу в tools/mysql/data (`--initialize-insecure`, root без
-пароля, только этот компьютер). Перед снимками запуск делает start_mysql(): mysqld на свободном порту 127.0.0.1
-(без X Protocol и двоичного журнала); консоль снимка запускает server.client() — `mysql -u root --port=N`;
-после снимков server.stop(): `mysqladmin shutdown`, если не вышло — завершение процесса.
+MySQL для снимков: при установке mysqld готовит пустую базу в tools/mysql/data (`--initialize-insecure`) — так
+видно, что сервер работает. Снимки идут на отдельном сервере с чистой папкой данных на каждую лабу
+(runner/mysqlrun.py, этап «Проект»).
 """
 
 from __future__ import annotations
@@ -29,7 +28,6 @@ import logging
 import os
 import re
 import shutil
-import socket
 import stat
 import subprocess
 import sys
@@ -38,7 +36,7 @@ import time
 import uuid
 import zipfile
 import zlib
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Callable
 from urllib.parse import unquote, urljoin, urlparse
@@ -556,61 +554,6 @@ class LinkJob:
     key: str = ""  # что ждали по этой ссылке
     unpack: str = ""  # архив какой программы можно распаковать в tools
     opened: bool = False
-
-
-@dataclass
-class MySQLServer:
-    proc: subprocess.Popen
-    port: int
-    base: Path
-    run: Callable = field(default=_run, repr=False)
-
-    def client(self) -> list[str]:
-        """Команда консоли mysql для снимка."""
-        return [str(self.base / "bin" / "mysql.exe"), "--no-defaults", "-u", "root", "-h", "127.0.0.1",
-                f"--port={self.port}", "--default-character-set=utf8mb4"]
-
-    def stop(self, timeout: float = 20) -> None:
-        if self.proc.poll() is None:
-            self.run([str(self.base / "bin" / "mysqladmin.exe"), "--no-defaults", "-u", "root", "-h", "127.0.0.1",
-                      f"--port={self.port}", "shutdown"], timeout=timeout)
-            try:
-                self.proc.wait(timeout)
-            except subprocess.TimeoutExpired:
-                self.proc.kill()
-                self.proc.wait(5)
-
-
-def free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
-def start_mysql(root: Path | None = None, port: int | None = None, timeout: float = 60,
-                popen: Callable = subprocess.Popen, run: Callable = _run) -> MySQLServer:
-    """mysqld из tools/mysql на свободном порту 127.0.0.1; возвращается, когда порт принимает подключения."""
-    base = Path(root or tools_dir()) / "mysql"
-    data = base / "data"
-    if not (base / "bin" / "mysqld.exe").exists() or not data.is_dir():
-        raise ToolError("MySQL в папке ForLabs не установлен — установи его в «Настройках».")
-    port = port or free_port()
-    flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-    proc = popen([str(base / "bin" / "mysqld.exe"), "--no-defaults", f"--basedir={base}", f"--datadir={data}",
-                  f"--port={port}", "--bind-address=127.0.0.1", "--mysqlx=OFF", "--skip-log-bin", "--console"],
-                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=flags)
-    server = MySQLServer(proc, port, base, run)
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if proc.poll() is not None:
-            raise ToolError(f"MySQL не запустился (код {proc.returncode}).")
-        try:
-            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
-                return server
-        except OSError:
-            time.sleep(0.3)
-    server.stop(5)
-    raise ToolError("MySQL не запустился за минуту.")
 
 
 # менеджер

@@ -6,7 +6,6 @@ import errno
 import hashlib
 import io
 import random
-import socket
 import threading
 import time
 import zipfile
@@ -16,7 +15,7 @@ import pytest
 from toolfakes import GO_INDEX, Runs, go_site, make_zip
 
 from forlabs.runner import tools
-from forlabs.runner.tools import STATUS_DLL_NOT_FOUND, ToolError, safe_extract, start_mysql
+from forlabs.runner.tools import STATUS_DLL_NOT_FOUND, ToolError, safe_extract
 
 GO_ZIP = "https://go.dev/dl/go1.99.1.windows-amd64.zip"
 NOISE = random.Random(7).randbytes(20000)  # не сжимается — архив больше мест обрыва
@@ -308,45 +307,6 @@ def test_mysql_init_failure_leaves_nothing(web, make_mgr):
     job = m.install("mysql")
     assert job.state == "error" and "MySQL не подготовил базу" in job.error
     assert not (m.root / "mysql").exists() and leftovers(m.root) == []
-
-
-def test_mysql_starts_on_free_port_and_stops(tmp_path):
-    base = tmp_path / "tools" / "mysql"
-    (base / "bin").mkdir(parents=True)
-    (base / "bin" / "mysqld.exe").write_bytes(b"MZ")
-    (base / "data").mkdir()
-    started = {}
-
-    class FakeMysqld:  # слушает порт из команды, как настоящий mysqld
-        def __init__(self, cmd, **kw):
-            started["cmd"] = cmd
-            port = int(next(c for c in cmd if c.startswith("--port=")).split("=")[1])
-            self.sock = socket.socket()
-            self.sock.bind(("127.0.0.1", port))
-            self.sock.listen()
-            self.returncode = None
-
-        def poll(self):
-            return self.returncode
-
-        def wait(self, timeout=None):
-            self.sock.close()
-            self.returncode = 0
-            return 0
-
-        def kill(self):
-            self.wait()
-
-    calls = []
-    server = start_mysql(tmp_path / "tools", popen=FakeMysqld, run=lambda cmd, timeout=None: calls.append(cmd))
-    cmd = started["cmd"]
-    assert f"--port={server.port}" in cmd and "--bind-address=127.0.0.1" in cmd and cmd[1] == "--no-defaults"
-    assert f"--port={server.port}" in server.client() and server.client()[0].endswith("mysql.exe")
-    server.stop()
-    assert calls and calls[0][-1] == "shutdown" and server.proc.poll() == 0
-    (base / "data").rmdir()
-    with pytest.raises(ToolError, match="не установлен"):
-        start_mysql(tmp_path / "tools", popen=FakeMysqld)
 
 
 def test_python_package_layout_without_extras(web, make_mgr):

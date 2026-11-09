@@ -309,29 +309,11 @@ CREATE TABLE books (id INT PRIMARY KEY AUTO_INCREMENT, title VARCHAR(100), autho
 }
 
 
-def start_mysql() -> subprocess.Popen | None:
-    mysql = shutil.which("mysql")
-    if not mysql:
-        return None
-    bindir = Path(mysql).parent
-    data = WORK / "mysql-data"
-    shutil.rmtree(data, ignore_errors=True)
-    subprocess.run([str(bindir / "mysqld.exe"), "--initialize-insecure", f"--datadir={data}"], capture_output=True,
-                   timeout=300)
-    srv = subprocess.Popen([str(bindir / "mysqld.exe"), f"--datadir={data}", "--port=3306"],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    for _ in range(60):
-        if subprocess.run(["mysql", "-u", "root", "-e", "SELECT 1"], capture_output=True).returncode == 0:
-            break
-        time.sleep(1)
-    return srv
-
-
 def mysql_variants(tools, report) -> None:
     """Диагностика: как запуск клиента MySQL доходит до программы (напрямую, через файл настроек, по имени)."""
-    from forlabs.runner import mysqlrun
+    from forlabs.pipeline.project import start_mysql
 
-    srv = mysqlrun.start(tools["mysql"].path, WORK)
+    srv = start_mysql(tools["mysql"].path)  # как в ForLabs: папка запуска с меткой Low, сервер с пониженными правами
     out = {}
     try:
         base = srv.client()
@@ -366,10 +348,20 @@ def main() -> int:
         mysql_variants(tools, report)
     except Exception as e:  # noqa: BLE001
         report["mysql_variants"] = {"error": f"{type(e).__name__}: {e}"}
+    runs = [(name, raw, tools, {}) for name, raw in CASES.items()]
+    # профиль студента с кириллицей и пробелом (C:\\Users\\Иван Петров): папки запуска и сервер MySQL — под ним
+    runs.append(("mysql_cyrillic_profile", CASES["mysql_script"], tools,
+                 {"USERPROFILE": str(WORK / "Профиль Иван Петров")}))
+    maria = Path(os.environ.get("FORLABS_MARIADB", "-")) / "bin" / "mysql.exe"
+    if maria.exists():  # MariaDB из XAMPP: свой mysql_install_db.exe, свой клиент
+        runs.append(("mysql_mariadb_xampp", CASES["mysql_script"],
+                     {**tools, "mysql": languages.Toolchain("mysql", str(maria))}, {}))
     try:
-        for name, raw in CASES.items():
+        for name, raw, tools, env in runs:
             t0 = time.time()
             res: dict = {}
+            saved = {k: os.environ.get(k) for k in env}
+            os.environ.update(env)
             try:
                 p = ProjectPlan.model_validate(raw)
                 problems = validate(p)
@@ -387,9 +379,9 @@ def main() -> int:
                     raise RuntimeError("сборка: " + b.log[-1500:])
                 spec = languages.run_spec(p, b.artifact, work, tools)
                 if p.language == "mysql":  # свой сервер с чистой папкой данных — как в ForLabs у студента
-                    from forlabs.runner import mysqlrun
+                    from forlabs.pipeline.project import start_mysql
 
-                    lab_srv = mysqlrun.start(tools["mysql"].path, WORK)
+                    lab_srv = start_mysql(tools["mysql"].path)
                     spec.cmd = lab_srv.client()
                     res["mysql_port"] = lab_srv.port
                 php_web = bool(spec.url) and p.language == "php"
@@ -405,6 +397,12 @@ def main() -> int:
                 res.update(ok=r.ok, reason=r.reason, seen=r.seen[:1500], cmd=list(target.cmd))
             except Exception as e:  # noqa: BLE001
                 res.update(ok=False, error=f"{type(e).__name__}: {e}", trace=traceback.format_exc()[-1500:])
+            finally:
+                for k, v in saved.items():
+                    if v is None:
+                        os.environ.pop(k, None)
+                    else:
+                        os.environ[k] = v
             res["sec"] = round(time.time() - t0, 1)
             report["cases"][name] = res
             print(f"[{name}] {'OK' if res.get('ok') else 'FAIL'} {res.get('reason') or res.get('error') or ''}",

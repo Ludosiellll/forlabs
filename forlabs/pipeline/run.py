@@ -781,6 +781,8 @@ class Pipeline:
                 emit("Составляю проект программы")
                 plan = proj.plan_project(st, llm, self._memory_text(st))
                 problems = proj.validate(plan)
+                if problems and all(p.startswith("Снимок ") for p in problems):
+                    plan, problems = proj.drop_bad_shots(plan), []
                 if problems:
                     raise PipelineError("план проекта не прошёл проверку: " + "; ".join(problems[:3]))
             st = proj.build_and_shoot(self, st, plan, llm, emit)

@@ -27,6 +27,14 @@ jobs:
           python-version: "3.12"
       - name: Зависимости
         run: python -m pip install ".[windows]" pythonnet
+      - name: MariaDB 10.4, как в XAMPP
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $z = "$env:RUNNER_TEMP\mariadb.zip"
+          Invoke-WebRequest -UseBasicParsing https://archive.mariadb.org/mariadb-10.4.32/winx64-packages/mariadb-10.4.32-winx64.zip -OutFile $z
+          Expand-Archive $z -DestinationPath "$env:RUNNER_TEMP\mariadb"
+          "FORLABS_MARIADB=$env:RUNNER_TEMP\mariadb\mariadb-10.4.32-winx64" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
       - name: Программы лаб на всех языках (как у студента)
         shell: pwsh
         run: python tools/ci_lab_programs.py

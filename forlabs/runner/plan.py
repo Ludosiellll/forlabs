@@ -182,6 +182,12 @@ class ProjectPlan(_Model):
         return next((f for f in self.files if f.path == path), None)
 
 
+def _url_problem(url: str) -> str | None:
+    from forlabs.runner.shots import url_problem
+
+    return url_problem(url)
+
+
 def _path_problem(path: str) -> str | None:
     if not path:
         return "пустой путь"
@@ -278,6 +284,8 @@ def validate(plan: ProjectPlan) -> list[str]:
             out.append(f"Листинг {ref.section}.{ref.block}: файла «{ref.file}» нет в проекте")
     for shot in plan.shots:
         where = f"Снимок {shot.section}.{shot.block}"
+        if shot.mode == "browser" and (why := _url_problem(shot.url)):
+            out.append(f"{where}: {why}")
         for step in shot.steps:
             if step.action not in SHOT_ACTIONS:
                 out.append(f"{where}: неизвестное действие «{step.action}» (можно: {', '.join(SHOT_ACTIONS)})")

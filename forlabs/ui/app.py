@@ -958,6 +958,8 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
 
     @app.post("/labs/{p}/{s}/{n}/project/open")
     def lab_project_open(p: str, s: str, n: str):
+        if busy_lab(p, s, n):
+            return redirect(lab_url(p, s, n), err=BUSY)
         d = project_dir(load(p, s, n, strict=False))
         if d is None:
             return redirect(lab_url(p, s, n), err="Папки проекта нет: нажми «Пересобрать».")
@@ -969,6 +971,8 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         import io
         import zipfile
 
+        if busy_lab(p, s, n):
+            return JSONResponse({"error": BUSY}, status_code=409)
         st = load(p, s, n, strict=False)
         d = project_dir(st)
         if d is None:

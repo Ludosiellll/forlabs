@@ -65,26 +65,97 @@ class FakeShooter:
         return ShotResult(True, image=out, seen=str(_get(shot, "expect", "") or ""))
 
 
+_URL_SAFE = "/?=&#.-_~%+,;:@"
+
+
+def _encode(part: str) -> str:
+    """Кавычки, пробелы и прочее — %XX: адрес остаётся одним словом командной строки браузера."""
+    from urllib.parse import quote
+
+    return quote(part, safe=_URL_SAFE)
+
+
+def url_problem(page: str) -> str | None:
+    """Почему адрес страницы из плана нельзя открывать: только страницы проекта или сервер на 127.0.0.1."""
+    import re
+
+    p = (page or "").strip()
+    if not p:
+        return None
+    if any(c in p for c in '"<>\\') or re.search(r"\s", p) or p.startswith("-"):
+        return "в адресе страницы кавычки, пробелы или «-» в начале"
+    if re.match(r"[a-z][a-z0-9+.-]*:", p, re.I):
+        if not re.match(r"https?://(?:127\.0\.0\.1|localhost)(?::\d+)?(?:/|$)", p, re.I):
+            return "страница вне проекта (нужен путь файла проекта или сервер 127.0.0.1)"
+        return None
+    if re.match(r"[A-Za-z]:", p) or ".." in p.replace("\\", "/").split("/"):
+        return "путь страницы выходит за папку проекта"
+    return None
+
+
 def browser_url(page: str, base: str, work: Path) -> str:
     """Адрес страницы: «order.php» у сайта на PHP — от корня сервера (а не «index.php/order.php»); у сайта из файлов —
-    рядом с главной страницей; готовый адрес — как есть."""
+    рядом с главной страницей. Всё вне проекта — ValueError; опасные символы закодированы."""
     from urllib.parse import urljoin
 
-    if page.startswith(("http://", "https://", "file:")):
-        return page
+    page = (page or "").strip()
+    why = url_problem(page)
+    if why:
+        raise ValueError(why)
+    if page.lower().startswith(("http://", "https://")):
+        return _encode(page)
     if not page:
         return base or (work / "index.html").as_uri()
-    if base.startswith(("http://", "file:")):
-        return urljoin(base, page.lstrip("/") if base.startswith("file:") else "/" + page.lstrip("/"))
+    rel = _encode(page.lstrip("/"))
+    if base.startswith("http://"):
+        return urljoin(base, "/" + rel)
+    if base.startswith("file:"):
+        return urljoin(base, rel)
     return (work / page.lstrip("/")).as_uri()
 
 
+def edge_command(edge: str, profile: Path, url: str) -> str:
+    """Командная строка Edge: аргументы по правилам Windows, после «--» — только адрес (ключом он не станет)."""
+    import subprocess
+
+    return subprocess.list2cmdline([edge, f"--user-data-dir={profile}", "--no-first-run", "--no-default-browser-check",
+                                    "--disable-features=msEdgeFirstRunExperience,msImplicitSignin",
+                                    "--window-size=1200,800", "--new-window", "--", url])
+
+
+def runs_root() -> Path:
+    return Path(os.environ.get("USERPROFILE", str(Path.home()))) / "AppData" / "LocalLow" / "ForLabs" / "runs"
+
+
 def run_dir(base: Path | None = None) -> Path:
-    """Папка запуска с меткой Low: программа с пониженными правами может писать только сюда (и в LocalLow)."""
-    root = base or Path(os.environ.get("USERPROFILE", str(Path.home()))) / "AppData" / "LocalLow" / "ForLabs" / "runs"
+    """Папка запуска с меткой Low: программа с пониженными правами может писать только сюда (и в LocalLow).
+    Заодно убираются папки прошлых запусков старше суток (если что-то не удалилось сразу)."""
+    root = base or runs_root()
+    try:
+        cutoff = time.time() - 86400
+        for old in root.iterdir() if root.is_dir() else []:
+            if old.is_dir() and old.stat().st_mtime < cutoff:
+                shutil.rmtree(old, ignore_errors=True)
+    except OSError:
+        pass
     d = root / uuid.uuid4().hex[:10]
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def _drop_run(path: Path | None) -> None:
+    """Папка запуска больше не нужна (программа закрыта): копия проекта и профиль браузера — удалить."""
+    if path is None:
+        return
+    root = runs_root()
+    for p in [path, *path.parents]:
+        if p.parent == root:
+            for _ in range(5):  # процессы закрываются не мгновенно — файлы могут быть ещё заняты
+                shutil.rmtree(p, ignore_errors=True)
+                if not p.exists():
+                    return
+                time.sleep(0.4)
+            return
 
 
 def _texts_with_timeout(hwnd: int, timeout: float = 8.0) -> str:
@@ -210,6 +281,8 @@ class WindowsShooter:
             return ShotResult(True, image=out, seen=seen)
         finally:
             app.close()
+            if self.low:
+                _drop_run(work)
 
     # --- оконная программа ---
     def _window(self, target: RunTarget, work: Path, shot, out: Path) -> ShotResult:
@@ -258,6 +331,8 @@ class WindowsShooter:
             return ShotResult(True, image=out, seen=seen)
         finally:
             app.close()
+            if self.low:
+                _drop_run(work)
 
     # --- сайт ---
     def _browser(self, target: RunTarget, shot, out: Path) -> ShotResult:
@@ -275,11 +350,15 @@ class WindowsShooter:
                                                                         for a in target.server]),
                                   str(work), low=self.low, hidden=True)
             time.sleep(1.5)
-        url = browser_url(_get(shot, "url") or "", target.url or "", work)
-        profile = run_dir() / "edge"
-        cmd = (f'"{edge}" --user-data-dir="{profile}" --no-first-run --no-default-browser-check '
-               f'--disable-features=msEdgeFirstRunExperience,msImplicitSignin --window-size=1200,800 --new-window "{url}"')
-        app = winapi.spawn(cmd, str(work), low=False, max_processes=64, memory_mb=4096)
+        try:
+            url = browser_url(_get(shot, "url") or "", target.url or "", work)
+        except ValueError as e:
+            if server is not None:
+                server.close()
+            return ShotResult(False, reason=str(e))
+        profile_dir = run_dir()
+        profile = profile_dir / "edge"
+        app = winapi.spawn(edge_command(edge, profile, url), str(work), low=False, max_processes=64, memory_mb=4096)
         try:
             w = winapi.wait_window({app.pid}, self.timeout, lambda x: "Edge" in x.title)
             if not w:
@@ -319,5 +398,6 @@ class WindowsShooter:
             app.close()
             if server is not None:
                 server.close()
-            subprocess.run(["taskkill", "/F", "/T", "/FI", f"WINDOWTITLE eq {profile}"], capture_output=True,
-                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            _drop_run(profile_dir)
+            if target.server and self.low:
+                _drop_run(work)

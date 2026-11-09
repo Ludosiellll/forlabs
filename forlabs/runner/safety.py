@@ -69,7 +69,9 @@ RULES: list[tuple[str, str, str]] = [
 
     ("cs", r"\bAssembly\s*\.\s*(?:Load\w*|UnsafeLoadFrom)\b|\bExecuteAssembly\b|\bCSharpCodeProvider\b|"
            r"\bCompileAssemblyFrom\w+|\bCSharpScript\b", CODE),
-    ("py", r"(?<![\w.])(?:eval|exec)\s*\(|\b__import__\b|\bimportlib\b", CODE),
+    ("py", r"(?<![\w.])(?:eval|exec)\s*\(|\b__import__\b|\bimportlib\b|\b__builtins__\b|"
+           r"\bimport\s+builtins\b|\bfrom\s+builtins\b|\b(?:globals|vars|locals)\s*\(\s*\)\s*\[|"
+           r"\b__(?:subclasses|globals|code|loader|spec)__\b|\bgetattr\s*\(\s*(?:__builtins__|builtins|sys|os)\b", CODE),
     ("java", r"\bURLClassLoader\b|\bdefineClass\b|\bScriptEngine(?:Manager)?\b|\bgetSystemJavaCompiler\b", CODE),
     ("js", r"(?<![\w.$])eval\s*\(|\bnew\s+Function\s*\(", CODE),
     ("php", r"(?<![\w>:$])(?:eval|create_function)\s*\(", CODE),
@@ -140,7 +142,7 @@ SQL_RULES = [
     (r"`?\bmysql`?\s*\.\s*`?\w+|\bUSE\s+`?mysql`?\s*(?:;|$)", SQL_SYSTEM),
     (r"\bLOAD\s+DATA\s+(?:LOW_PRIORITY\s+|CONCURRENT\s+)?(?:LOCAL\s+)?INFILE\b|\bLOAD_FILE\s*\(|"
      r"\bINTO\s+(?:OUT|DUMP)FILE\b", SQL_FILES),
-    (r"\bSET\s+(?:GLOBAL|PERSIST(?:_ONLY)?)\s+\w+\s*=|\bSET\s+@@(?:global|persist)|^\s*SHUTDOWN\s*(?:;|$)|"
+    (r"\bSET\s+(?:GLOBAL|PERSIST(?:_ONLY)?)\s+\w+\s*:?=|\bSET\s+@@(?:global|persist)|^\s*SHUTDOWN\s*(?:;|$)|"
      r"\bINSTALL\s+(?:PLUGIN|COMPONENT)\b|\bSONAME\b", SQL_SERVER),
 ]
 
@@ -241,7 +243,11 @@ def lex(text: str, lang: str) -> tuple[str, list]:
         elif t == "/*":
             e = text.find("*/", s + 2)
             i = len(text) if e < 0 else e + 2
-            put("\n" * text.count("\n", s, i))
+            if lang == "sql" and text.startswith("/*!", s):  # «исполняемый комментарий» MySQL — это код
+                body = text[s + 3:(e if e >= 0 else len(text))]
+                put(" " + re.sub(r"^\d{5,6}", "", body) + " ")
+            else:
+                put("\n" * text.count("\n", s, i))
         elif t == "<<<":
             h = HEREDOC.match(text, s)
             if not h:
