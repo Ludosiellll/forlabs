@@ -43,7 +43,7 @@
     {% if labs %}
     <div class="table-wrap">
       <table class="t">
-        <thead><tr><th>№</th><th>Тема</th><th>Статус</th><th>Изменена</th></tr></thead>
+        <thead><tr><th>№</th><th>Тема</th><th>Статус</th><th>Изменена</th><th><span class="visually-hidden">Удалить</span></th></tr></thead>
         <tbody>
         {% for l in labs %}
           {% set url = '/labs/' ~ q(l.profile_id) ~ '/' ~ q(l.subject_id) ~ '/' ~ q(l.number) %}
@@ -52,6 +52,12 @@
             <td>{{ l.topic or 'Методичка ещё не разобрана' }}</td>
             <td><span class="status s-{{ l.status }}">{{ STATUS_RU[l.status] }}</span></td>
             <td class="muted nowrap small">{{ l.updated_at[:16].replace('T', ' ') }}</td>
+            <td class="nowrap row-actions" onclick="event.stopPropagation()">
+              <form method="post" action="{{ url }}/delete" onclick="event.stopPropagation()"
+                    onsubmit="return confirm('Удалить ЛР {{ l.number }}? Отчёт, снимки и чат в ForLabs удалятся. Файлы в папке сдачи (документ, проект) останутся.')">
+                <button class="btn link small danger-link" type="submit" aria-label="Удалить ЛР {{ l.number }}">Удалить</button>
+              </form>
+            </td>
           </tr>
         {% endfor %}
         </tbody>

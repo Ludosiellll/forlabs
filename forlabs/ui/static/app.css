@@ -421,3 +421,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .tool-link input[type=url] { flex: 1 1 260px; min-width: 0; }
 .tool-missing { border: 1px solid var(--warn-line); background: var(--warn-soft); border-radius: var(--radius); padding: 0 14px 10px; margin: 8px 0; }
 .tool-missing .tool { border-top: 0; }
+
+table.t td.row-actions { width: 1%; text-align: right; }
+.btn.link.danger-link { color: var(--muted); }
+.btn.link.danger-link:hover, .btn.link.danger-link:focus-visible { color: var(--err); }

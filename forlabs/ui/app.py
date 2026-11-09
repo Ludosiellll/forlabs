@@ -920,10 +920,15 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
 
     @app.post("/labs/{p}/{s}/{n}/delete")
     def lab_delete(p: str, s: str, n: str):
+        back = f"/?profile={_q(p)}&subject={_q(s)}"
         if busy_lab(p, s, n):
-            return redirect(lab_url(p, s, n), err=BUSY)
-        ctx.store.delete_lab(p, s, n)
-        return redirect(f"/?profile={_q(p)}&subject={_q(s)}", msg="Лаба удалена")
+            return redirect(back, err=f"ЛР {n} сейчас выполняется — удалить можно, когда она закончит")
+        try:
+            ctx.store.delete_lab(p, s, n)
+        except OSError:  # отчёт открыт в Word или снимок — в просмотрщике: Windows не даёт удалить
+            return redirect(back, err=f"ЛР {n} не удалилась: закрой её отчёт и снимки в других программах и "
+                                      "попробуй снова")
+        return redirect(back, msg=f"ЛР {n} удалена")
 
     @app.get("/labs/{p}/{s}/{n}/docx")
     def lab_docx(p: str, s: str, n: str):
