@@ -198,9 +198,21 @@ jobs:
           name: ForLabsSetup
           path: build/ForLabsSetup.exe
           retention-days: 14
+      - name: Версия для выпуска
+        id: ver
+        shell: pwsh
+        run: |
+          $ver = python -c "from forlabs.version import __version__ as v; print(v)"
+          "tag=v$ver" >> $env:GITHUB_OUTPUT
+          $exists = git ls-remote --tags origin "refs/tags/v$ver"
+          if ($exists) { "exists=true" >> $env:GITHUB_OUTPUT } else { "exists=false" >> $env:GITHUB_OUTPUT }
+      # выпуск: по тегу v* или при новой версии в main (тег и релиз создаёт сама сборка)
       - name: Выпуск
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || (github.ref == 'refs/heads/main' && steps.ver.outputs.exists != 'true')
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || steps.ver.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: ForLabs ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || steps.ver.outputs.tag }}
           files: build/ForLabsSetup.exe
           generate_release_notes: true
