@@ -372,3 +372,8 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .update-bar { display: block; height: 100%; width: 0; background: var(--accent); transition: width 300ms ease; }
 .update-actions { display: flex; justify-content: flex-end; gap: 8px; }
 @media (max-width: 420px) { .update-toast { right: 16px; left: 16px; bottom: 16px; width: auto; } }
+
+.tg-check { list-style: none; padding: 0; margin: 4px 0 12px; font-size: 13.5px; }
+.tg-check li { margin: 3px 0; }
+.tg-check li.ok { color: var(--ok); }
+.tg-check li.bad { color: var(--err); }

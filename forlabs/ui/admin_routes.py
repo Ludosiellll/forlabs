@@ -245,7 +245,13 @@ def register_admin(app: FastAPI, ctx, render, redirect) -> None:
                          "seen": ago(m.last_seen_at)})
         active = sum(1 for m in ov.members if m.access_state in ("active", "expiring", "unlimited"))
         shared = ctx.store.admin_shared_key()
-        return render(request, "admin.html", nav="admin", me=me, rows=rows, active=active,
+        try:  # не подключён Telegram — сообщения студентов не доходят до администратора, видно сразу
+            from forlabs.cloud.support import Support
+
+            telegram_ok = Support(ctx.store).status()[0]
+        except Exception:
+            telegram_ok = None
+        return render(request, "admin.html", nav="admin", me=me, rows=rows, active=active, telegram_ok=telegram_ok,
                       shared_key=shared, shared_set=date_ru(shared[1]) if shared and shared[1] else "",
                       total_30=sum(ov.usage_30d.values()), labs_30=len(labs_30),
                       final_30=sum(1 for lab in labs_30 if lab.status == "final"),

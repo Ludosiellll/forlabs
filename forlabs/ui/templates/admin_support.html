@@ -19,18 +19,16 @@
     <h1>Поддержка</h1>
     <section class="box tg-box" aria-labelledby="tg-h">
       <h2 id="tg-h">Telegram</h2>
-      {% if telegram %}
-        <p class="small">Telegram подключён{% if bot %} (бот @{{ bot }}){% endif %}: сообщения студентов приходят туда, отвечай реплаем.</p>
-      {% else %}
-        <p class="small">Telegram не подключён, сообщения видны только здесь.</p>
-      {% endif %}
+      <ul class="tg-check" data-tg-check="/admin/support/check" data-bound="{{ '1' if telegram else '0' }}"{{ ' data-wait' if setup }}>
+        <li class="{{ 'ok' if telegram else 'bad' }}">{{ 'Telegram подключён' if telegram else 'Telegram не подключён' }}{% if telegram and bot %}: бот @{{ bot }}{% endif %}</li>
+      </ul>
       {% if setup %}
-        <p class="small">Открой ссылку в Telegram и нажми «Start», бот запомнит этот чат. Ссылка действует 30 минут:<br>
-          <a href="{{ setup.link }}" target="_blank" rel="noopener">{{ setup.link }}</a></p>
+        <p><a class="btn primary" href="{{ setup.link }}" target="_blank" rel="noopener">Открыть бота в Telegram</a></p>
+        <p class="small">Нажми там «Запустить» — страница сама увидит подключение. Ссылка действует 30 минут.</p>
       {% endif %}
       {% if setup_error %}<div class="flash err" role="alert">{{ setup_error }}</div>{% endif %}
-      <form method="post" action="/admin/support/setup"><button class="btn small" type="submit">{{ 'Переподключить Telegram' if telegram else 'Подключить Telegram' }}</button></form>
-      <p class="hint">Бот создаётся в @BotFather; его токен и секрет вебхука хранятся в Supabase (Edge Functions → Secrets), не в программе.</p>
+      <form method="post" action="/admin/support/setup"><button class="btn small{{ '' if telegram else ' primary' }}" type="submit">{{ 'Переподключить Telegram' if telegram else 'Подключить Telegram' }}</button></form>
+      <p class="hint">Токен бота от @BotFather хранится в Supabase: Edge Functions → Secrets → TELEGRAM_BOT_TOKEN.</p>
     </section>
     {% if thread %}{% set m = members.get(thread) %}
     <section class="chat support" aria-label="Переписка" data-support-refresh="/admin/support/{{ thread }}/log">

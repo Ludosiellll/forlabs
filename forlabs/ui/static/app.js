@@ -315,3 +315,27 @@ window.addEventListener("pageshow", function () {
     });
   }
 })();
+
+// проверка Telegram-бота в «Админ → Поддержка»: по пунктам, а после ссылки ждёт «Запустить» и сам обновляет страницу
+(function () {
+  var box = document.querySelector("[data-tg-check]");
+  if (!box) return;
+  var wasBound = box.getAttribute("data-bound") === "1", tries = 0;
+  function load() {
+    fetch(box.getAttribute("data-tg-check"), { credentials: "same-origin" })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        box.innerHTML = "";
+        (d.items || []).forEach(function (i) {
+          var li = document.createElement("li");
+          li.className = i.ok ? "ok" : "bad";
+          li.textContent = (i.ok ? "✓ " : "✗ ") + i.text;
+          box.appendChild(li);
+        });
+        if (d.bound && !wasBound) { location.reload(); return; }
+        if (!d.bound && box.hasAttribute("data-wait") && ++tries < 200) setTimeout(load, 3000);
+      })
+      .catch(function () { if (box.hasAttribute("data-wait") && ++tries < 200) setTimeout(load, 5000); });
+  }
+  load();
+})();

@@ -7,6 +7,8 @@
   {% if not cloud %}
     <p class="muted">Поддержка работает только в облачном режиме (вход по e-mail). Режим меняется в «Настройках».</p>
   {% else %}
+    {% if admin_here %}<div class="notice">Это страница студента. Переписки со студентами и подключение Telegram —
+      в <a href="/admin/support">Админ → Поддержка</a>.</div>{% endif %}
     <p class="muted">Напиши, что случилось или что нужно, например продлить доступ. Администратор ответит здесь.</p>
     {% if load_error %}<div class="flash err" role="alert">{{ load_error }}</div>{% endif %}
     <section class="chat support" aria-label="Переписка с поддержкой" data-support-refresh="/support/log">

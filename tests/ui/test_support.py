@@ -184,3 +184,15 @@ def test_admin_bot_check_explains_each_problem(admin, fake):
     fake.support_check = {"secrets": False, "bound": False, "code_active": False}
     bad = " ".join(i["text"] for i in admin.get("/admin/support/check").json()["items"] if not i["ok"])
     assert "TELEGRAM_BOT_TOKEN" in bad
+
+
+def test_telegram_connection_is_easy_to_find(admin, fake):
+    page = admin.get("/admin/support").text
+    assert 'data-tg-check="/admin/support/check"' in page  # живая проверка бота на странице
+    page = admin.post("/admin/support/setup").text
+    assert "Открыть бота в Telegram" in page and "data-wait" in page  # ждёт «Запустить» и сам увидит подключение
+    assert "Telegram не подключён" in admin.get("/admin").text and 'href="/admin/support"' in admin.get("/admin").text
+    student_page = admin.get("/support").text  # администратор открыл студенческую «Поддержку»
+    assert "Админ → Поддержка" in student_page and 'href="/admin/support"' in student_page
+    fake.support_bound = True
+    assert "Telegram не подключён" not in admin.get("/admin").text

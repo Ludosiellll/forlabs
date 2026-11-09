@@ -68,7 +68,8 @@ def register_support(app: FastAPI, ctx, render, redirect) -> None:
             messages = my_messages(sup)
         except CloudError as e:
             return render(request, "support.html", nav="support", messages=[], cloud=True, load_error=e.message_ru)
-        return render(request, "support.html", nav="support", messages=messages, cloud=True, support_unread=0)
+        return render(request, "support.html", nav="support", messages=messages, cloud=True, support_unread=0,
+                      admin_here=is_admin())
 
     @app.post("/support")
     async def support_send(text: str = Form(""), images: list[UploadFile] | None = File(None)):

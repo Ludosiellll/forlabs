@@ -4,6 +4,8 @@
 <main class="page admin" data-balances="/admin/balances">
   {% include "_flash.html" %}
   <div class="row"><h1>Админ</h1><span class="spacer"></span><a class="btn small" href="/admin/support">Поддержка</a></div>
+  {% if telegram_ok is false %}<div class="notice warn">Telegram не подключён: сообщения студентов видны только в «Поддержке».
+    <a href="/admin/support">Подключить</a></div>{% endif %}
   <p class="muted">Цифры — за последние 30 дней.</p>
 
   <div class="admin-setup">
