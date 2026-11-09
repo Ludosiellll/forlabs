@@ -188,6 +188,11 @@ class LLM:
             if expired:
                 raise LLMError("access", detail, f"Подписка закончилась {_minsk_date(expired.group(1))} — напиши "
                                                  "администратору, чтобы он её продлил.")
+            if "too many parallel requests" in low:  # уже идут 4 запроса — подождать и повторить
+                raise LLMError("quota", detail, RATE_LIMIT_MESSAGE, retryable=True, retry_after=20)
+            if "request too large" in low:
+                raise LLMError("bad_response", detail, "Методичка слишком большая для модели — оставь в файле только "
+                                                       "страницы своей лабы.")
             daily = re.search(r"daily token limit:\s*(\d+)", detail)
             if daily:
                 n = f"{int(daily.group(1)):,}".replace(",", " ")

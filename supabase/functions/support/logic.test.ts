@@ -1,7 +1,7 @@
 // Запуск: node --experimental-strip-types --test supabase/functions/support/logic.test.ts
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cleanText, forOwner, telegramAction } from "./logic.ts";
+import { cleanText, forOwner, telegramAction, validImagePath } from "./logic.ts";
 
 const OWNER = 555;
 const msg = (m: Record<string, unknown>) => ({ update_id: 1, message: { message_id: 10, chat: { id: OWNER }, ...m } });
@@ -63,4 +63,13 @@ test("ответ владельца фото с подписью — студе�
 
 test("фото не реплаем — подсказка", () => {
   assert.deepEqual(telegramAction(msg({ photo: [{ file_id: "x" }] }), OWNER), { kind: "hint", chatId: OWNER });
+});
+
+test("путь фото студента: только своя папка, без обходов через %2e%2e и подпапки", () => {
+  const uid = "11111111-2222-4333-8444-555555555555";
+  assert.equal(validImagePath(uid, `${uid}/a1b2c3d4e5f6.jpg`), true);
+  for (const bad of [`${uid}/%2e%2e/x/tg-5.jpg`, `${uid}/../x.jpg`, `${uid}/sub/a.jpg`, `other/a.jpg`, `${uid}/`,
+                     `${uid}/a b.jpg`, `${uid}/.`, `${uid}/..`]) {
+    assert.equal(validImagePath(uid, bad), false, bad);
+  }
 });

@@ -14,6 +14,9 @@ const TRIAL_CALLS_PER_LAB = Number(Deno.env.get("TRIAL_CALLS_PER_LAB") ?? "120")
 // для всех: токенов в день на человека (если в карточке не задан свой) и запросов на одну лабу
 const DAILY_TOKENS = Number(Deno.env.get("DAILY_TOKENS") ?? "1000000") || 1000000;
 const LAB_CALLS_LIMIT = Number(Deno.env.get("LAB_CALLS_LIMIT") ?? "300") || 300;
+const MAX_PARALLEL = 4;          // одновременно в работе на человека
+const MAX_TOKENS_CAP = 8000;     // предел ответа (как в программе)
+const MAX_BODY_CHARS = 600_000;  // методичка 30 тыс. символов + правила + отчёт — с большим запасом
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, {
   auth: { persistSession: false },
 });
@@ -125,6 +128,11 @@ Deno.serve(async (req: Request) => {
   if (!MODELS.includes(model)) return err(403, `model_not_allowed: ${model}`);
   body.model = model;
   body.stream = false;
+  const asked = Number(body.max_tokens ?? MAX_TOKENS_CAP);
+  body.max_tokens = Number.isFinite(asked) && asked > 0 ? Math.min(asked, MAX_TOKENS_CAP) : MAX_TOKENS_CAP;
+  const bodyChars = JSON.stringify(body.messages ?? "").length;
+  if (bodyChars > MAX_BODY_CHARS) return err(413, "request too large");
+  const estTokens = Math.ceil(bodyChars / 3) + (body.max_tokens as number);
 
   // лимиты (день, лаба, пробный доступ): проверка и бронь запроса атомарно в базе (usage_begin, миграция 0008)
   let reserved: number | null = null;
@@ -132,6 +140,7 @@ Deno.serve(async (req: Request) => {
     const { data: rows, error: limitErr } = await admin.rpc("usage_begin", {
       target: user.id, cur_lab: lab, cur_chat: chat, req_model: model,
       default_daily: DAILY_TOKENS, lab_calls: LAB_CALLS_LIMIT, trial_calls: TRIAL_CALLS_PER_LAB,
+      est_tokens: estTokens, max_parallel: MAX_PARALLEL,
     });
     if (limitErr) return err(500, `usage_begin: ${limitErr.message}`);
     const t = ((rows ?? []) as { ok: boolean; message: string; usage_id: number | null }[])[0];

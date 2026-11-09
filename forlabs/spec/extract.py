@@ -56,6 +56,16 @@ class RawSpec(BaseModel):
     variants: list[VariantPick] = Field(default_factory=list)
     questions: list[str] = Field(default_factory=list)
 
+    @field_validator("kind", mode="before")
+    @classmethod
+    def _kind(cls, v):  # null и всё непонятное — лаба (сомневаешься — не отказывать)
+        return "not_lab" if str(v or "").strip().lower() == "not_lab" else "lab"
+
+    @field_validator("not_lab_reason", mode="before")
+    @classmethod
+    def _reason(cls, v):
+        return "" if v is None else str(v)
+
     @field_validator("number", mode="before")
     @classmethod
     def _num(cls, v):

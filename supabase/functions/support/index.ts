@@ -5,7 +5,7 @@
 //   POST /support/telegram          — вебхук Telegram: привязка владельца и его ответы реплаем
 // Секреты: TELEGRAM_BOT_TOKEN (от @BotFather), TELEGRAM_WEBHOOK_SECRET (любая длинная случайная строка).
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
-import { cleanText, forOwner, telegramAction } from "./logic.ts";
+import { cleanText, forOwner, telegramAction, validImagePath } from "./logic.ts";
 
 const BOT = Deno.env.get("TELEGRAM_BOT_TOKEN") ?? "";
 const SECRET = Deno.env.get("TELEGRAM_WEBHOOK_SECRET") ?? "";
@@ -92,7 +92,7 @@ async function send(req: Request): Promise<Response> {
   const body = await req.json().catch(() => ({})) as { text?: unknown; images?: unknown };
   const text = cleanText(body.text) ?? "";
   const images = Array.isArray(body.images) ? body.images.filter((p): p is string => typeof p === "string") : [];
-  if (images.length > 4 || images.some((p) => !p.startsWith(`${who.user.id}/`) || p.includes(".."))) {
+  if (images.length > 4 || images.some((p) => !validImagePath(who.user.id, p))) {
     return err(400, "bad image");
   }
   if (!text && !images.length) return err(400, "empty message");

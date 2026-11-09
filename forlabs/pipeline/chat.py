@@ -62,8 +62,11 @@ class EditPlan(BaseModel):
     def _type_alias(cls, v):  # модель иногда пишет type вместо kind
         if isinstance(v, dict) and "kind" not in v and "type" in v:
             v = {**v, "kind": v["type"]}
-        if isinstance(v, dict) and v.get("kind") not in ("edit", "answer", "question", "offtopic"):
-            v = {**v, "kind": "question"}
+        if isinstance(v, dict):
+            kind = str(v.get("kind") or "").strip().lower()
+            if kind not in ("edit", "answer", "question", "offtopic"):  # непонятное: есть правки — правка
+                kind = "edit" if (v.get("tasks") or v.get("questions") or v.get("conclusion")) else "question"
+            v = {**v, "kind": kind, "profile": v.get("profile") if isinstance(v.get("profile"), list) else []}
         return v
 
     profile: list[dict] = Field(default_factory=list)  # [{"field": "teacher", "value": "…"}]
@@ -153,7 +156,7 @@ def _outline(st: LabState, limit: int = 220) -> str:
 
 
 ANSWER_LIMIT = 1200  # ответ на вопрос в чате правок — коротко, длинный текст из чата не вытянуть
-PLAN_MAX_TOKENS = 2000
+PLAN_MAX_TOKENS = 4000  # план копирует текст варианта дословно — длинному варианту нужен запас
 
 
 def _profile_now(profile: Profile, enrollment) -> str:
@@ -188,10 +191,10 @@ def profile_changes(raw: list[dict], profile: Profile, enrollment) -> list[Profi
             if not value:
                 continue
         if field in ("variant", "workplace"):
-            digits = "".join(ch for ch in value if ch.isdigit())
-            if not digits or not 1 <= int(digits) <= 999:
-                continue
-            value = str(int(digits))
+            numbers = re.findall(r"\d+", value)
+            if len(numbers) != 1 or "." in value or "," in value or not 1 <= int(numbers[0]) <= 999:
+                continue  # «12.5», «3 или 4» — не номер варианта
+            value = str(int(numbers[0]))
         holder = profile if field in ("full_name", "title_name", "gender", "group") else enrollment
         old = getattr(holder, field, None) if holder is not None else None
         old = "" if old is None else str(old)

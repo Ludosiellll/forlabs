@@ -29,6 +29,7 @@ def _not_ready(e: CloudError) -> bool:
 
 
 MAX_IMAGES = 4
+MAX_PIXELS = 40_000_000
 MAX_IMAGE_BYTES = 15_000_000
 BUCKET = "support"
 _PATH = re.compile(r"^[0-9a-fA-F-]{36}/[A-Za-z0-9._-]{1,80}$")
@@ -40,10 +41,19 @@ def to_jpeg(data: bytes) -> bytes:
 
     try:
         img = Image.open(io.BytesIO(data))
+        if img.width * img.height > MAX_PIXELS:  # до распаковки: огромная картинка съела бы память
+            raise ValueError("Картинка слишком большая — сделай снимок поменьше (до 40 мегапикселей)")
+        img.draft("RGB", (2560, 2560))  # JPEG: сразу уменьшенный
         img.load()
-    except (UnidentifiedImageError, OSError, ValueError) as e:
+    except ValueError:
+        raise
+    except Image.DecompressionBombError as e:
+        raise ValueError("Картинка слишком большая — сделай снимок поменьше (до 40 мегапикселей)") from e
+    except (UnidentifiedImageError, OSError) as e:
         raise ValueError("Это не картинка — прикрепи снимок экрана или фото (PNG, JPEG)") from e
     img = ImageOps.exif_transpose(img)
+    if img.mode in ("I;16", "I;16B", "I;16L", "I"):  # 16-битный серый: иначе получится белый лист
+        img = img.point(lambda v: v / 256).convert("L")
     if img.mode in ("RGBA", "LA", "P"):
         img = img.convert("RGBA")
         bg = Image.new("RGB", img.size, (255, 255, 255))
@@ -94,9 +104,9 @@ class Support:
     # студент
     def messages(self, uid: str | None = None) -> list[SupportMessage]:
         try:
-            rows = self.s._rest("GET", "support_messages", params={
-                "select": "*", "user_id": f"eq.{uid or self.s.auth.user_id}", "order": "created_at.asc",
-                "limit": "500"}).json()
+            rows = self.s._rest("GET", "support_messages", params={  # последние 500, по порядку
+                "select": "*", "user_id": f"eq.{uid or self.s.auth.user_id}", "order": "created_at.desc",
+                "limit": "500"}).json()[::-1]
         except CloudError as e:
             if _not_ready(e):
                 raise CloudError(NOT_READY, e.detail) from e
@@ -171,8 +181,8 @@ class Support:
 
     def reply(self, uid: str, text: str, images: list[bytes] | None = None) -> None:
         paths = self._upload(uid, images or [], "admin-") if images else []
-        self.s._rest("POST", "support_messages", json={"user_id": uid, "from_admin": True, "text": text,
-                                                       "images": paths},
+        row = {"user_id": uid, "from_admin": True, "text": text, **({"images": paths} if paths else {})}
+        self.s._rest("POST", "support_messages", json=row,
                      prefer="return=minimal", retries=False)  # повтор вставки после обрыва задвоил бы ответ
 
     def admin_mark_read(self, uid: str) -> None:

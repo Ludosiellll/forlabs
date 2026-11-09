@@ -30,3 +30,9 @@ def test_admin_sets_and_clears_daily_limit(admin, fake):
 def test_card_shows_daily_limit_and_today_usage(admin, fake):
     page = admin.get(f"/admin/u/{M}").text
     assert 'name="daily"' in page and "1 000 000" in page and "сегодня" in page
+
+
+def test_parallel_and_too_large_are_handled():
+    e = _llm_error(403, "too many parallel requests")
+    assert e.retryable and e.retry_after == 20
+    assert "слишком большая" in _llm_error(413, "request too large").message_ru

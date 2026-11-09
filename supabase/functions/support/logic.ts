@@ -58,3 +58,9 @@ export function forOwner(name: string, email: string, text: string, status: stri
   const body = text.length > room ? text.slice(0, room - 1) + "…" : text;
   return head + body + tail;
 }
+
+/** Путь фото студента в бакете: ровно «<его id>/<имя>», имя без подпапок и спецсимволов (как в приложении). */
+export function validImagePath(uid: string, path: string): boolean {
+  const m = /^([0-9a-fA-F-]{36})\/([A-Za-z0-9._-]{1,80})$/.exec(path);
+  return !!m && m[1] === uid && m[2] !== "." && m[2] !== "..";
+}

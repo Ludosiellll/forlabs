@@ -23,7 +23,7 @@ def test_answer_is_short(tmp_home, tmp_path):
     pipe, fake, st = ready(tmp_home, tmp_path, [plan])
     st = pipe.chat(st, "а почему фон движется медленнее?")
     assert len(st.chat[-1].text) <= 1300
-    assert fake.max_tokens[-1] <= 2000  # из плана чата не вытянуть длинный текст
+    assert fake.max_tokens[-1] <= 4000  # план не длиннее (ответ на вопрос режет ANSWER_LIMIT)
 
 
 def test_profile_change_is_proposed_not_applied(tmp_home, tmp_path):

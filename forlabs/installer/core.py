@@ -366,13 +366,15 @@ def delayed_delete_command(target: Path, pid: int) -> list[str]:
     и пробелы в пути не ломают команду."""
     import base64
 
-    path = str(target).replace("'", "''")
+    path = str(target)
+    for q in ("'", "\u2018", "\u2019", "\u201a", "\u201b"):  # PowerShell считает кавычкой и «умные» апострофы
+        path = path.replace(q, q + q)
     script = (
         f"$p = '{path}'; $log = Join-Path $env:TEMP 'ForLabsUninstall.log'\n"
         f"\"start $(Get-Date -Format o) wait={int(pid)}\" | Out-File $log -Encoding utf8\n"
         f"Wait-Process -Id {int(pid)} -ErrorAction SilentlyContinue\n"
         # помощники ForLabs из этой папки (драйвер браузера для схем и т. п.) держат файлы — закрыть их
-        "Get-Process | Where-Object { $_.Path -and $_.Path.StartsWith($p, [StringComparison]::OrdinalIgnoreCase) } |"
+        "Get-Process | Where-Object { $_.Path -and $_.Path.StartsWith($p + '\\', [StringComparison]::OrdinalIgnoreCase) } |"
         " Stop-Process -Force -ErrorAction SilentlyContinue\n"
         "Start-Sleep -Milliseconds 700\n"
         "for ($i = 0; $i -lt 15; $i++) { Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue;"
