@@ -315,9 +315,8 @@ class WindowsShooter:
         tmp = root / ".tmp"
         tmp.mkdir(exist_ok=True)
         appcontainer.ensure_read(_tool_dirs(cmd, work))
-        script = console.console_script(cmd, work)
-        system = os.environ.get("SystemRoot", r"C:\Windows")
-        job = {"cmd": f'"{system}\\System32\\cmd.exe" /d /c "{script}"', "cwd": str(work), "sid": sid,
+        # без cmd.exe: в песочнице он отвечает «Access is denied»; кодировку ставит и окно держит сам помощник
+        job = {"cmd": self._line(cmd), "cwd": str(work), "sid": sid,
                "env": {**(target.env or {}), "TEMP": str(tmp), "TMP": str(tmp), "PYTHONNOUSERSITE": "1"},
                "internet": self._network, "title": target.title or (cmd[0] if cmd else "")}
         job_file = root / "console-host.json"
