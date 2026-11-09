@@ -22,3 +22,4 @@ build/
 *.build/
 *.onefile-build/
 payload.zip
+.claude/worktrees/

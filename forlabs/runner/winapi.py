@@ -117,12 +117,12 @@ class Window:
     cls: str
 
 
-def windows_of(pids: set[int]) -> list[Window]:
-    """Видимые окна верхнего уровня этих процессов."""
+def windows_of(pids: set[int], owned: bool = False) -> list[Window]:
+    """Видимые окна верхнего уровня этих процессов; owned=True — и подчинённые (MessageBox, диалоги)."""
     found: list[Window] = []
 
     def cb(hwnd, _):
-        if not user32.IsWindowVisible(hwnd) or user32.GetWindow(hwnd, GW_OWNER):
+        if not user32.IsWindowVisible(hwnd) or (not owned and user32.GetWindow(hwnd, GW_OWNER)):
             return True
         pid = wintypes.DWORD()
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
@@ -139,10 +139,10 @@ def windows_of(pids: set[int]) -> list[Window]:
     return found
 
 
-def wait_window(pids: set[int], timeout: float = 30.0, predicate=None) -> Window | None:
+def wait_window(pids: set[int], timeout: float = 30.0, predicate=None, owned: bool = False) -> Window | None:
     end = time.monotonic() + timeout
     while time.monotonic() < end:
-        wins = [w for w in windows_of(process_tree(pids)) if predicate is None or predicate(w)]
+        wins = [w for w in windows_of(process_tree(pids), owned) if predicate is None or predicate(w)]
         if wins:
             return wins[0]
         time.sleep(0.2)

@@ -177,7 +177,7 @@ class WindowsShooter:
                 return ShotResult(False, reason="окно программы не появилось" +
                                   (f" (программа завершилась с кодом {code})" if code is not None else ""))
             time.sleep(1.0)
-            before = {x.hwnd for x in winapi.windows_of(winapi.process_tree({app.pid}))}
+            before = {x.hwnd for x in winapi.windows_of(winapi.process_tree({app.pid}), owned=True)}
             ui_steps = []
             for step in _get(shot, "steps", None) or []:
                 action = _get(step, "action")
@@ -195,7 +195,7 @@ class WindowsShooter:
             if ui_steps:
                 uia.perform(w.hwnd, ui_steps)
             time.sleep(0.8)
-            wins = winapi.windows_of(winapi.process_tree({app.pid}))
+            wins = winapi.windows_of(winapi.process_tree({app.pid}), owned=True)
             fresh = [x for x in wins if x.hwnd not in before]  # MessageBox или новое окно после нажатия
             capture = _get(shot, "capture") or ("last" if fresh else "main")
             hwnd = fresh[-1].hwnd if capture == "last" and fresh else w.hwnd

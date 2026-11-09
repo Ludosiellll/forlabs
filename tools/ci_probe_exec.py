@@ -458,7 +458,7 @@ def c12():
         uia.perform(w.hwnd, [{"action": "set", "target": "inputA", "value": "12"},
                              {"action": "set", "target": "inputB", "value": "5"},
                              {"action": "click", "target": "calc"}])
-        box = winapi.wait_window({app.pid}, 10, lambda x: x.hwnd != w.hwnd)
+        box = winapi.wait_window({app.pid}, 10, lambda x: x.hwnd != w.hwnd, owned=True)
         if not box:
             raise RuntimeError("окно сообщения не появилось")
         res = {"box_title": box.title, "box_class": box.cls}
