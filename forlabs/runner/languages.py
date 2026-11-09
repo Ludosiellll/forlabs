@@ -270,9 +270,23 @@ def missing(plan: ProjectPlan, tools: Mapping[str, Toolchain]) -> list[str]:
 
 # ---------- файлы проекта ----------
 
+_TRANSLIT = dict(zip("абвгдеёжзийклмнопрстуфхцчшщъыьэюя",
+                     ["a", "b", "v", "g", "d", "e", "e", "zh", "z", "i", "y", "k", "l", "m", "n", "o", "p", "r", "s",
+                      "t", "u", "f", "kh", "ts", "ch", "sh", "shch", "", "y", "", "e", "yu", "ya"]))
+
+
+def _translit(name: str) -> str:
+    """«Калькулятор» → «Kalkulyator»: имя exe как дал бы студент, а не безликое program.exe."""
+    out = []
+    for ch in name:
+        t = _TRANSLIT.get(ch.lower())
+        out.append(ch if t is None else (t.capitalize() if ch.isupper() else t))
+    return "".join(out)
+
+
 def _ascii(name: str, default: str) -> str:
-    """Имя для go.mod и exe: только латиница, цифры и «_»."""
-    s = re.sub(r"[^A-Za-z0-9_]+", "_", name).strip("_")
+    """Имя для go.mod и exe: только латиница, цифры и «_» (русское название — транслитом)."""
+    s = re.sub(r"[^A-Za-z0-9_]+", "_", _translit(name)).strip("_")
     return s if s[:1].isalpha() else f"{default}_{s}".strip("_")
 
 

@@ -322,3 +322,10 @@ def test_build_reports_missing_tool(tmp_path):
     d = L.materialize(p, tmp_path / "g")
     r = L.build(d, p, {}, 30)
     assert not r.ok and "Go" in r.log and r.artifact is None
+
+
+def test_exe_named_after_project_not_program():
+    from forlabs.runner.languages import _ascii
+
+    assert _ascii("Массив", "program") == "Massiv" and _ascii("Учёт книг", "program") == "Uchet_knig"
+    assert _ascii("123", "program") == "program_123"
