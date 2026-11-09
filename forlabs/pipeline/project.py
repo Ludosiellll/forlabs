@@ -54,11 +54,12 @@ PROJECT_SYSTEM = """Ты собираешь из отчёта по лабора�
 Снимки — по одному на каждый рисунок-скриншот (section и block — номера из квадратных скобок). ForLabs запускает
 программу в Windows студента, проходит сценарий и проверяет, что на экране есть expect:
 - mode "console": input — что набрать на клавиатуре, каждая строка с \\n, ровно столько строк, сколько программа
-  прочитает (лишний Enter закроет окно консоли), в том формате, как читает код: «12 5\\n» — если два числа читаются
-  из одной строки, «12\\n5\\n» — если по одному. expect — короткий кусок строки, которую печатает сама программа:
-  подпись результата («Общая стоимость:») или подпись с числом, которое видно без расчётов; набранный ввод в expect
-  не включай. C# и Java в русской Windows читают и печатают дробные числа с запятой (2,5): в input для них бери
-  целые числа, дробных чисел в expect не ставь.
+  прочитает (лишний Enter закроет окно консоли; программа ничего не читает — input пустой), в том формате, как
+  читает код: «12 5\\n» — если два числа читаются из одной строки, «12\\n5\\n» — если по одному. expect — короткий кусок строки, которую печатает сама программа:
+  подпись результата («Общая стоимость:»). Сам ничего не считай: число, которое вычисляет программа, добавляй к
+  подписи, только если оно уже написано в тексте отчёта. Набранный ввод в expect не включай. C# и Java в русской
+  Windows читают и печатают дробные числа с запятой (2,5): в input для них бери целые числа, в expect дробное — с
+  запятой.
 - mode "window", WinForms и WPF: steps — {"action":"set","target":"имя поля","value":"12"},
   {"action":"select","target":"имя списка","value":"пункт"}, {"action":"click","target":"имя кнопки"},
   {"action":"check","target":"имя флажка"}, {"action":"wait","value":"1"}; target — Name элемента (WinForms) или
@@ -68,12 +69,16 @@ PROJECT_SYSTEM = """Ты собираешь из отчёта по лабора�
   {"action":"key","value":"tab|enter|space|esc"}, {"action":"wait","value":"1"}. Tab переходит по полям и кнопкам в
   порядке их создания, надписи пропускает. Swing: при запуске курсор уже в первом поле. tkinter: при запуске курсора
   нет нигде, первый шаг — key tab (если код не вызывает focus_set). Кнопку нажимает key space, когда до неё дошли
-  клавишей Tab; key enter — только если в коде Enter привязан (bind("<Return>", …), setDefaultButton).
+  клавишей Tab; key enter — только если в коде Enter привязан (bind("<Return>", …), setDefaultButton). Сначала
+  запиши в снимке "order" — по каким полям и кнопкам ходит Tab («Длина → Ширина → Вычислить»), и составь шаги по нему:
+  Swing — type 6, key tab, type 4, key tab, key space; tkinter — то же, но первым шагом key tab. Лишний Tab уводит с
+  кнопки обратно в первое поле.
 - mode "browser": url — путь страницы в проекте (index.html, form.php). ForLabs только открывает страницу (сайт на
   PHP — через встроенный сервер), шагов в браузере нет.
-- MySQL: ForLabs запускает консольный клиент mysql в папке проекта. Результат запросов — mode "console", input —
-  «source файл.sql\\n» (или сами запросы), expect — значение из результата. Скрипт должен выполняться повторно без
-  ошибок: перед CREATE DATABASE — DROP DATABASE IF EXISTS той же базы.
+- MySQL: ForLabs запускает консольный клиент mysql в папке проекта; базы на сервере может ещё не быть. Результат
+  запросов — mode "console", input — source каждого скрипта проекта по порядку: создание и заполнение, затем запрос
+  («source shop.sql\\nsource select.sql\\n»), или сами запросы; expect — значение из результата. Скрипты должны
+  выполняться повторно без ошибок: перед CREATE DATABASE — DROP DATABASE IF EXISTS той же базы.
 - mode "manual" + reason — только если снять может лишь студент: окно среды разработки, конструктора или
   обозревателя решений, phpMyAdmin, Блокнот и другие программы, страница после ввода данных или отправки формы.
 
@@ -107,6 +112,12 @@ MAX_PART_FILES = 12  # большой проект по частям: не бо�
 DATA_PREVIEW_LINES = 12  # начало файла данных от преподавателя в запросе: столбцы, разделитель, формат чисел
 HEADER = re.compile(r"\s*(?:import\s|using\s+[\w.=\s]+;|#\s*include\b|package\s|from\s+[\w.]+\s+import\s|"
                     r"require(?:_once)?\b|include(?:_once)?\b)")
+KEYBOARD = {  # чем программа читает клавиатуру (нет ни одного — сценарий ничего не набирает)
+    "python": r"\binput\s*\(|\bstdin\b", "cpp": r"\bcin\b|\bstdin\b|\b(?:scanf|getline|getchar|_?getch|gets)\b",
+    "csharp": r"Console\s*\.\s*Read", "java": r"System\s*\.\s*in\b|\b(?:Scanner|Console|BufferedReader)\b",
+    "javascript": r"\breadline\b|\bstdin\b|\bprompt\s*\(", "php": r"\bSTDIN\b|php://stdin|\b(?:readline|fscanf)\s*\(",
+    "go": r"\b(?:Scan\w*|Sscan\w*|Fscan\w*)\s*\(|\bStdin\b"}
+NUMBER = re.compile(r"-?\d+(?:[.,]\d+)?")
 NAME_BAD = re.compile(r'[\\/:<>"|?*«»\x00-\x1f]+')
 
 
@@ -188,6 +199,41 @@ def _plan_in_parts(user: str, llm) -> ProjectPlan:
     return head.model_copy(update={"files": [done[f.path] for f in head.files]})
 
 
+def _report_numbers(st: LabState) -> set[str]:
+    """Числа, которые есть в отчёте и данных лабы (в expect их можно не перепроверять)."""
+    texts = [st.spec.topic, *(t.text for t in st.spec.tasks), st.spec.variant_text or ""] if st.spec else []
+    for _, _, b in _blocks(st):
+        texts += [getattr(b, a, None) or "" for a in ("text", "code", "slot", "topic")]
+        texts += [str(x) for x in getattr(b, "items", None) or []]
+    texts += [m.text for m in st.materials]
+    return {n.replace(",", ".").lstrip("-") for t in texts for n in NUMBER.findall(t)}
+
+
+def _trusted_expects(plan: ProjectPlan, st: LabState) -> ProjectPlan:
+    """Число в expect, которого нет ни в отчёте, ни во вводе, модель посчитала сама — и может ошибиться в
+    арифметике. Тогда проверяется только подпись перед ним («Общая стоимость:»): снимок не теряется из-за счёта."""
+    known = _report_numbers(st)
+    shots = []
+    for sh in plan.shots:
+        typed = sh.input + " " + " ".join(step.value for step in sh.steps)
+        mine = known | {n.replace(",", ".").lstrip("-") for n in NUMBER.findall(typed)}
+        bad = next((m for m in NUMBER.finditer(sh.expect) if m[0].replace(",", ".").lstrip("-") not in mine), None)
+        shots.append(sh.model_copy(update={"expect": sh.expect[:bad.start()].rstrip(" -—=")}) if bad else sh)
+    return plan.model_copy(update={"shots": shots})
+
+
+def _quiet_console(plan: ProjectPlan) -> ProjectPlan:
+    """Программа не читает клавиатуру, а сценарий что-то набирает: в Windows этот Enter закрыл бы «pause» — и окно
+    консоли исчезло бы до снимка. Такой ввод убирается."""
+    reads = KEYBOARD.get(plan.language)
+    code = "\n".join(f.content for f in plan.files if Path(f.path).suffix.lower() in plan_rules.CODE_EXT[plan.language])
+    if reads is None or re.search(reads, code):
+        return plan
+    shots = [sh.model_copy(update={"input": "", "steps": [x for x in sh.steps if x.action not in ("type", "key")]})
+             if sh.mode == "console" else sh for sh in plan.shots]
+    return plan.model_copy(update={"shots": shots})
+
+
 def plan_project(st: LabState, llm, memory: str = "") -> ProjectPlan:
     user = lab_text(st) + (f"\n\nПамять предмета и требования:\n{memory[:6000]}" if memory.strip() else "")
     try:
@@ -197,7 +243,7 @@ def plan_project(st: LabState, llm, memory: str = "") -> ProjectPlan:
         if e.kind != "bad_response":  # сеть, ключ, лимит — части не помогут
             raise
         plan = _plan_in_parts(user, llm)  # ответ обрезан по длине или JSON не собрался
-    return _tidy(plan)
+    return _quiet_console(_trusted_expects(_tidy(plan), st))
 
 
 def fix_project(plan: ProjectPlan, log: str, llm) -> ProjectPlan:

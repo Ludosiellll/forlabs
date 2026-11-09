@@ -299,3 +299,36 @@ def test_static_page_opens_from_hand_in_folder(tmp_home, tmp_path, monkeypatch):
     assert s1.url == (folder / "about.html").as_uri() + "#contacts" and not s2.url  # без адреса — главная из t2.url
     for url in (t1.url, s1.url):
         assert "ForLabs" not in url and pipe.lab_dir(st).as_uri() not in url
+
+
+def test_expect_keeps_only_the_label_before_a_number_the_model_computed(tmp_home, tmp_path):
+    shots = [{**PLAN["shots"][0], "expect": "Сумма: 18.0"}, PLAN["shots"][1]]  # модель ошиблась в счёте
+    pipe, fake, st = make(tmp_home, tmp_path, [{**PLAN, "shots": shots}])
+    st = pipe.execute(st)
+    assert pipe.shooter.calls[0][1].expect == "Сумма:" and figures(st)[0].image_path
+
+
+def test_expect_numbers_from_report_or_input_stay():
+    from forlabs.core.models import Figure, LabSpec, LabState, ReportDoc, TaskSection
+    from forlabs.pipeline.project import _trusted_expects
+    from forlabs.runner.plan import ProjectPlan
+
+    st = LabState(profile_id="p", subject_id="psip", number="1",
+                  spec=LabSpec(subject_id="psip", number="1", date="", topic="Т", goal="Ц"),
+                  report=ReportDoc(lab_number="1", sections=[TaskSection(n=1, title="З", blocks=[
+                      Figure(topic="Результат", slot="введи 6 и 4; в кадре «S = 24,0»")])]))
+    plan = ProjectPlan.model_validate({**PLAN, "shots": [
+        {"section": 1, "block": 1, "mode": "console", "input": "6\n4\n", "expect": "S = 24.0"},
+        {"section": 1, "block": 1, "mode": "console", "input": "7\n", "expect": "Введено: 7"},
+        {"section": 1, "block": 1, "mode": "console", "input": "7\n", "expect": "Итого — 52 руб."}]})
+    assert [s.expect for s in _trusted_expects(plan, st).shots] == ["S = 24.0", "Введено: 7", "Итого"]
+
+
+def test_no_typing_into_a_program_that_reads_nothing(tmp_home, tmp_path):
+    quiet = "print(\"Сумма:\", 12 + 5)\n"
+    shots = [{**PLAN["shots"][0], "input": "\n", "expect": "Сумма:"}, PLAN["shots"][1]]
+    pipe, fake, st = make(tmp_home, tmp_path, [{**PLAN, "files": [{"path": "main.py", "content": quiet}],
+                                                "shots": shots}])
+    pipe.execute(st)
+    assert pipe.shooter.calls[0][1].input == ""  # лишний Enter закрыл бы «pause» и окно консоли
+    # программа с input() ввод сохраняет — см. test_project_built_shot_taken_and_copied_to_hand_in_folder
