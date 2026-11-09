@@ -6,7 +6,7 @@
 __pycache__/
 *.pyc
 .pytest_cache/
-build/
+/build/
 dist/
 *.egg-info/
 .forlabs-data/
@@ -17,7 +17,7 @@ dist/
 
 # создаётся при сборке exe (tools/embed_rules.py)
 forlabs/_embedded_rules.py
-build/
+/build/
 *.dist/
 *.build/
 *.onefile-build/
