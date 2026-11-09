@@ -14,3 +14,11 @@ dist/
 
 # служебные файлы браузерного инструмента
 .playwright-mcp/
+
+# создаётся при сборке exe (tools/embed_rules.py)
+forlabs/_embedded_rules.py
+build/
+*.dist/
+*.build/
+*.onefile-build/
+payload.zip

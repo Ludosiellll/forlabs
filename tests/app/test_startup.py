@@ -25,7 +25,11 @@ def test_server_starts_without_console(tmp_path):
         f"srv = build_server({free_port()}); srv.config.load()\n"
         f"open(r'{out}', 'w').write('ok')\n"
     )
+    import os
+
     env = {"FORLABS_HOME": str(tmp_path / "home"), "PATH": "/usr/bin:/bin"}
+    if sys.platform == "win32":  # без SystemRoot Python на Windows не поднимает сокеты и asyncio
+        env.update({k: os.environ[k] for k in ("SystemRoot", "SYSTEMROOT", "TEMP", "TMP", "PATH") if k in os.environ})
     subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env, timeout=60)
     assert out.exists(), "сервер не настроился без консоли"
     assert (tmp_path / "home" / "forlabs.log").exists()  # вывод ушёл в журнал

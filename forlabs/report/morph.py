@@ -20,7 +20,12 @@ _GENDER_TAG = {"m": "masc", "f": "femn"}
 
 @lru_cache(maxsize=1)
 def _morph() -> pymorphy3.MorphAnalyzer:
-    return pymorphy3.MorphAnalyzer()
+    try:  # путь к словарям явно: в собранном exe нет метаданных пакета, по которым pymorphy3 ищет словари
+        import pymorphy3_dicts_ru
+
+        return pymorphy3.MorphAnalyzer(path=pymorphy3_dicts_ru.get_path(), lang="ru")
+    except Exception:
+        return pymorphy3.MorphAnalyzer()
 
 
 def is_known_word(word: str) -> bool:

@@ -1,0 +1,11 @@
+<div class="chat-log" data-chat-log data-count="{{ messages|length }}">
+  {% for m in messages %}
+    <div class="msg {{ 'msg-assistant' if m.from_admin else 'msg-user' }}">
+      <div class="who-said">{% if admin_view %}{{ 'Ты' if m.from_admin else ((who.name if who else 'Студент')) }}{% else %}{{ 'Поддержка' if m.from_admin else 'Ты' }}{% endif %} · {{ m.created_at[:16].replace('T', ' ') }}</div>
+      {% if m.text %}<div class="txt">{{ m.text }}</div>{% endif %}
+      {% if m.images %}<div class="thumbs">{% for p in m.images %}<a href="/support/img?path={{ p|urlencode }}" target="_blank" rel="noopener"><img src="/support/img?path={{ p|urlencode }}" alt="Фото к сообщению" loading="lazy"></a>{% endfor %}</div>{% endif %}
+    </div>
+  {% else %}
+    <p class="small muted">Сообщений пока нет.</p>
+  {% endfor %}
+</div>

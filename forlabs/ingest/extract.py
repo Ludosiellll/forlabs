@@ -61,7 +61,9 @@ def read_text_file(path: Path) -> str:
 
 def normalize(text: str) -> str:
     text = CONTROL_CHARS.sub("", text.replace("\x0c", "\n").replace("\x0b", "\n"))
-    text = text.replace("­", "").replace("\r\n", "\n").replace("\r", "\n").replace(" ", " ")
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub("\u00ad[ \t]*\n[ \t]*", "", text)  # мягкий перенос на конце строки — слово продолжается
+    text = text.replace("\u00ad", "").replace("\u00a0", " ")
     text = join_hyphenation(text)
     lines = [ln.rstrip() for ln in text.split("\n")]
     out = "\n".join(lines)

@@ -11,18 +11,20 @@
 <header class="top">
   <a class="brand" href="/">ForLabs</a>
   <nav class="nav" aria-label="Разделы">
-    <a href="/" class="{{ 'on' if nav == 'home' }}">Лабы</a>
-    <a href="/profiles" class="{{ 'on' if nav == 'profiles' }}">Профили</a>
-    <a href="/semester" class="{{ 'on' if nav == 'semester' }}">Отчёт за семестр</a>
-    <a href="/rules" class="{{ 'on' if nav == 'rules' }}">Правила</a>
-    <a href="/settings" class="{{ 'on' if nav == 'settings' }}">Настройки</a>
+    <a data-tour="labs" href="/" class="{{ 'on' if nav == 'home' }}">Лабы</a>
+    <a data-tour="profiles" href="/profiles" class="{{ 'on' if nav == 'profiles' }}">Профили</a>
+    <a data-tour="semester" href="/semester" class="{{ 'on' if nav == 'semester' }}">Отчёт за семестр</a>
+    <a data-tour="rules" href="/rules" class="{{ 'on' if nav == 'rules' }}">Правила</a>
+    <a data-tour="settings" href="/settings" class="{{ 'on' if nav == 'settings' }}">Настройки</a>
+    {% if ctx.cloud and user_email %}<a data-tour="support" href="/support" class="{{ 'on' if nav == 'support' }}">Поддержка{% if support_unread %} <span class="support-badge" title="Новый ответ">{{ support_unread }}</span>{% endif %}</a>{% endif %}
     {% if member and member.role == 'admin' and member.approved %}<a href="/admin" class="{{ 'on' if nav == 'admin' }}">Админ</a>{% endif %}
   </nav>
   {% if ctx.cloud and user_email %}
   <div class="who">
     {% if member and member.role != 'admin' and member.approved %}
       {% set st = member.access_state %}
-      {% if st in ('active', 'expiring') %}<span class="sub sub-{{ st }}" title="Срок подписки">Подписка до {{ date_ru(member.access_until) }}</span>
+      {% if trial %}<span class="sub sub-{{ 'expiring' if st == 'expiring' or trial.labs_left == 0 else 'active' }}" title="Пробный доступ">Пробный доступ{% if member.access_until %} до {{ date_ru(member.access_until) }}{% endif %} · лаб: {{ trial.labs_used }} из {{ trial.labs_limit }}</span>
+      {% elif st in ('active', 'expiring') %}<span class="sub sub-{{ st }}" title="Срок подписки">Подписка до {{ date_ru(member.access_until) }}</span>
       {% elif st == 'unlimited' %}<span class="sub" title="Срок подписки">Подписка без срока</span>{% endif %}
     {% endif %}
     <span>{{ user_email }}</span>
@@ -42,6 +44,7 @@
 {% endblock %}
 {% block body %}{% endblock %}
 <script src="/static/app.js"></script>
+{% if show_tour %}<script src="/static/tour.js" defer></script>{% endif %}
 {% block scripts %}{% endblock %}
 </body>
 </html>

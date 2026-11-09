@@ -41,6 +41,7 @@ def test_word_failure_leaves_original_untouched(sample_doc, tmp_path, monkeypatc
 
     monkeypatch.setattr(word_com, "available", lambda: True)
     monkeypatch.setattr(word_com, "finalize_isolated", boom)
+    monkeypatch.setattr(fin.libreoffice, "find_soffice", lambda path=None: "soffice")  # есть LibreOffice
     monkeypatch.setattr(fin.libreoffice, "to_pdf", lambda docx, workdir, soffice=None: (_pdf(workdir / "report.pdf"),
                                                                                         workdir / "report.pdf")[1])
     rep = fin.finalize(out, "x", tmp_path / "render")
@@ -52,6 +53,7 @@ def test_hanging_word_is_killed_by_pid(tmp_path, monkeypatch):
 
     killed = []
     monkeypatch.setattr(word_com, "_kill_pids", lambda pids: killed.extend(pids))
+    monkeypatch.setattr(word_com, "_automation_word_pids", lambda: None)  # список процессов Windows недоступен
     with pytest.raises(TimeoutError):
         word_com.finalize_isolated(tmp_path / "a.docx", tmp_path / "a.pdf", "x", timeout=3,
                                    target=fake_word_child.hanging_child)

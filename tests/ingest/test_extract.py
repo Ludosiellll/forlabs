@@ -22,6 +22,13 @@ TEXT = ("Лабораторная работа №7\nТема работы: Со
         "1. Создайте 2 простых анимации к выбранной тематике.\n2. Создайте анимированное меню. Эти програм-\nмы проверяются.")
 
 
+# Word с автопереносами (и Arial в PyMuPDF на Windows) ставит на конце строки мягкий перенос U+00AD
+def test_normalize_joins_soft_hyphen_line_break():
+    assert "программы работают" in normalize("Эти програм\u00ad\nмы работают")
+    assert "программы работают" in normalize("Эти програм\u00ad\r\nмы работают")
+    assert "Эти программы" in normalize("Эти про\u00adграм\u00adмы")
+
+
 def test_normalize_joins_hyphenation():
     s = normalize("Эти програм-\nмы работают")
     assert "программы работают" in s

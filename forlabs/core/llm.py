@@ -33,6 +33,9 @@ _ACCESS = {
     "llm_api_key": "Администратор ещё не добавил ключ модели в Supabase (секрет LLM_API_KEY).",
     "not signed in": "Сессия истекла — войди в аккаунт заново.",
     "no key assigned": "Администратор ещё не выдал тебе ключ модели. Напиши ему — он добавит ключ в разделе «Админ».",
+    "trial lab calls limit": "В пробном доступе на эту лабу ушло слишком много запросов (много перезапусков). Напиши "
+                             "в поддержку, чтобы открыть полный доступ.",
+    "trial needs lab tag": "Обнови ForLabs до последней версии — эта версия не работает с пробным доступом.",
 }
 
 
@@ -185,6 +188,28 @@ class LLM:
             if expired:
                 raise LLMError("access", detail, f"Подписка закончилась {_minsk_date(expired.group(1))} — напиши "
                                                  "администратору, чтобы он её продлил.")
+            if "too many parallel requests" in low:  # уже идут 4 запроса — подождать и повторить
+                raise LLMError("quota", detail, RATE_LIMIT_MESSAGE, retryable=True, retry_after=20)
+            if "request too large" in low:
+                raise LLMError("bad_response", detail, "Методичка слишком большая для модели — оставь в файле только "
+                                                       "страницы своей лабы.")
+            daily = re.search(r"daily token limit:\s*(\d+)", detail)
+            if daily:
+                n = f"{int(daily.group(1)):,}".replace(",", " ")
+                raise LLMError("access", detail, f"Дневной лимит на сегодня исчерпан ({n} токенов). Продолжить можно "
+                                                 "завтра; если нужно срочно — напиши в поддержку.")
+            calls = re.search(r"lab calls limit:\s*(\d+)", detail)
+            if calls:
+                raise LLMError("access", detail, f"На эту лабу ушло очень много запросов ({calls.group(1)}) — похоже на "
+                                                 "лишние перезапуски. Если нужно ещё, напиши в поддержку.")
+            trial = re.search(r"trial (labs|chat) limit:\s*(\d+)", detail)
+            if trial:
+                n = trial.group(2)
+                raise LLMError("access", detail, (
+                    f"Пробный доступ: все лабы ({n}) уже начаты. Чтобы сделать ещё, напиши в поддержку — "
+                    "администратор откроет полный доступ." if trial.group(1) == "labs" else
+                    f"Пробный доступ: на одну лабу — {n} сообщений в чате правок, они закончились. Напиши в поддержку, "
+                    "чтобы открыть полный доступ."))
             for needle, msg in _ACCESS.items():
                 if needle in low:
                     err = LLMError("access", detail, msg)

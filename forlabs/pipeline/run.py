@@ -151,13 +151,17 @@ class Pipeline:
                 out.append(Event(seq=-i, text=text, kind=kind))
         return out[-300:]
 
-    def _llm(self, st: LabState):
-        """Клиент модели с меткой лабы: в облаке расход видно по каждой лабе."""
+    def _llm(self, st: LabState, chat: str | None = None):
+        """Клиент модели с меткой лабы (в облаке расход видно по каждой лабе) и, для чата правок, — сообщения
+        (пробный доступ на сервере считает сообщения правок на лабу)."""
         from urllib.parse import quote
 
         llm = self.llm_factory()
         if getattr(llm, "accepts_lab_tag", False):  # только прокси ForLabs; провайдеру напрямую имя не шлём
-            llm = llm.with_headers({"X-ForLabs-Lab": quote(self.key(st), safe="")})
+            tags = {"X-ForLabs-Lab": quote(self.key(st), safe="")}
+            if chat:
+                tags["X-ForLabs-Chat"] = chat
+            llm = llm.with_headers(tags)
         return llm
 
     def lab_dir(self, st: LabState) -> Path:
@@ -511,14 +515,18 @@ class Pipeline:
             try:
                 profile = self._profile(st)
                 subject = get_subject(st.subject_id)
-                llm = self._llm(st)
+                llm = self._llm(st, chat=msg_id)
                 if rels:
                     self._emit(st, "Читаю приложенные фото", step="write")
                     user_msg.image_text = describe_images([self.lab_dir(st) / r for r in rels], llm)
                     self._save(st)
                     message = f"{message}\n\nНа приложенных фото:\n{user_msg.image_text}".strip()
                 self._emit(st, "Разбираю правку", step="write")
-                plan = plan_edit(st, message, profile, subject, llm, self.rules, self._teacher_text(st))
+                enrollment = self._enrollment(profile, st.subject_id)
+                plan = plan_edit(st, message, profile, subject, llm, self.rules, self._teacher_text(st), enrollment)
+                from forlabs.pipeline.chat import profile_changes
+
+                proposals = profile_changes(plan.profile, profile, enrollment)
                 rule = (plan.remember or "").strip() if remember and self.memory is not None else ""
                 note = ""
                 if remember and self.memory is not None and not rule:
@@ -540,7 +548,7 @@ class Pipeline:
                 if plan.kind != "edit":
                     note = remember_rule()
                     st.chat.append(ChatMessage(id=uuid.uuid4().hex[:8], role="assistant", text=plan.reply + note,
-                                               at=_now(), kind=plan.kind))
+                                               at=_now(), kind=plan.kind, profile=proposals))
                     self._emit(st, "Ответ в чате правок", "done", step="write")
                     return self._save(st)
                 vid = push_version(st, message)
@@ -594,7 +602,7 @@ class Pipeline:
                     text += "\nЛаба уже была сдана. Сдай заново, чтобы в папке сдачи был новый файл."
                 note = remember_rule()
                 reply = ChatMessage(id=uuid.uuid4().hex[:8], role="assistant", text=text + note, at=_now(),
-                                    kind="edit", changed=changed, retake=retake, version=vid)
+                                    kind="edit", changed=changed, retake=retake, version=vid, profile=proposals)
                 st.chat.append(reply)
             except Exception as e:  # сбой посреди правки: разбор и отчёт — как до неё
                 st.spec, st.report = backup_spec, backup_report
@@ -612,6 +620,33 @@ class Pipeline:
             reply.text += (f"\nПравку сохранил, но документ не собрался: {st.error} "
                            "Когда исправишь, нажми «Пересобрать документ».")
             st = self._save(st)
+        return st
+
+    def apply_profile_change(self, st: LabState, msg_id: str, apply: bool) -> LabState:
+        """Ответ на предложение чата поменять данные профиля: применить (профиль, затем пересборка этой лабы;
+        другие лабы предмета покажут «Документ нужно пересобрать») или отказаться."""
+        with self.lock(st):
+            msg = next((m for m in st.chat if m.id == msg_id and m.profile), None)
+            if msg is None or msg.profile_state:
+                raise PipelineError("Это предложение уже обработано")
+            if not apply:
+                msg.profile_state = "declined"
+                return self._save(st)
+            profile = self._profile(st)
+            enrollment = self._enrollment(profile, st.subject_id)
+            for change in msg.profile:
+                value: object = int(change.value) if change.field in ("variant", "workplace") else change.value
+                if change.field in ("full_name", "title_name", "gender", "group"):
+                    setattr(profile, change.field, value)
+                else:
+                    setattr(enrollment, change.field, value)
+            if profile.enrollment(st.subject_id) is None:
+                profile.enrollments.append(enrollment)
+            self.store.save_profile(profile)
+            msg.profile_state = "applied"
+            self._save(st)
+        if st.report is not None and st.status in ("rendered", "needs_manual", "final"):
+            st = self.render(st)
         return st
 
     def revert(self, st: LabState, version_id: int) -> LabState:

@@ -20,6 +20,8 @@ def _field(row: dict, key: str):
         v = (row.get(col) or {}).get(sub_key)
         return None if v is None else str(v)
     v = row.get(key)
+    if isinstance(v, bool):  # PostgREST: eq.true / eq.false
+        return "true" if v else "false"
     return None if v is None else str(v)
 
 
@@ -48,6 +50,16 @@ class FakeSupabase:
         self.drop_next = 0  # сколько следующих запросов к REST оборвать (как пропавший Wi-Fi)
         self.drop_auth_next = 0  # то же для обновления входа
         self.expired = set()  # токены, которые сервер уже считает просроченными (часы ноутбука спешат)
+        self.trial = []  # строки trial_usage (расход пробного периода по лабам)
+        self.no_trial_columns = False  # база без миграции 0005
+        self.support_bound = False  # владелец привязал Telegram
+        self.support_secrets = True  # секреты бота заданы в Supabase
+        self.no_support = False  # сервер без миграции 0006 и функции support
+        self.support_objects = {}  # бакет support: путь → байты
+
+    def _is_admin(self) -> bool:
+        me = self.tables["members"][0]
+        return me.get("role") == "admin" and bool(me.get("approved"))
 
     def session(self, expires_in=3600):
         return {"access_token": f"tok{len(self.requests)}", "refresh_token": "ref", "expires_in": expires_in,
@@ -93,6 +105,15 @@ class FakeSupabase:
                 return httpx.Response(200, json=self.daily)
             if fn == "admin_usage_by_lab":
                 return httpx.Response(200, json=self.by_lab)
+            if fn == "support_mark_read":
+                for r in self.tables.get("support_messages", []):
+                    if r["user_id"] == UID and r["from_admin"]:
+                        r["read_at"] = r.get("read_at") or "2026-11-08T12:00:00+00:00"
+                return httpx.Response(204)
+            if fn == "admin_support_status":
+                return httpx.Response(200, json=[{"telegram": self.support_bound, "bot_username": "forlabs_help_bot"}])
+            if fn == "trial_usage":
+                return httpx.Response(200, json=self.trial)
             if fn == "retag_my_usage":
                 return httpx.Response(204)
             return httpx.Response(404, json={"message": f"нет функции {fn}"})
@@ -106,6 +127,27 @@ class FakeSupabase:
             if body.get("shared"):
                 out["shared"] = self.balance.get("shared")
             return httpx.Response(200, json={"balances": out, "errors": errors})
+        if self.no_support and ("support" in path):
+            return httpx.Response(404, json={"code": "42P01", "message": 'relation "public.support_messages" does not exist'})
+        if path == "/functions/v1/support/send":
+            body = json.loads(req.content or b"{}")
+            text = (body.get("text") or "").strip()
+            images = body.get("images") or []
+            if any(not str(p).startswith(UID + "/") or p not in self.support_objects for p in images):
+                return httpx.Response(400, json={"error": {"message": "bad image"}})
+            if not text and not images:
+                return httpx.Response(400, json={"error": {"message": "empty message"}})
+            rows = self.tables.setdefault("support_messages", [])
+            if sum(1 for r in rows if r["user_id"] == UID and not r["from_admin"]) >= 20:
+                return httpx.Response(429, json={"error": {"message": "support rate limit"}})
+            rows.append({"id": len(rows) + 1, "user_id": UID, "from_admin": False, "text": text[:4000], "images": images,
+                         "created_at": f"2026-11-08T12:{len(rows):02d}:00+00:00", "read_at": None})
+            return httpx.Response(200, json={"ok": True, "id": len(rows), "telegram": self.support_bound})
+        if path == "/functions/v1/support/setup":
+            if not self.support_secrets:
+                return httpx.Response(503, json={"error": {"message": "telegram secrets missing"}})
+            return httpx.Response(200, json={"bot": "forlabs_help_bot", "link": "https://t.me/forlabs_help_bot?start=Ab12Cd34",
+                                             "bound": self.support_bound})
         if path.startswith("/rest/v1/"):
             table = path.split("/")[-1]
             rows = self.tables.setdefault(table, [])
@@ -119,11 +161,18 @@ class FakeSupabase:
                     if same and "merge-duplicates" not in req.headers.get("prefer", ""):
                         return httpx.Response(409, json={"code": "23505", "message": "duplicate key"})
                     rows[:] = [r for r in rows if any(r.get(k) != row.get(k) for k in keys)] if keys else rows
+                    if table == "support_messages":
+                        row.setdefault("id", len(rows) + 1)
+                        row.setdefault("created_at", f"2026-11-08T13:{len(rows):02d}:00+00:00")
+                        row.setdefault("read_at", None)
                     rows.append(row)
                 return httpx.Response(201, json=[])
             if req.method == "GET":
                 return httpx.Response(200, json=[r for r in rows if _match(r, req.url.params)])
             if req.method == "PATCH":
+                if self.no_trial_columns and any(k.startswith("trial") for k in json.loads(req.content)):
+                    return httpx.Response(400, json={"code": "PGRST204", "message":
+                                                     "Could not find the 'trial_chat' column of 'members' in the schema cache"})
                 hit = [r for r in rows if _match(r, req.url.params)]
                 for r in hit:
                     r.update(json.loads(req.content))
@@ -148,6 +197,15 @@ class FakeSupabase:
             for key in json.loads(req.content)["prefixes"]:
                 self.objects.pop(key, None)
             return httpx.Response(200, json=[])
+        if path.startswith("/storage/v1/object/support/"):
+            key = path[len("/storage/v1/object/support/"):]
+            if req.method == "POST":
+                self.support_objects[key] = req.content
+                return httpx.Response(200, json={"Key": key})
+            if req.method == "GET":
+                ok = key in self.support_objects and (key.startswith(UID + "/") or self._is_admin())
+                return httpx.Response(200, content=self.support_objects[key]) if ok else httpx.Response(400, json={
+                    "statusCode": "404", "error": "not_found", "message": "Object not found"})
         if path.startswith("/storage/v1/object/labs/"):
             key = path[len("/storage/v1/object/labs/"):]
             if req.method == "POST":

@@ -1,6 +1,6 @@
 // ForLabs: прокси к модели. Ключи — только на сервере: свой ключ участника в Vault (выдаёт администратор)
-// или общий секрет LLM_API_KEY. Пускает только вошедших, одобренных и с действующей подпиской,
-// разрешает модели из списка, пишет расход по лабам. /balance — остаток на ключах у провайдера.
+// или общий секрет LLM_API_KEY. Пускает только вошедших, одобренных и с действующей подпиской (в пробном
+// доступе — в пределах лаб и сообщений чата правок), разрешает модели из списка, пишет расход по лабам. /balance — остаток на ключах у провайдера.
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
 import { decideAccess, labTag, ownKeyError, parseBalance, pickKey } from "./logic.ts";
 
@@ -9,11 +9,22 @@ const KEY = Deno.env.get("LLM_API_KEY") ?? "";
 // первая — модель по умолчанию; остальные разрешены как запасные (клиент сам переходит, если ключ не пускает)
 const MODELS = (Deno.env.get("LLM_MODELS") ?? "deepseek-v4.1-flash-1017,deepseek-v4.1-flash,deepseek-v4-flash")
   .split(",").map((s) => s.trim());
+// пробный доступ: потолок запросов на одну лабу (перезапуски), сверх лимита лаб и сообщений чата
+const TRIAL_CALLS_PER_LAB = Number(Deno.env.get("TRIAL_CALLS_PER_LAB") ?? "120") || 120;
+// для всех: токенов в день на человека (если в карточке не задан свой) и запросов на одну лабу
+const DAILY_TOKENS = Number(Deno.env.get("DAILY_TOKENS") ?? "1000000") || 1000000;
+const LAB_CALLS_LIMIT = Number(Deno.env.get("LAB_CALLS_LIMIT") ?? "300") || 300;
+const MAX_PARALLEL = 4;          // одновременно в работе на человека
+const MAX_TOKENS_CAP = 8000;     // предел ответа (как в программе)
+const MAX_BODY_CHARS = 600_000;  // методичка 30 тыс. символов + правила + отчёт — с большим запасом
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, {
   auth: { persistSession: false },
 });
 
-type Member = { approved: boolean; role: string; access_until: string | null; allow_shared_key: boolean | null };
+type Member = {
+  approved: boolean; role: string; access_until: string | null; allow_shared_key: boolean | null;
+  trial_labs: number | null; trial_chat: number | null;
+};
 
 function json(status: number, body: unknown) {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -86,7 +97,7 @@ Deno.serve(async (req: Request) => {
   if (userErr || !user) return err(401, "not signed in");
 
   const { data: member } = await admin.from("members")
-    .select("approved, role, access_until, allow_shared_key").eq("user_id", user.id).maybeSingle();
+    .select("approved, role, access_until, allow_shared_key, trial_labs, trial_chat").eq("user_id", user.id).maybeSingle();
   if (!member?.approved) return err(403, "account not approved");
 
   if (path.endsWith("/balance")) return balances(req, user.id, member as Member);
@@ -94,6 +105,9 @@ Deno.serve(async (req: Request) => {
 
   const decision = decideAccess(member as Member, new Date());
   if (!decision.ok) return err(decision.status, decision.message);
+
+  const lab = labTag(req.headers.get("x-forlabs-lab"));
+  const chat = labTag(req.headers.get("x-forlabs-chat"));
 
   let own: string | null;
   try {
@@ -114,6 +128,28 @@ Deno.serve(async (req: Request) => {
   if (!MODELS.includes(model)) return err(403, `model_not_allowed: ${model}`);
   body.model = model;
   body.stream = false;
+  const asked = Number(body.max_tokens ?? MAX_TOKENS_CAP);
+  body.max_tokens = Number.isFinite(asked) && asked > 0 ? Math.min(asked, MAX_TOKENS_CAP) : MAX_TOKENS_CAP;
+  const bodyChars = JSON.stringify(body.messages ?? "").length;
+  if (bodyChars > MAX_BODY_CHARS) return err(413, "request too large");
+  const estTokens = Math.ceil(bodyChars / 3) + (body.max_tokens as number);
+
+  // лимиты (день, лаба, пробный доступ): проверка и бронь запроса атомарно в базе (usage_begin, миграция 0008)
+  let reserved: number | null = null;
+  if (member.role !== "admin") {
+    const { data: rows, error: limitErr } = await admin.rpc("usage_begin", {
+      target: user.id, cur_lab: lab, cur_chat: chat, req_model: model,
+      default_daily: DAILY_TOKENS, lab_calls: LAB_CALLS_LIMIT, trial_calls: TRIAL_CALLS_PER_LAB,
+      est_tokens: estTokens, max_parallel: MAX_PARALLEL,
+    });
+    if (limitErr) return err(500, `usage_begin: ${limitErr.message}`);
+    const t = ((rows ?? []) as { ok: boolean; message: string; usage_id: number | null }[])[0];
+    if (!t?.ok) return err(403, t?.message || "limit check failed");  // 403, не 429: клиент не повторяет
+    reserved = t.usage_id;
+  }
+  const release = async () => {  // запрос не удался — бронь не съедает пробный лимит
+    if (reserved !== null) await admin.from("llm_usage").delete().eq("id", reserved);
+  };
 
   let upstream: Response;
   let text: string;
@@ -127,24 +163,33 @@ Deno.serve(async (req: Request) => {
     });
     text = await upstream.text();
   } catch (e) {
+    await release();
     const timeout = (e as Error)?.name === "TimeoutError" || (e as Error)?.name === "AbortError";
     return err(timeout ? 504 : 502, timeout ? "provider timeout" : "provider unreachable");
   }
   if (!upstream.ok) {
+    await release();
     const own = ownKeyError(picked.kind, upstream.status, text);
     if (own) return err(own.status, own.message);
   }
   if (upstream.ok) {
     try {
       const usage = JSON.parse(text).usage ?? {};
-      await admin.from("llm_usage").insert({
+      const row: Record<string, unknown> = {
         user_id: user.id,
         model,
         prompt_tokens: usage.prompt_tokens ?? 0,
         completion_tokens: usage.completion_tokens ?? 0,
-        lab: labTag(req.headers.get("x-forlabs-lab")),
+        lab,
+        chat,
         key_kind: picked.kind,
-      });
+      };
+      if (reserved !== null) {
+        delete row.user_id;
+        await admin.from("llm_usage").update(row).eq("id", reserved);
+      } else {
+        await admin.from("llm_usage").insert(row);
+      }
       await admin.from("members").update({ last_seen_at: new Date().toISOString() }).eq("user_id", user.id);
     } catch (_) {
       // учёт расхода не должен ломать ответ

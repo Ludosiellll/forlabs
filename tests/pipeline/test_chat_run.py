@@ -39,7 +39,8 @@ def test_edit_changes_only_the_named_task(tmp_home, tmp_path):
     assert st.status == "rendered", st.error
     xml = zipfile.ZipFile(st.docx_path).read("word/document.xml").decode()
     assert "вдвое медленнее" in xml
-    assert fake.headers == {"X-ForLabs-Lab": "ivanov%2Fpsip%2F7"}
+    # сообщение чата помечено: пробный доступ на сервере считает сообщения правок по лабе
+    assert fake.headers == {"X-ForLabs-Lab": "ivanov%2Fpsip%2F7", "X-ForLabs-Chat": st.chat[0].id}
 
 
 def test_keep_preserves_relative_image_path(tmp_home, tmp_path):

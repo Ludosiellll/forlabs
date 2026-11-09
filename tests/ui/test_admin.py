@@ -85,7 +85,7 @@ def test_admin_balances_json(admin):
 def test_admin_access_actions(admin, fake):
     row = fake.tables["members"][1]
     url = f"/admin/u/{M}/access"
-    r = admin.post(url, data={"action": "extend30"}, follow_redirects=False)
+    r = admin.post(url, data={"action": "extend", "days": "30"}, follow_redirects=False)
     assert r.status_code == 303 and "msg=" in r.headers["location"]
     until = datetime.fromisoformat(row["access_until"])
     assert abs(until - datetime.now(timezone.utc) - timedelta(days=30)) < timedelta(minutes=1)
@@ -194,7 +194,7 @@ def test_member_colors_follow_join_order_not_admin_first():
 def test_pending_member_card_offers_approve_first(admin, fake):
     fake.tables["members"][1]["approved"] = False
     page = admin.get(f"/admin/u/{M}").text
-    assert page.index("Одобрить аккаунт") < page.index("+7 дней")
+    assert page.index("Одобрить аккаунт") < page.index("Продлить на")
     assert "ждёт одобрения" in admin.get("/admin").text
 
 

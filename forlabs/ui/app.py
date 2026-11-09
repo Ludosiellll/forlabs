@@ -17,6 +17,7 @@ from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
     RedirectResponse,
+    Response,
     StreamingResponse,
 )
 from fastapi.staticfiles import StaticFiles
@@ -124,6 +125,16 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
                 base["member"] = ctx.store.member()
             except Exception:
                 base["member"] = None
+            m = base["member"]
+            if m is not None and m.on_trial and m.approved:
+                base["trial"] = ctx.store.trial_usage(m)
+            try:
+                from forlabs.cloud.support import Support
+
+                base["support_unread"] = Support(ctx.store).unread()
+            except Exception:  # без связи или без таблицы поддержки — без значка
+                base["support_unread"] = 0
+        base["show_tour"] = name == "home.html" and not ctx.settings.tour_done
         base.update(kw)
         return tpl.TemplateResponse(request, name, base)
 
@@ -197,7 +208,9 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
 
     @app.get("/health")
     def health():
-        return {"app": "forlabs"}
+        from forlabs.version import __version__
+
+        return {"app": "forlabs", "version": __version__}
 
     @app.exception_handler(Exception)
     async def unexpected_error(request: Request, exc: Exception):
@@ -595,6 +608,23 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         ctx.run(ctx.pipeline.key(st), ctx.pipeline.revert, st, vid)
         return redirect(lab_url(p, s, n) + "?tab=report")
 
+    @app.post("/labs/{p}/{s}/{n}/chat/profile/{msg_id}")
+    def lab_chat_profile(p: str, s: str, n: str, msg_id: str, apply: str = Form("0")):
+        if busy_lab(p, s, n):
+            return redirect(lab_url(p, s, n), err=BUSY)
+        st = load(p, s, n)
+        msg = next((m for m in st.chat if m.id == msg_id and m.profile), None)
+        if msg is None or msg.profile_state:
+            return redirect(lab_url(p, s, n), err="Это предложение уже обработано")
+        try:
+            if apply == "1":
+                ctx.run(ctx.pipeline.key(st), ctx.pipeline.apply_profile_change, st, msg_id, True)
+                return redirect(lab_url(p, s, n), msg="Профиль обновлён — документ пересобирается")
+            ctx.pipeline.apply_profile_change(st, msg_id, False)
+        except PipelineError as e:
+            return redirect(lab_url(p, s, n), err=str(e))
+        return redirect(lab_url(p, s, n))
+
     @app.post("/labs/{p}/{s}/{n}/rerender")
     def lab_rerender(p: str, s: str, n: str):
         st = load(p, s, n)
@@ -814,15 +844,34 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         ctx.reset()
         return redirect("/settings", msg="Настройки сохранены")
 
+    @app.post("/tour/done")
+    def tour_done():
+        if not ctx.settings.tour_done:
+            ctx.settings = ctx.settings.model_copy(update={"tour_done": True})
+            save_settings(ctx.settings)
+        return Response(status_code=204)
+
+    @app.post("/tour/restart")
+    def tour_restart():
+        ctx.settings = ctx.settings.model_copy(update={"tour_done": False})
+        save_settings(ctx.settings)
+        return redirect("/")
+
     @app.post("/settings/check")
     def settings_check():
         try:
             model = ctx.llm().check()
         except (LLMError, CloudError) as e:
+            if "trial needs lab tag" in (getattr(e, "detail", "") or ""):  # пробный: модель отвечает только в лабе
+                return redirect("/settings", msg="Связь с сервером есть. В пробном доступе модель отвечает только "
+                                                 "внутри лабы — проверка без лабы не считается.")
             return redirect("/settings", err=getattr(e, "message_ru", str(e)))
         return redirect("/settings", msg=f"Связь есть, модель отвечает: {model}")
 
     register_admin(app, ctx, render, redirect)
+    from forlabs.ui.support_routes import register_support
+
+    register_support(app, ctx, render, redirect)
 
     return app
 

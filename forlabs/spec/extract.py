@@ -32,7 +32,19 @@ class VariantPick(BaseModel):
         return v or "journal"
 
 
+class NotALab(Exception):
+    """Загружена не методичка лабораторной (курсовой, реферат, произвольный текст)."""
+
+    def __init__(self, reason: str):
+        self.message_ru = ((reason.rstrip(". ") + ". ") if reason else "") + (
+            "ForLabs делает только лабораторные и практические работы по методичке. Если это всё-таки лабораторная, "
+            "загрузи страницы методички с темой, целью и заданиями; если вопрос — напиши в «Поддержку».")
+        super().__init__(self.message_ru)
+
+
 class RawSpec(BaseModel):
+    kind: str = "lab"  # lab | not_lab
+    not_lab_reason: str = ""
     number: str | None = None
     topic: str = ""
     goal: str = ""
@@ -43,6 +55,16 @@ class RawSpec(BaseModel):
     variant_text: str | None = None
     variants: list[VariantPick] = Field(default_factory=list)
     questions: list[str] = Field(default_factory=list)
+
+    @field_validator("kind", mode="before")
+    @classmethod
+    def _kind(cls, v):  # null и всё непонятное — лаба (сомневаешься — не отказывать)
+        return "not_lab" if str(v or "").strip().lower() == "not_lab" else "lab"
+
+    @field_validator("not_lab_reason", mode="before")
+    @classmethod
+    def _reason(cls, v):
+        return "" if v is None else str(v)
 
     @field_validator("number", mode="before")
     @classmethod
@@ -165,6 +187,8 @@ def extract_spec(src: SourceText, subject: Subject, enrollment: Enrollment, llm,
                                                      text=text)},
     ]
     raw: RawSpec = llm.json(messages, RawSpec, temperature=0.0)
+    if str(raw.kind).strip().lower() == "not_lab":
+        raise NotALab(clean_field(raw.not_lab_reason))
     main = merge_subitems([t for t in raw.main_tasks if t.strip()])
     extra = merge_subitems([t for t in raw.extra_tasks if t.strip()])
     tasks = [Task(n=i, text=t, kind="main") for i, t in enumerate(main, start=1)]

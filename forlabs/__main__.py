@@ -139,8 +139,11 @@ def main() -> None:
     from forlabs.core.paths import ensure_dirs
     from forlabs.ui.context import AppContext
 
+    from forlabs.core.settings import use_windows_vault
+
     setup_logging()
     use_system_certificates()  # сеть колледжа или антивирус с проверкой HTTPS
+    use_windows_vault()
     ensure_dirs()
     no_window = "--browser" in sys.argv or os.environ.get("FORLABS_BROWSER_UI") == "1"
     lock = InstanceLock()

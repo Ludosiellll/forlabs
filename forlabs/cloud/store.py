@@ -51,6 +51,14 @@ class Member(BaseModel):
     note: str = ""
     allow_shared_key: bool = True
     last_seen_at: str | None = None
+    trial_labs: int | None = None  # пробный доступ: сколько лаб (None — обычный доступ)
+    trial_chat: int | None = None  # сообщений чата правок на каждую лабу
+    trial_since: str | None = None
+    daily_tokens: int | None = None  # свой лимит токенов в день (None — общий)
+
+    @property
+    def on_trial(self) -> bool:
+        return self.trial_labs is not None and self.role != "admin"
 
     @property
     def access_state(self) -> str:
@@ -63,6 +71,35 @@ class Member(BaseModel):
     @property
     def name(self) -> str:
         return self.display_name or self.email.split("@")[0] or "Участник"
+
+
+class TrialRow(BaseModel):
+    lab: str = ""
+    calls: int = 0
+    chats: int = 0
+
+
+class TrialUsage(BaseModel):
+    """Расход пробного периода: какие лабы начаты и сколько сообщений чата правок в каждой."""
+
+    labs_limit: int
+    chat_limit: int
+    rows: list[TrialRow] = []
+
+    @property
+    def labs(self) -> list[TrialRow]:
+        return [r for r in self.rows if r.lab]
+
+    @property
+    def labs_used(self) -> int:
+        return len(self.labs)
+
+    @property
+    def labs_left(self) -> int:
+        return max(0, self.labs_limit - self.labs_used)
+
+    def chats_used(self, lab_key: str) -> int:
+        return next((r.chats for r in self.rows if r.lab == lab_key), 0)
 
 
 def _ascii(s: str) -> str:
@@ -464,7 +501,8 @@ class CloudStore:
         return out
 
     # админ-панель
-    _MEMBER_FIELDS = {"display_name", "approved", "access_until", "allow_shared_key"}
+    _MEMBER_FIELDS = {"display_name", "approved", "access_until", "allow_shared_key", "trial_labs", "trial_chat",
+                      "trial_since", "daily_tokens"}
     _LAB_COLUMNS = "owner,profile_id,subject_id,number,status,created_at,updated_at"
 
     def _rpc(self, fn: str, args: dict | None = None):
@@ -537,6 +575,40 @@ class CloudStore:
     def admin_set_until(self, uid: str, day: str | None) -> None:
         """До конца выбранного дня (по Минску); None — бессрочно."""
         self.admin_update_member(uid, access_until=end_of_day_minsk(day) if day else None)
+
+    def admin_grant_trial(self, uid: str, labs: int, chat: int, days: int) -> None:
+        """Пробный доступ с этого момента: labs лаб, chat сообщений правок на лабу, days дней; аккаунт одобряется."""
+        now = now_utc()
+        self.admin_update_member(uid, approved=True, trial_labs=labs, trial_chat=chat, trial_since=now.isoformat(),
+                                 access_until=(now + timedelta(days=days)).isoformat())
+
+    def admin_full_access(self, uid: str) -> None:
+        self.admin_update_member(uid, trial_labs=None, trial_chat=None)
+
+    TRIAL_TTL = 20.0  # секунд: шапка не спрашивает расход на каждой странице
+
+    def trial_usage(self, member: "Member") -> TrialUsage | None:
+        """Расход пробного периода участника (свой — для шапки, чужой — администратору). Одна попытка без пауз
+        и кэш на 20 с: без связи страницы не ждут повторов; без связи — None."""
+        if member.trial_labs is None:
+            return None
+        cache = self.__dict__.setdefault("_trial_cache", {})
+        hit = cache.get(member.user_id)
+        if hit and time.monotonic() - hit[0] < self.TRIAL_TTL:
+            return hit[1]
+        if time.monotonic() < self._offline_until:
+            return None
+        try:
+            r = self._rest("POST", "rpc/trial_usage", json={"target": member.user_id}, retries=False)
+            rows = r.json() if r.content else []
+        except CloudError as e:
+            if e.offline:
+                self.offline, self._offline_until = True, time.monotonic() + OFFLINE_HOLD
+            return None
+        usage = TrialUsage(labs_limit=member.trial_labs, chat_limit=member.trial_chat or 0,
+                           rows=[TrialRow.model_validate(x) for x in rows or []])
+        cache[member.user_id] = (time.monotonic(), usage)
+        return usage
 
     def admin_revoke(self, uid: str) -> None:
         self.admin_update_member(uid, access_until=now_utc().isoformat())
