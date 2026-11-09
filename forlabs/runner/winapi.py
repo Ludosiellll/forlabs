@@ -149,6 +149,36 @@ def wait_window(pids: set[int], timeout: float = 30.0, predicate=None, owned: bo
     return None
 
 
+_sig(user32.EnumChildWindows, wintypes.BOOL, HW, WNDENUMPROC, wintypes.LPARAM)
+_sig(user32.SendMessageTimeoutW, ctypes.c_size_t, HW, wintypes.UINT, wintypes.WPARAM, ctypes.c_void_p, wintypes.UINT,
+     wintypes.UINT, ctypes.POINTER(ctypes.c_size_t))
+
+
+def child_texts(hwnd: int) -> list[str]:
+    """Тексты окна и его элементов напрямую (WM_GETTEXT с таймаутом): быстро и без UIA — для окон сообщений."""
+    out: list[str] = []
+
+    def text_of(h) -> str:
+        buf = ctypes.create_unicode_buffer(1024)
+        res = ctypes.c_size_t()
+        user32.SendMessageTimeoutW(h, 0x000D, 1024, ctypes.cast(buf, ctypes.c_void_p), 0x0002, 500,
+                                   ctypes.byref(res))  # WM_GETTEXT, SMTO_ABORTIFHUNG
+        return buf.value
+
+    t = text_of(hwnd)
+    if t:
+        out.append(t)
+
+    def cb(h, _):
+        t = text_of(h)
+        if t:
+            out.append(t)
+        return True
+
+    user32.EnumChildWindows(wintypes.HWND(hwnd), WNDENUMPROC(cb), 0)
+    return out
+
+
 def window_rect(hwnd: int) -> tuple[int, int, int, int]:
     """Видимая рамка окна без невидимых полей для растягивания (Windows 10/11)."""
     r = wintypes.RECT()

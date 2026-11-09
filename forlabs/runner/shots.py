@@ -73,6 +73,26 @@ def run_dir(base: Path | None = None) -> Path:
     return d
 
 
+def _texts_with_timeout(hwnd: int, timeout: float = 8.0) -> str:
+    """Текст окна через UI Automation, но не дольше timeout: пока открыт модальный диалог, UIA может ждать."""
+    import threading
+
+    from forlabs.runner import uia
+
+    out: list[str] = []
+
+    def go():
+        try:
+            out.extend(uia.texts(uia.root(hwnd)))
+        except Exception:
+            pass
+
+    t = threading.Thread(target=go, daemon=True)
+    t.start()
+    t.join(timeout)
+    return " | ".join(out)
+
+
 class WindowsShooter:
     """Настоящие снимки. Каждый запуск — своя копия программы в папке с меткой Low, процесс с уровнем Low в задании
     (лимит памяти, процессов; закрытие убивает всё)."""
@@ -83,8 +103,6 @@ class WindowsShooter:
         self.timeout, self.low = timeout, low
 
     def shoot(self, target: RunTarget, shot, out: Path) -> ShotResult:
-        from forlabs.runner import winapi
-
         mode = _get(shot, "mode", "window")
         try:
             if mode == "browser":
@@ -93,8 +111,6 @@ class WindowsShooter:
             if mode == "console" or target.console:
                 return self._console(target, work, shot, out)
             return self._window(target, work, shot, out)
-        except winapi.SandboxError as e:  # type: ignore[attr-defined]
-            return ShotResult(False, reason=str(e))
         except Exception as e:  # любой сбой — причиной для студента, а не падением этапа
             return ShotResult(False, reason=f"не получилось снять окно программы ({type(e).__name__}: {e})")
 
@@ -204,11 +220,7 @@ class WindowsShooter:
             fresh = [x for x in wins if x.hwnd not in before]  # MessageBox или новое окно после нажатия
             capture = _get(shot, "capture") or ("last" if fresh else "main")
             hwnd = fresh[-1].hwnd if capture == "last" and fresh else w.hwnd
-            seen = ""
-            try:
-                seen = " | ".join(uia.texts(uia.root(hwnd)))
-            except Exception:
-                pass
+            seen = " | ".join(winapi.child_texts(hwnd)) if fresh and hwnd != w.hwnd else _texts_with_timeout(hwnd)
             expect = _get(shot, "expect") or ""
             if expect and seen and expect not in seen:
                 return ShotResult(False, reason=f"в окне нет ожидаемого «{expect}»", seen=seen)
