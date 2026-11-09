@@ -130,6 +130,7 @@ class AppContext:
                                       render_diagrams=self.render_diagrams, prefer_word=self.prefer_word,
                                       soffice=self.settings.soffice_path, memory=self.memory(),
                                       tesseract=self.settings.tesseract_path)
+            self._pipeline.projects = self.llm_override is None  # в приложении — собирать программы лаб и снимать окна
         return self._pipeline
 
     def busy(self) -> bool:

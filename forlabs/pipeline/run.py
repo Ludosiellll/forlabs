@@ -109,6 +109,8 @@ class Pipeline:
         self.soffice = soffice
         self.tesseract = tesseract  # путь из настроек: установщик Tesseract не добавляет его в PATH
         self.memory = memory
+        self.projects = False  # этап «Проект»: собрать программу лабы и снять её окна (в приложении включён)
+        self.shooter = None  # кто снимает окна; None — WindowsShooter в Windows
         self._locks: dict[str, threading.Lock] = {}
         self.renamed: dict[str, str] = {}
         self.background: set[str] = set()  # фоновая работа после «Сдать» (память предмета): окно спросит при закрытии
@@ -767,6 +769,49 @@ class Pipeline:
             return None
         return str(int(f) - 1) if f == int(f) and f >= 2 else None
 
+    def _project(self, st: LabState, llm, plan=None) -> LabState:
+        """Этап «Проект»: программа лабы собирается и запускается, снимки окон — сам ForLabs. Сбой — не ошибка лабы."""
+        from forlabs.pipeline import project as proj
+
+        if not self.projects or not st.report or (plan is None and not proj.needs_project(st)):
+            return st
+        emit = lambda text, kind="info": self._emit(st, text, kind, step="check")  # noqa: E731
+        try:
+            if plan is None:
+                emit("Составляю проект программы")
+                plan = proj.plan_project(st, llm, self._memory_text(st))
+                problems = proj.validate(plan)
+                if problems:
+                    raise PipelineError("план проекта не прошёл проверку: " + "; ".join(problems[:3]))
+            st = proj.build_and_shoot(self, st, plan, llm, emit)
+            left = [f for f in self.slots(st)]
+            emit("Программа собрана" + (f", снимков сделано сам: {self._auto_shots(st)}" if st.project.built else "")
+                 + (f"; от тебя нужно рисунков: {len(left)}" if left else ""), "done" if st.project.built else "warn")
+        except Exception as e:  # проект — помощь, а не условие: лаба собирается и без него
+            logging.getLogger("forlabs").warning("Этап «Проект»: %s", e, exc_info=True)
+            emit(f"Программу собрать не получилось ({getattr(e, 'message_ru', None) or e}). Снимки сделай сам.", "warn")
+        return self._save(st)
+
+    @staticmethod
+    def _auto_shots(st: LabState) -> int:
+        return sum(1 for s in st.report.sections for b in s.blocks
+                   if isinstance(b, Figure) and (b.image_path or "").startswith("assets/shot_"))
+
+    def retry_project(self, st: LabState) -> LabState:
+        """«Повторить» после установки программы: тот же план, сборка и снимки заново (модель — только на исправления)."""
+        from forlabs.pipeline import project as proj
+
+        with self.lock(st):
+            plan = proj.load_plan(self, st)
+            if plan is None:
+                raise PipelineError("Проекта ещё нет — выполни лабу.")
+            projects, self.projects = self.projects, True
+            try:
+                st = self._project(st, self._llm(st), plan=plan)
+            finally:
+                self.projects = projects
+        return self.render(st)
+
     def _linked_labs(self, st: LabState) -> tuple[list[tuple[str, str, str, str]], list[str]]:
         """Прошлые лабы для этой: выбранные студентом и те, на которые ссылается методичка. Каждая —
         (номер, откуда, тема, текст): сделанная в ForLabs — целиком с кодом, иначе кусок прикреплённого отчёта."""
@@ -1121,6 +1166,7 @@ class Pipeline:
                            "done" if not left else "warn", step="check")
                 st.docx_sha = None
                 self._save(st)  # отчёт целиком — до вёрстки (Word может работать минуты)
+                st = self._project(st, llm)
                 return self.render(st)
             except Exception as e:  # любая ошибка — в статус лабы, а не в никуда
                 return self._fail(st, e)

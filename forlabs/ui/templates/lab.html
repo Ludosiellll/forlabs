@@ -16,6 +16,22 @@
         </li>
       {% endfor %}
     </ol>
+    {% if st.project %}{% set pr = st.project %}
+    <section class="program-box" aria-labelledby="prog-h">
+      <h2 id="prog-h" class="small">Программа</h2>
+      <p class="small"><b>{{ pr.name }}</b> · {{ {'csharp': 'C#', 'cpp': 'C++', 'python': 'Python', 'java': 'Java', 'javascript': 'JavaScript', 'web': 'HTML/CSS', 'php': 'PHP', 'go': 'Go', 'mysql': 'MySQL'}.get(pr.language, pr.language) }} ·
+        {% if pr.built %}<span class="ok">собрана</span>{% elif pr.missing %}<span class="bad">не собрана</span>{% else %}<span class="bad">не собралась</span>{% endif %}</p>
+      {% if pr.missing %}<p class="small">Не хватает: {{ pr.missing|map('tool_title')|join(', ') }}. Установи и нажми «Повторить».</p>{% endif %}
+      {% if pr.blocked %}<p class="small muted">Сам не запускал: {{ pr.blocked[0] }}</p>{% endif %}
+      {% if pr.note and not pr.built and not pr.missing %}<p class="small muted">{{ pr.note }}</p>{% endif %}
+      <div class="row until">
+        {% if pr.folder %}<form method="post" action="{{ base_url }}/project/open"><button class="btn small" type="submit">Открыть папку проекта</button></form>
+        <a class="btn small" href="{{ base_url }}/project.zip">Скачать .zip</a>{% endif %}
+        <form method="post" action="{{ base_url }}/project/retry"><button class="btn small" type="submit">{{ 'Повторить' if pr.missing or not pr.built else 'Пересобрать' }}</button></form>
+      </div>
+    </section>
+    {% endif %}
+
     <details class="rules-mem subject-mem lab-inputs"{{ ' open' if st.linked or materials }}>
       <summary class="small">Связанные лабы и файлы{% if st.linked or materials %} ({{ st.linked|length + materials|length }}){% endif %}</summary>
       <form method="post" action="{{ base_url }}/links" enctype="multipart/form-data" class="stack" data-once>
@@ -63,6 +79,7 @@
            aria-label="Рисунок {{ num }}: выбрать для вставки">
         <div class="t">Рисунок {{ num }} – {{ fig.topic }}</div>
         <div class="i">{{ fig.slot }}</div>
+        {% if fig.auto_note %}<div class="auto-note small">{{ fig.auto_note }}</div>{% endif %}
         <label class="btn filebtn">Выбрать файл
           <input class="visually-hidden" type="file" accept="image/png,image/jpeg" data-slot-file></label>
       </div>

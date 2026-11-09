@@ -90,12 +90,14 @@ class ProjectFile(_Model):
 
 
 class ListingRef(_Model):
-    """Листинг отчёта (раздел, блок) берётся из файла проекта."""
+    """Листинг отчёта (раздел, блок) берётся из файла проекта; code — новый текст листинга, если код пришлось менять."""
     section: int
     block: int
     file: str
+    code: str = ""
 
     _file = field_validator("file", mode="before")(norm_path)
+    _code = field_validator("code", mode="before")(_text)
 
 
 class ShotStep(_Model):

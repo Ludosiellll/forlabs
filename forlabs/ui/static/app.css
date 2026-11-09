@@ -394,3 +394,12 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .tg-check li { margin: 3px 0; }
 .tg-check li.ok { color: var(--ok); }
 .tg-check li.bad { color: var(--err); }
+
+/* программа лабы */
+.program-box { margin: 16px 0 6px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); }
+.program-box h2 { margin: 0 0 4px; }
+.program-box p { margin: 4px 0; }
+.program-box .ok { color: var(--ok); }
+.program-box .bad { color: var(--err); }
+.program-box .until { flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.slot .auto-note { margin-top: 6px; color: var(--warn); }

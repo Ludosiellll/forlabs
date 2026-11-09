@@ -120,6 +120,9 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
     from forlabs.pipeline.memory import teacher_key
 
     tpl.env.filters["teacher_key"] = teacher_key
+    from forlabs.runner.languages import TOOL_TITLES
+
+    tpl.env.filters["tool_title"] = lambda key: TOOL_TITLES.get(key, key)
     tpl.env.globals.update(STATUS_RU=STATUS_RU, q=_q, finding_key=finding_key, date_ru=date_ru, ago=ago,
                            fmt_tokens=fmt_tokens, access_text=access_text, labs_estimate=labs_estimate)
 
@@ -938,6 +941,48 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         if target and Path(target).exists():
             _open_local(target)
         return redirect(lab_url(p, s, n))
+
+    @app.post("/labs/{p}/{s}/{n}/project/retry")
+    def lab_project_retry(p: str, s: str, n: str):
+        if busy_lab(p, s, n):
+            return redirect(lab_url(p, s, n), err=BUSY)
+        st = load(p, s, n)
+        if st.project is None:
+            return redirect(lab_url(p, s, n), err="Проекта ещё нет: выполни лабу.")
+        ctx.run(ctx.pipeline.key(st), ctx.pipeline.retry_project, st)
+        return redirect(lab_url(p, s, n), msg="Собираю программу и делаю снимки заново")
+
+    def project_dir(st) -> Path | None:
+        d = Path(st.project.folder) if st.project and st.project.folder else None
+        return d if d and d.is_dir() else None
+
+    @app.post("/labs/{p}/{s}/{n}/project/open")
+    def lab_project_open(p: str, s: str, n: str):
+        d = project_dir(load(p, s, n, strict=False))
+        if d is None:
+            return redirect(lab_url(p, s, n), err="Папки проекта нет: нажми «Пересобрать».")
+        _open_local(str(d))
+        return redirect(lab_url(p, s, n))
+
+    @app.get("/labs/{p}/{s}/{n}/project.zip")
+    def lab_project_zip(p: str, s: str, n: str):
+        import io
+        import zipfile
+
+        st = load(p, s, n, strict=False)
+        d = project_dir(st)
+        if d is None:
+            return JSONResponse({"error": "нет проекта"}, status_code=404)
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            for f in sorted(d.rglob("*")):
+                if f.is_file():
+                    z.write(f, f"{st.project.name}/{f.relative_to(d).as_posix()}")
+        from urllib.parse import quote as _quote
+
+        name = _quote(f"{st.project.name}.zip")
+        return Response(buf.getvalue(), media_type="application/zip",
+                        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{name}"})
 
     @app.get("/labs/{p}/{s}/{n}/page/{i}")
     def lab_page_png(p: str, s: str, n: str, i: int):
