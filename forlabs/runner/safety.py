@@ -508,6 +508,15 @@ def _shots(plan: ProjectPlan) -> list[str]:
     return out
 
 
+def sql_problems(text: str, own: bool = False) -> list[str]:
+    """Опасное в SQL, который кто-то наберёт руками (агент в SSMS, Workbench, консоли mysql): что делает — фрагмент.
+    own=False — сервер студента: пользователи, права и чужие базы трогать нельзя."""
+    code, strings = lex(text + "\n", "sql")
+    src = _Src("ввод", "sql", code, strings, 0, False)
+    created = {m[1].lower() for m in SQL_CREATE_DB.finditer(text)}
+    return [f"{what} — {snippet}" for _, what, snippet in _sql(src.code, created, src, own=own) + _mysql_client(src)]
+
+
 def _typed(plan: ProjectPlan) -> list[_Src]:
     """Что ForLabs наберёт в консоли mysql на снимке — тоже запросы (и команды клиента вроде «system …»)."""
     if plan.language != "mysql":
