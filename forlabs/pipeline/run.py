@@ -817,8 +817,10 @@ class Pipeline:
         emit = lambda text, kind="info": self._emit(st, text, kind, step="check")  # noqa: E731
         with self.lock(st):
             before, after = self.app_hooks
-            st = appshots.run(self, st, self._llm(st), emit, before=before, after=after)
-            st = self._save(st)
+            try:
+                st = appshots.run(self, st, self._llm(st), emit, before=before, after=after)
+            finally:  # что бы ни случилось, уже снятые рисунки остаются в лабе
+                st = self._save(st)
         return self.render(st)
 
     @staticmethod

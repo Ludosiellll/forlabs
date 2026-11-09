@@ -4,7 +4,9 @@ from forlabs.agent import watch as W
 
 
 def make(**kw):
-    return W.Watch("Visual Studio", **kw)
+    w = W.Watch("Visual Studio", **kw)
+    w._started -= 10  # первые секунды после старта движение мыши не считается — здесь они прошли
+    return w
 
 
 def test_escape_from_student_stops_but_agent_escape_does_not():
@@ -57,3 +59,20 @@ def test_first_reason_wins():
     w.key_event(W.VK_ESCAPE, injected=False)
     w.mouse_event(W.WM_LBUTTONDOWN, (1, 1), injected=False)
     assert w.reason == "остановлено (Esc)"
+
+
+def test_hand_still_moving_right_after_start_is_not_a_stop():
+    w = W.Watch("Visual Studio")
+    w.mouse_event(W.WM_MOUSEMOVE, (100, 100), injected=False)
+    w.mouse_event(W.WM_MOUSEMOVE, (400, 300), injected=False)
+    assert w.reason is None
+
+
+def test_small_moves_far_apart_in_time_do_not_add_up(monkeypatch):
+    w = make()
+    t = [100.0]
+    monkeypatch.setattr(W.time, "monotonic", lambda: t[0])
+    for i in range(10):  # раз в 2 с мышь чуть дёргается — путь не копится
+        t[0] += 2
+        w.mouse_event(W.WM_MOUSEMOVE, (100 + i % 2 * 10, 100), injected=False)
+    assert w.reason is None

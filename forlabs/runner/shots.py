@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import sys
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -67,6 +68,10 @@ class FakeShooter:
         Image.new("RGB", (320, 200), (240, 240, 240)).save(out)
         return ShotResult(True, image=out, seen=str(_get(shot, "expect", "") or ""))
 
+
+# мышь и клавиатура одни на компьютер: снимки окон (этап «Проект») и агент в программах — по очереди, даже из
+# разных лаб
+DESKTOP = threading.Lock()
 
 _URL_SAFE = "/?=&#.-_~%+,;:@"
 
@@ -205,6 +210,14 @@ class WindowsShooter:
         self.timeout, self.low = timeout, low
 
     def shoot(self, target: RunTarget, shot, out: Path) -> ShotResult:
+        if not DESKTOP.acquire(timeout=900):  # агент другой лабы ещё работает в программе
+            return ShotResult(False, reason="мышь и клавиатура заняты: ForLabs снимает окна в другой лабе")
+        try:
+            return self._shoot(target, shot, out)
+        finally:
+            DESKTOP.release()
+
+    def _shoot(self, target: RunTarget, shot, out: Path) -> ShotResult:
         mode = _get(shot, "mode", "window")
         try:
             if mode == "browser":

@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import ctypes
+import os
 import subprocess
 import time
 from ctypes import wintypes
@@ -23,6 +24,8 @@ _u = ctypes.WinDLL("user32", use_last_error=True) if hasattr(ctypes, "WinDLL") e
 
 MOVE, LDOWN, LUP, RDOWN, RUP, WHEEL, ABSOLUTE, VIRTUALDESK = 0x1, 0x2, 0x4, 0x8, 0x10, 0x800, 0x8000, 0x4000
 MENU_CLASS = "#32768"
+BROWSERS = {"msedge.exe", "chrome.exe", "firefox.exe", "opera.exe", "browser.exe", "iexplore.exe", "brave.exe",
+            "msedgewebview2.exe"}
 
 
 class MOUSEINPUT(ctypes.Structure):
@@ -131,7 +134,12 @@ class WinDesk:
         return {pid for pid, name in winapi.process_names().items() if name.lower() in self.names}
 
     def targets(self) -> set[int]:
-        return winapi.process_tree({self.root}) | self._by_name()
+        """Процессы программы: запущенный и его дочерние; для программ, которые отдают файл уже открытому окну или
+        перезапускают себя (Visual Studio, Word, VS Code), — и по имени. Сам ForLabs и браузеры (ссылка «Войти» в
+        программе открывает браузер) — никогда."""
+        pids = winapi.process_tree({self.root}) | (self._by_name() if self.app.single else set())
+        names = winapi.process_names(pids)
+        return {pid for pid in pids if pid != os.getpid() and names.get(pid, "").lower() not in BROWSERS}
 
     def _mine(self, owned: bool = True) -> list:
         return [w for w in winapi.windows_of(self.targets(), owned) if w.hwnd not in self.pre]
@@ -149,6 +157,12 @@ class WinDesk:
             big = [w for w in self._mine(owned=False) if w.title and min(self._size(w.hwnd)) >= 150]
             if big:
                 return max(big, key=lambda w: self._size(w.hwnd)[0] * self._size(w.hwnd)[1]).hwnd
+            if self.pre and time.monotonic() > end - timeout + 25 and not self._mine(owned=False):
+                # Блокнот с вкладками, Notepad++: файл открылся во вкладке окна, которое студент открыл сам
+                theirs = [w for w in winapi.windows_of(self._by_name()) if w.hwnd in self.pre]
+                if theirs:
+                    raise AppError(f"программа «{self.app.title}» открыла файл в окне, которое у тебя уже открыто, "
+                                   "а в твои окна ForLabs не заходит. Закрой её и нажми «Сделать снимки в программах».")
             code = self.proc.poll()
             if code is not None:
                 exited_at = exited_at or time.monotonic()
@@ -232,9 +246,11 @@ class WinDesk:
         from PIL import Image, ImageGrab
 
         z = self._z()
-        hwnds = sorted({h for h in hwnds if _u.IsWindow(h)}, key=lambda h: z.get(h, 0))
+        hwnds = sorted({h for h in hwnds if _u.IsWindow(h) and not _u.IsIconic(h)}, key=lambda h: z.get(h, 0))
         rects = {h: winapi.window_rect(h) for h in hwnds}
-        rects = {h: r for h, r in rects.items() if r[2] - r[0] > 2 and r[3] - r[1] > 2}
+        # свёрнутые окна «стоят» в (-32000, -32000): в рамку снимка не берём
+        rects = {h: r for h, r in rects.items()
+                 if r[2] - r[0] > 2 and r[3] - r[1] > 2 and r[0] > -20000 and r[1] > -20000}
         if not rects:
             raise OSError("у окон программы нет размера")
         left, top = min(r[0] for r in rects.values()), min(r[1] for r in rects.values())
@@ -249,12 +265,25 @@ class WinDesk:
                 if winapi.blank(piece):
                     raise OSError("пусто")
             except OSError:
+                if not self._visible(h, r):  # поверх чужое окно: с экрана снимать нельзя — оно попало бы в отчёт
+                    continue
                 piece = ImageGrab.grab(bbox=r, all_screens=True)  # меню и окна, которые не рисуют себя в PrintWindow
             img.paste(piece.resize((r[2] - r[0], r[3] - r[1])) if piece.size != (r[2] - r[0], r[3] - r[1])
                       else piece, (r[0] - left, r[1] - top))
         if winapi.blank(img):
             raise OSError("снимок окна пустой — экран заблокирован или программа не рисует окно")
         return img, (left, top)
+
+    def _visible(self, hwnd: int, r: tuple[int, int, int, int]) -> bool:
+        """Окно видно на экране целиком: в углах и середине — оно само или окна программы."""
+        mine = self.targets()
+        w, h = r[2] - r[0], r[3] - r[1]
+        for fx, fy in ((0.1, 0.1), (0.9, 0.1), (0.5, 0.5), (0.1, 0.9), (0.9, 0.9)):
+            hit = _u.WindowFromPoint(wintypes.POINT(r[0] + int(w * fx), r[1] + int(h * fy)))
+            top = _u.GetAncestor(hit, 2) if hit else None
+            if not top or self._pid_of(top) not in mine:
+                return False
+        return True
 
     def observe(self) -> Observation:
         from forlabs.agent import winuia
@@ -332,6 +361,15 @@ class WinDesk:
         _send([_mouse(MOVE | ABSOLUTE | VIRTUALDESK, ax, ay)])
         time.sleep(0.05)
 
+    def _still_here(self, fg: int) -> None:
+        """Посреди набора или перетаскивания: студент не остановил, окно программы всё ещё впереди."""
+        if self.watch:
+            self.watch.check()
+        now = _u.GetForegroundWindow()
+        if now != fg and (not now or self._pid_of(now) not in self.targets()):
+            raise Blocked("окно программы ушло с переднего плана — набор остановлен, чтобы текст не попал в "
+                          "чужое окно")
+
     def act(self, a: Action, obs: Observation) -> str:
         from forlabs.agent.guard import keys_of
 
@@ -339,6 +377,7 @@ class WinDesk:
         fg = self._front()
         before = (fg, self._title(fg), len([w for w in self._mine() if w.cls == MENU_CLASS]))
         held: list[int] = []
+        held_mouse = False
         try:
             if a.do in ("click", "double_click", "right_click"):
                 sx, sy = self._point(a, obs)
@@ -352,9 +391,12 @@ class WinDesk:
                 ex, ey = self._point(a, obs, second=True)
                 self._move(sx, sy)
                 _send([_mouse(LDOWN)])
+                held_mouse = True
                 for i in range(1, 11):
+                    self._still_here(fg)
                     self._move(sx + (ex - sx) * i // 10, sy + (ey - sy) * i // 10)
                 _send([_mouse(LUP)])
+                held_mouse = False
             elif a.do == "scroll":
                 if a.el is not None or a.x is not None:
                     self._move(*self._point(a, obs))
@@ -370,7 +412,9 @@ class WinDesk:
                     _send([_key(vk, flags=KEYUP)])
                     held.remove(vk)
             elif a.do == "type":
-                for unit in utf16_units(a.text.replace("\r\n", "\n")):
+                for i, unit in enumerate(utf16_units(a.text.replace("\r\n", "\n"))):
+                    if i % 8 == 0:  # студент нажал Esc или щёлкнул в другое окно — остальное туда не уйдёт
+                        self._still_here(fg)
                     if unit == 0x0A:
                         _send([_key(0x0D), _key(0x0D, flags=KEYUP)])
                     elif unit == 0x09:
@@ -380,7 +424,15 @@ class WinDesk:
                     time.sleep(0.012)
         finally:
             for vk in held:  # Ctrl не должен остаться зажатым, что бы ни случилось
-                _send([_key(vk, flags=KEYUP)])
+                try:
+                    _send([_key(vk, flags=KEYUP)])
+                except Exception:  # noqa: BLE001 — отпустить остальные всё равно
+                    pass
+            if held_mouse:
+                try:
+                    _send([_mouse(LUP)])
+                except Exception:  # noqa: BLE001
+                    pass
         time.sleep(self.settle)
         self._alive()
         fg2 = _u.GetForegroundWindow()

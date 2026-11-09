@@ -29,6 +29,8 @@ class App:
     note: str = ""  # что студенту знать заранее (вход в аккаунт, лицензия)
     find_hook: Callable[[], str | None] | None = None
     hints: list[str] = field(default_factory=list)  # приёмы работы в этой программе — модели в подсказки
+    single: bool = False  # отдаёт файл уже запущенному окну или перезапускает себя: свои процессы — и по имени
+    launcher: list[str] = field(default_factory=list)  # чем запускать (cmd — через conhost, не Windows Terminal)
 
 
 def _vs() -> str | None:
@@ -76,16 +78,16 @@ def _pf(*tail: str) -> list[str]:
 APPS: dict[str, App] = {a.key: a for a in [
     App("notepad", "Блокнот", "editor", ["notepad.exe"], ["%WINDIR%\\System32\\notepad.exe"]),
     App("notepadpp", "Notepad++", "editor", ["notepad++.exe"], _pf("Notepad++", "notepad++.exe"),
-        ["notepad++.exe"], get="https://notepad-plus-plus.org/downloads/"),
+        ["notepad++.exe"], get="https://notepad-plus-plus.org/downloads/", single=True),
     App("vscode", "Visual Studio Code", "ide", ["Code.exe"], _pf("Microsoft VS Code", "Code.exe"), ["Code.exe"],
         open_args=lambda files: ["-n", *[str(f) for f in files]], get="https://code.visualstudio.com/Download",
-        hints=["открыть файл — Ctrl+P и имя файла; терминал — Ctrl+`"]),
+        hints=["открыть файл — Ctrl+P и имя файла"], single=True),
     App("visualstudio", "Visual Studio", "ide", ["devenv.exe"], [], ["devenv.exe"], open_args=_vs_args,
         get="https://visualstudio.microsoft.com/ru/vs/community/", find_hook=_vs,
         note="при первом запуске Visual Studio может попросить войти в учётную запись Microsoft",
         hints=["Обозреватель решений — Ctrl+Alt+L; открыть файл проекта — двойной щелчок по нему там",
                "запуск без отладки — Ctrl+F5, окно консоли программы откроется отдельно",
-               "окно входа в учётную запись при первом запуске — «Пропустить» / «Не сейчас»"]),
+               "окно входа в учётную запись при первом запуске — «Пропустить» / «Не сейчас»"], single=True),
     App("idle", "IDLE (Python)", "ide", ["pythonw.exe", "python.exe"], open_args=_idle_args,
         get="https://www.python.org/downloads/windows/", find_hook=_python,
         hints=["запуск программы — F5 (Run Module); вывод появится в окне Shell"]),
@@ -109,7 +111,7 @@ APPS: dict[str, App] = {a.key: a for a in [
         get="https://learn.microsoft.com/ru-ru/ssms/install/install",
         hints=["окно подключения: сервер обычно (localdb)\\MSSQLLocalDB или .\\SQLEXPRESS, проверка подлинности "
                "Windows",
-               "новый запрос — Ctrl+N, выполнить — F5, результат появится внизу"]),
+               "новый запрос — Ctrl+N, выполнить — F5, результат появится внизу"], single=True),
     App("workbench", "MySQL Workbench", "db", ["MySQLWorkbench.exe"],
         _pf("MySQL", "MySQL Workbench *", "MySQLWorkbench.exe"), get="https://dev.mysql.com/downloads/workbench/",
         hints=["подключение — плитка Local instance на главной странице; запрос — Ctrl+Enter выполняет строку"]),
@@ -119,7 +121,7 @@ APPS: dict[str, App] = {a.key: a for a in [
         note="Packet Tracer при запуске просит войти в аккаунт Cisco: один раз войди сам и нажми «Повторить»",
         hints=["устройства — панель внизу слева: выбери тип, затем модель и перетащи её на рабочую область",
                "соединения — значок молнии в той же панели; настройка устройства — щелчок по нему, вкладки "
-               "Config/CLI"]),
+               "Config/CLI"], single=True),
     App("1c", "1С:Предприятие", "1c", ["1cv8.exe", "1cv8c.exe"], _pf("1cv8", "*", "bin", "1cv8.exe"),
         open_args=lambda files: ["DESIGNER", "/F", str(files[0])] if files else ["DESIGNER"],
         note="нужна установленная 1С и база лабы",
@@ -127,27 +129,27 @@ APPS: dict[str, App] = {a.key: a for a in [
                "запуск в режиме предприятия — F5 (отладка)"]),
     App("word", "Microsoft Word", "office", ["WINWORD.EXE"], _pf("Microsoft Office", "root", "Office16",
                                                                 "WINWORD.EXE"), ["Winword.exe"],
-        hints=["таблица — «Вставка → Таблица»; новый документ — «Новый документ» на начальном экране"]),
+        hints=["таблица — «Вставка → Таблица»; новый документ — «Новый документ» на начальном экране"], single=True),
     App("excel", "Microsoft Excel", "office", ["EXCEL.EXE"], _pf("Microsoft Office", "root", "Office16", "EXCEL.EXE"),
         ["excel.exe"],
         hints=["к ячейке — через поле имени слева от строки формул (набери A4 и Enter); где курсор — видно там же",
-               "пустая книга — Ctrl+N или «Пустая книга» на начальном экране"]),
+               "пустая книга — Ctrl+N или «Пустая книга» на начальном экране"], single=True),
     App("powerpoint", "Microsoft PowerPoint", "office", ["POWERPNT.EXE"],
-        _pf("Microsoft Office", "root", "Office16", "POWERPNT.EXE"), ["powerpnt.exe"]),
+        _pf("Microsoft Office", "root", "Office16", "POWERPNT.EXE"), ["powerpnt.exe"], single=True),
     App("access", "Microsoft Access", "db", ["MSACCESS.EXE"], _pf("Microsoft Office", "root", "Office16",
-                                                                 "MSACCESS.EXE"), ["MSACCESS.EXE"]),
+                                                                 "MSACCESS.EXE"), ["MSACCESS.EXE"], single=True),
     App("visio", "Microsoft Visio", "graphics", ["VISIO.EXE"], _pf("Microsoft Office", "root", "Office16", "VISIO.EXE"),
-        ["visio.exe"]),
+        ["visio.exe"], single=True),
     App("libreoffice", "LibreOffice", "office", ["soffice.exe", "soffice.bin"], _pf("LibreOffice", "program",
                                                                                     "soffice.exe"),
         get="https://ru.libreoffice.org/download/",
         hints=["Calc: к ячейке — поле имени слева от строки формул; Writer: таблица — Ctrl+F12",
-               "окно «Совет дня» при первом запуске — OK"]),
+               "окно «Совет дня» при первом запуске — OK"], single=True),
     App("drawio", "draw.io", "graphics", ["draw.io.exe"], _pf("draw.io", "draw.io.exe"),
         get="https://github.com/jgraph/drawio-desktop/releases"),
     App("paint", "Paint", "graphics", ["mspaint.exe"], ["%WINDIR%\\System32\\mspaint.exe"], ["mspaint.exe"]),
     App("cmd", "Командная строка", "console", ["cmd.exe", "conhost.exe"], ["%WINDIR%\\System32\\cmd.exe"],
-        open_args=lambda files: ["/k"]),
+        open_args=lambda files: ["/k"], launcher=["%WINDIR%\\System32\\conhost.exe"]),
 ]}
 
 
@@ -191,8 +193,18 @@ def find(key: str, custom: dict[str, str] | None = None) -> str | None:
     return None
 
 
-def installed(custom: dict[str, str] | None = None) -> dict[str, str]:
-    """Какие программы есть: ключ → путь."""
+_CACHE: dict[tuple, tuple[float, dict[str, str]]] = {}
+CACHE_SECONDS = 120
+
+
+def installed(custom: dict[str, str] | None = None, fresh: bool = False) -> dict[str, str]:
+    """Какие программы есть: ключ → путь. Поиск небыстрый (реестр, vswhere, Python) — ответ помнится пару минут."""
+    import time
+
+    key = tuple(sorted((custom or {}).items()))
+    hit = _CACHE.get(key)
+    if hit and not fresh and time.monotonic() - hit[0] < CACHE_SECONDS:
+        return dict(hit[1])
     out = {}
     for key in APPS:
         try:
@@ -200,8 +212,10 @@ def installed(custom: dict[str, str] | None = None) -> dict[str, str]:
                 out[key] = p
         except Exception:  # noqa: BLE001 — сломанная запись реестра не должна мешать остальным
             continue
+    _CACHE[key] = (time.monotonic(), dict(out))
     return out
 
 
 def command(key: str, exe: str, files: list[Path]) -> list[str]:
-    return [exe, *APPS[key].open_args(list(files))]
+    app = APPS[key]
+    return [*(os.path.expandvars(x) for x in app.launcher), exe, *app.open_args(list(files))]

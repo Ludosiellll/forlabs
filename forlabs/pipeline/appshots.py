@@ -37,7 +37,8 @@ class AppShotItem(BaseModel):
     @field_validator("open", "allow", mode="before")
     @classmethod
     def _l(cls, v):
-        return [str(x) for x in v] if isinstance(v, list) else ([str(v)] if v else [])
+        items = v if isinstance(v, list) else ([v] if v else [])
+        return [str(x).strip() for x in items if x is not None and str(x).strip()]
 
 
 class AppShotPlan(BaseModel):
@@ -177,6 +178,13 @@ def run(pipe, st: LabState, llm, emit=None, before=None, after=None, desk_factor
         groups.setdefault(item[2].app_task.app, []).append(item)
     lab = pipe.lab_dir(st)
     stopped = None
+    from forlabs.runner.shots import DESKTOP
+
+    if not DESKTOP.acquire(timeout=5):
+        emit("Жду, пока ForLabs закончит снимать окна в другой лабе")
+        if not DESKTOP.acquire(timeout=900):
+            emit("Мышь и клавиатура заняты другой лабой — нажми «Сделать снимки в программах» позже", "warn")
+            return st
     if before:
         before()
     try:
@@ -222,16 +230,24 @@ def run(pipe, st: LabState, llm, emit=None, before=None, after=None, desk_factor
                             w.say(text)
                         emit(text)
 
-                    res = core.run(task, desk, llm, on_step=say,
-                                   should_stop=lambda w=watch: bool(getattr(w, "reason", None)))
-                    if res.ok and res.image is not None:
-                        rel = f"assets/app_{n}_{bi}_{uuid.uuid4().hex[:6]}.png"
-                        (lab / rel).parent.mkdir(parents=True, exist_ok=True)
-                        res.image.save(lab / rel)
-                        b.image_path, b.auto_note, b.need_tool = rel, None, None
-                        pipe._sync(st, [rel])
-                        emit(f"Снял: «{b.topic}»", "done")
-                    elif getattr(watch, "reason", None):  # остановил студент: не ошибка, продолжим по кнопке
+                    try:
+                        res = core.run(task, desk, llm, on_step=say,
+                                       should_stop=lambda w=watch: bool(getattr(w, "reason", None)))
+                        if res.ok and res.image is not None:
+                            rel = f"assets/app_{n}_{bi}_{uuid.uuid4().hex[:6]}.png"
+                            (lab / rel).parent.mkdir(parents=True, exist_ok=True)
+                            res.image.save(lab / rel)
+                            b.image_path, b.auto_note, b.need_tool = rel, None, None
+                            try:
+                                pipe._sync(st, [rel])
+                            except Exception:  # noqa: BLE001 — облако догонит при следующем сохранении
+                                pass
+                            emit(f"Снял: «{b.topic}»", "done")
+                            continue
+                    except Exception as e:  # noqa: BLE001 — один рисунок не должен сорвать остальные
+                        log.warning("агент: рисунок «%s»: %s", b.topic, e, exc_info=True)
+                        res = core.Result(False, reason=f"сбой ({type(e).__name__}: {e})")
+                    if getattr(watch, "reason", None):  # остановил студент: не ошибка, продолжим по кнопке
                         b.auto_note = (f"Остановлено: {watch.reason}. Нажми «Сделать снимки в программах», чтобы "
                                        "продолжить.")
                     else:
@@ -243,6 +259,7 @@ def run(pipe, st: LabState, llm, emit=None, before=None, after=None, desk_factor
                 if hasattr(watch, "stop"):
                     watch.stop()
     finally:
+        DESKTOP.release()
         if after:
             after()
     if stopped:

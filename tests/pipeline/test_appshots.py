@@ -156,3 +156,30 @@ def test_pipeline_button_runs_and_rerenders(tmp_home, tmp_path, monkeypatch):
                                                               finder=lambda k_, c: "idle.exe", **k))
     st = pipe.app_shots(st)
     assert idle_fig(st).image_path and st.docx_path and Path(st.docx_path).exists()
+
+
+def test_one_figure_crash_does_not_lose_other_shots(tmp_home, tmp_path, monkeypatch):
+    pipe, fake, st, f = with_task(tmp_home, tmp_path, [DONE, {"ok": True}])
+    other = next(x for x in figures(st) if x is not f)
+    other.image_path = None
+    other.app_task = AppTask(app="idle", goal="второй")
+    from forlabs.agent import core as agent_core
+
+    calls = {"n": 0}
+    real = agent_core.run
+
+    def flaky(*a, **k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("UI Automation упал")
+        return real(*a, **k)
+
+    monkeypatch.setattr(agent_core, "run", flaky)
+    st = appshots.run(pipe, st, fake, desk_factory=FakeDesk, watch_factory=FakeWatch, finder=lambda k, c: "x.exe")
+    first, second = (other, f) if figures(st).index(other) < figures(st).index(f) else (f, other)
+    assert "RuntimeError" in first.auto_note and second.image_path
+
+
+def test_allow_list_drops_empty_words():
+    item = appshots.AppShotItem(section=1, block=1, allow=["", "  ", "Удалить", None])
+    assert item.allow == ["Удалить"]

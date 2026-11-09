@@ -17,6 +17,7 @@ WM_MOUSEMOVE, WM_LBUTTONDOWN, WM_RBUTTONDOWN, WM_MBUTTONDOWN, WM_MOUSEWHEEL = 0x
 WM_QUIT, WM_PAINT, WM_DESTROY, WM_NCHITTEST, WM_APP = 0x12, 0x0F, 0x02, 0x84, 0x8000
 VK_ESCAPE = 0x1B
 MOVE_LIMIT = 40  # столько пикселей настоящего движения мыши — «студент взял мышь»
+START_GRACE = 2.0
 
 LRESULT = ctypes.c_ssize_t
 
@@ -93,6 +94,46 @@ def _api():
     return u, k, g
 
 
+_OVERLAYS: dict[int, "Watch"] = {}  # окно плашки → её Watch (функция окна одна на всю программу)
+_CLASS = {"proc": None, "registered": False, "lock": threading.Lock()}
+
+
+def _overlay_proc(u, g):
+    """Одна функция окна для всех плашек: живёт до конца программы, поэтому второй запуск агента её не теряет."""
+    with _CLASS["lock"]:
+        if _CLASS["proc"] is not None:
+            return _CLASS["proc"]
+        font = g.CreateFontW(-15, 0, 0, 0, 600, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe UI")
+        small = g.CreateFontW(-13, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe UI")
+        bg, fg = g.CreateSolidBrush(0x00382A1E), 0x00FFFFFF  # тёмно-синий фон, белый текст (BGR)
+
+        def proc(hwnd, msg, wparam, lparam):
+            if msg == WM_NCHITTEST:
+                return -1  # HTTRANSPARENT: щелчки — сквозь плашку
+            w = _OVERLAYS.get(int(hwnd or 0))
+            if msg == WM_PAINT and w is not None:
+                ps = PAINTSTRUCT()
+                hdc = u.BeginPaint(hwnd, ctypes.byref(ps))
+                rc = wintypes.RECT()
+                u.GetClientRect(hwnd, ctypes.byref(rc))
+                u.FillRect(hdc, ctypes.byref(rc), bg)
+                g.SetBkMode(hdc, 1)
+                g.SetTextColor(hdc, fg)
+                top = wintypes.RECT(14, 8, rc.right - 12, 30)
+                g.SelectObject(hdc, font)
+                u.DrawTextW(hdc, f"ForLabs работает в {w.title} · Esc — остановить", -1, ctypes.byref(top),
+                            0x20 | 0x8000)  # SINGLELINE | END_ELLIPSIS
+                g.SelectObject(hdc, small)
+                bottom = wintypes.RECT(14, 32, rc.right - 12, rc.bottom - 6)
+                u.DrawTextW(hdc, w.line, -1, ctypes.byref(bottom), 0x20 | 0x8000)
+                u.EndPaint(hwnd, ctypes.byref(ps))
+                return 0
+            return u.DefWindowProcW(hwnd, msg, wparam, lparam)
+
+        _CLASS["proc"] = WNDPROC(proc)
+        return _CLASS["proc"]
+
+
 class Watch:
     """watch.start(); … watch.check() перед каждым действием; watch.say("Открываю меню «Файл»"); watch.stop()."""
 
@@ -106,6 +147,8 @@ class Watch:
         self._tid = 0
         self._hwnd = None
         self._moved = 0.0
+        self._move_at = 0.0
+        self._started = time.monotonic()  # рука ещё на кнопке «Сделать снимки» — первые секунды движение не в счёт
         self._last_pt = None
         self._own_esc_until = 0.0
         self._keep = []
@@ -128,7 +171,8 @@ class Watch:
     def check(self) -> None:
         from forlabs.agent.core import Stopped
 
-        if not self.hooked and self.reason is None:  # хуков нет (запрещены политикой) — хотя бы Esc
+        if self.reason is None and getattr(self, "_u", None) is not None:
+            # Esc проверяется и напрямую: Windows может молча снять перехват, если система подвисла
             if self._u.GetAsyncKeyState(VK_ESCAPE) & 0x8000 and time.monotonic() > self._own_esc_until:
                 self.reason = "остановлено (Esc)"
         if self.reason:
@@ -154,7 +198,11 @@ class Watch:
         if msg in (WM_LBUTTONDOWN, WM_RBUTTONDOWN, WM_MBUTTONDOWN, WM_MOUSEWHEEL):
             self.reason = self.reason or "ты щёлкнул мышью — остановил, чтобы не мешать"
         elif msg == WM_MOUSEMOVE:
-            if self._last_pt is not None:
+            now = time.monotonic()
+            if now - self._move_at > 1.0:  # мышь постояла — копить путь заново (стол качнули — не в счёт)
+                self._moved = 0.0
+            self._move_at = now
+            if self._last_pt is not None and now - self._started > START_GRACE:
                 self._moved += abs(pt[0] - self._last_pt[0]) + abs(pt[1] - self._last_pt[1])
                 if self._moved > MOVE_LIMIT:
                     self.reason = self.reason or "ты взял мышь — остановил, чтобы не мешать"
@@ -196,41 +244,19 @@ class Watch:
             if h:
                 u.UnhookWindowsHookEx(h)
         if self._hwnd:
+            _OVERLAYS.pop(int(self._hwnd), None)
             u.DestroyWindow(self._hwnd)
             self._hwnd = None
 
     def _overlay(self, hinst):
         u, g = self._u, self._g
-        bg, fg = g.CreateSolidBrush(0x00382A1E), 0x00FFFFFF  # тёмно-синий фон, белый текст (BGR)
-        font = g.CreateFontW(-15, 0, 0, 0, 600, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe UI")
-        small = g.CreateFontW(-13, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe UI")
-
-        def proc(hwnd, msg, wparam, lparam):
-            if msg == WM_NCHITTEST:
-                return -1  # HTTRANSPARENT: щелчки — сквозь плашку
-            if msg == WM_PAINT:
-                ps = PAINTSTRUCT()
-                hdc = u.BeginPaint(hwnd, ctypes.byref(ps))
-                rc = wintypes.RECT()
-                u.GetClientRect(hwnd, ctypes.byref(rc))
-                u.FillRect(hdc, ctypes.byref(rc), bg)
-                g.SetBkMode(hdc, 1)
-                g.SetTextColor(hdc, fg)
-                top = wintypes.RECT(14, 8, rc.right - 12, 30)
-                g.SelectObject(hdc, font)
-                u.DrawTextW(hdc, f"ForLabs работает в {self.title} · Esc — остановить", -1, ctypes.byref(top),
-                            0x20 | 0x8000)  # SINGLELINE | END_ELLIPSIS
-                g.SelectObject(hdc, small)
-                bottom = wintypes.RECT(14, 32, rc.right - 12, rc.bottom - 6)
-                u.DrawTextW(hdc, self.line, -1, ctypes.byref(bottom), 0x20 | 0x8000)
-                u.EndPaint(hwnd, ctypes.byref(ps))
-                return 0
-            return u.DefWindowProcW(hwnd, msg, wparam, lparam)
-
-        wndproc = WNDPROC(proc)
-        self._keep.append(wndproc)
-        wc = WNDCLASSW(0, wndproc, 0, 0, hinst, None, None, None, None, "ForLabsAgentOverlay")
-        u.RegisterClassW(ctypes.byref(wc))
+        wndproc = _overlay_proc(u, g)
+        with _CLASS["lock"]:
+            if not _CLASS["registered"]:
+                wc = WNDCLASSW(0, wndproc, 0, 0, hinst, None, None, None, None, "ForLabsAgentOverlay")
+                _CLASS["registered"] = bool(u.RegisterClassW(ctypes.byref(wc))) or ctypes.get_last_error() == 1410
+        if not _CLASS["registered"]:
+            return None
         work = wintypes.RECT()
         u.SystemParametersInfoW(0x30, 0, ctypes.byref(work), 0)  # SPI_GETWORKAREA
         w, h = 520, 58
@@ -239,7 +265,9 @@ class Watch:
                                  work.bottom - h - 16, w, h, None, None, hinst, None)  # WS_POPUP
         if not hwnd:
             return None
+        _OVERLAYS[int(hwnd)] = self
         u.SetLayeredWindowAttributes(hwnd, 0, 235, 0x2)  # LWA_ALPHA
         u.SetWindowDisplayAffinity(hwnd, 0x11)  # WDA_EXCLUDEFROMCAPTURE (Windows 10 2004+), иначе — без этого
         u.ShowWindow(hwnd, 4)  # SW_SHOWNOACTIVATE
+        u.InvalidateRect(hwnd, None, True)
         return hwnd
