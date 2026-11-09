@@ -307,7 +307,8 @@ def visual_studio_project(res):
         t2 = time.time()
         try:
             raw = winuia._collect(desk._foreground() or desk.main, 8.0)
-            res["uia_direct"] = {"count": len(raw), "sec": round(time.time() - t2, 1), "sample": [r[:2] for r in raw[:15]]}
+            res["uia_direct"] = {"count": len(raw), "sec": round(time.time() - t2, 1),
+                                 "sample": [r[:2] for r in raw[:15]]}
         except Exception as e:  # noqa: BLE001
             res["uia_direct"] = {"error": f"{type(e).__name__}: {e}", "trace": traceback.format_exc()[-800:]}
         desk.capture("window").save(OUT / "vs_final.png")
@@ -403,13 +404,16 @@ def paint_drag_draws_a_line(res):
         obs.image.save(OUT / "paint_before.png")
         w, h = obs.image.size
         x1, y1, x2, y2 = w // 3, h // 2, 2 * w // 3, h // 2 + 60
-        before = obs.image.crop((x1, y1 - 5, x2, y2 + 5)).convert("L").getextrema()
+        def dark(img):
+            return sum(1 for v in img.crop((x1, y1 - 5, x2, y2 + 5)).convert("L").getdata() if v < 100)
+
+        before = dark(obs.image)
         desk.act(Action(do="drag", x=x1, y=y1, x2=x2, y2=y2), obs)
         after_img = desk.observe().image
         after_img.save(OUT / "paint_after.png")
-        after = after_img.crop((x1, y1 - 5, x2, y2 + 5)).convert("L").getextrema()
-        res["before_extrema"], res["after_extrema"] = before, after
-        assert after[0] < before[0] - 50, "линия не нарисовалась — перетаскивание не дошло"
+        after = dark(after_img)
+        res["dark_before"], res["dark_after"] = before, after
+        assert after > before + 100, "линия не нарисовалась — перетаскивание не дошло"
     finally:
         kill_tree(desk.root)
 
@@ -428,9 +432,9 @@ def typing_stops_when_another_window_takes_focus(res):
         import tkinter as tk
         r = tk.Tk(); r.title("Мессенджер"); r.geometry("400x120+50+50")
         e = tk.Entry(r, width=40); e.pack(); e.focus_set()
-        def done():
-            open(r"{got}", "w", encoding="utf-8").write(e.get()); r.destroy()
-        r.after(9000, done); r.mainloop()
+        def save(_=None):
+            open(r"{got}", "w", encoding="utf-8").write(e.get())
+        e.bind("<KeyRelease>", save); save(); r.after(30000, r.destroy); r.mainloop()
     """)
     tk = subprocess.Popen([sys.executable, "-c", code])
     try:
@@ -450,7 +454,7 @@ def typing_stops_when_another_window_takes_focus(res):
             raise AssertionError("набор не остановился, когда окно сменилось")
         except Blocked as e:
             res["blocked"] = str(e)
-        tk.wait(15)
+        time.sleep(1.5)
         leaked = got.read_text(encoding="utf-8") if got.exists() else ""
         res["leaked_chars"] = len(leaked)
         assert len(leaked) <= 8, f"в чужое окно ушло {len(leaked)} знаков"

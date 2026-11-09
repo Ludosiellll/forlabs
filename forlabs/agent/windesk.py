@@ -56,6 +56,10 @@ if _u is not None:
     _u.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
     _u.MonitorFromWindow.restype, _u.MonitorFromWindow.argtypes = wintypes.HANDLE, [wintypes.HWND, wintypes.DWORD]
     _u.GetMonitorInfoW.restype, _u.GetMonitorInfoW.argtypes = wintypes.BOOL, [wintypes.HANDLE, ctypes.c_void_p]
+    _u.AttachThreadInput.restype, _u.AttachThreadInput.argtypes = wintypes.BOOL, [wintypes.DWORD, wintypes.DWORD,
+                                                                                  wintypes.BOOL]
+    _u.BringWindowToTop.restype, _u.BringWindowToTop.argtypes = wintypes.BOOL, [wintypes.HWND]
+    _u.SetForegroundWindow.restype, _u.SetForegroundWindow.argtypes = wintypes.BOOL, [wintypes.HWND]
 
 
 class MONITORINFO(ctypes.Structure):
@@ -207,7 +211,8 @@ class WinDesk:
                 gone_since = None
             else:
                 gone_since = gone_since or now
-            if now > end or (gone_since and now - gone_since > relaunch):
+            wait_relaunch = relaunch if self.app.single else 0  # перезапускают себя только программы вроде VS
+            if now > end or (gone_since and now - gone_since >= wait_relaunch):
                 raise Stopped(f"программа «{self.app.title}» закрылась" if gone_since else
                               f"программа «{self.app.title}» не показала окно за {int(grace // 60)} мин")
             if self.watch and hasattr(self.watch, "say") and int(now) % 5 == 0:
@@ -226,12 +231,43 @@ class WinDesk:
             self.last_fg = fg
             return fg
         for hwnd in (self.last_fg, self.main):
-            if hwnd and _u.IsWindow(hwnd) and winapi.foreground(hwnd, timeout=2):
+            if hwnd and _u.IsWindow(hwnd) and self._bring(hwnd):
                 time.sleep(0.3)
                 self.last_fg = hwnd
                 return hwnd
         raise Blocked(f"программа «{self.app.title}» не выходит на передний план — поверх открыто окно другой "
                       "программы")
+
+    def _bring(self, hwnd: int) -> bool:
+        """Вывести окно вперёд без лишних нажатий: одиночный Alt (обычный приём) в Word, Excel, Paint включает
+        подсказки клавиш на ленте — следующий набор ушёл бы в команды. Сначала — без клавиш, Alt — в крайнем случае,
+        и тогда подсказки сразу гасятся."""
+        if _u.IsIconic(hwnd):
+            _u.ShowWindow(hwnd, 9)
+        _send([_mouse(MOVE, 0, 0)])  # своё «последнее действие пользователя»: Windows разрешает смену окна
+        k32 = ctypes.windll.kernel32
+        fg = _u.GetForegroundWindow()
+        mine_tid = k32.GetCurrentThreadId()
+        their_tid = _u.GetWindowThreadProcessId(fg, None) if fg else 0
+        attached = bool(their_tid and their_tid != mine_tid and _u.AttachThreadInput(mine_tid, their_tid, True))
+        try:
+            _u.BringWindowToTop(hwnd)
+            _u.SetForegroundWindow(hwnd)
+        finally:
+            if attached:
+                _u.AttachThreadInput(mine_tid, their_tid, False)
+        for _ in range(10):
+            if _u.GetForegroundWindow() == hwnd:
+                return True
+            time.sleep(0.05)
+        if winapi.foreground(hwnd, timeout=2):  # Alt — последний способ
+            time.sleep(0.2)
+            if self.app.kind in ("office", "graphics") or self.key in ("paint", "access"):  # лента: погасить подсказки
+                if self.watch:
+                    self.watch.own_escape()
+                _send([_key(0x1B), _key(0x1B, flags=KEYUP)])
+            return True
+        return False
 
     def _z(self) -> dict[int, int]:
         """Порядок наложения: больше — выше."""
@@ -299,7 +335,7 @@ class WinDesk:
         sources = [fg] + [w.hwnd for w in wins if w.cls == MENU_CLASS]
         raw = []
         for h in sources:
-            raw += winuia.elements(h, timeout=4 if h == fg else 2)
+            raw += winuia.elements(h, timeout=8 if h == fg else 3)  # первый запрос к большой программе долгий
         ox, oy = self.origin
         els, seen = [], set()
         for role, name, value, (x, y, w, h), enabled in raw:
