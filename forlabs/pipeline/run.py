@@ -695,8 +695,7 @@ class Pipeline:
     def add_materials(self, st: LabState, files: list[tuple[str, bytes]]) -> tuple[LabState, list[str]]:
         """Файлы к лабе: текст каждого — целиком в модель. Что не влезает в лимит или не читается — не добавляется,
         причина возвращается списком (лаба при этом сохраняется с остальными файлами)."""
-        from forlabs.core.models import Material
-        from forlabs.pipeline.materials import MATERIALS_MAX, MAX_FILES, PAGE_CHARS, pages, read_material
+        from forlabs.pipeline.materials import read_material
 
         problems: list[str] = []
         with self.lock(st):
@@ -721,21 +720,44 @@ class Pipeline:
                     problems.append(f"В «{name}» не нашлось текста — если это скан, сфотографируй страницы "
                                     "и прикрепи их к пожеланиям.")
                     continue
-                others = [m for m in st.materials if m.name != name]
-                used = sum(len(m.text) for m in others)
-                if used + len(text) > MATERIALS_MAX:
-                    left = max(MATERIALS_MAX - used, 0)
-                    problems.append(
-                        f"«{name}» не добавлен: в нём ≈{pages(len(text))} стр. текста, а на все файлы к лабе можно "
-                        f"до {MATERIALS_MAX // PAGE_CHARS} стр." + (f" (свободно ≈{left // PAGE_CHARS} стр.)" if used else "")
-                        + ". Оставь только нужные страницы: модель перечитывает файлы в каждом задании, "
-                          "и большой файл съест дневной лимит.")
-                    continue
-                if len(others) >= MAX_FILES:
-                    problems.append(f"«{name}» не добавлен: к лабе можно приложить до {MAX_FILES} файлов.")
-                    continue
-                st.materials = [*others, Material(name=name, text=text)]
+                self._put_material(st, name, text, problems)
             shutil.rmtree(tmp_dir, ignore_errors=True)
+            st = self._save(st)
+        return st, problems
+
+    @staticmethod
+    def _put_material(st: LabState, name: str, text: str, problems: list[str]) -> bool:
+        """Материал в лабу, если влезает в общий лимит (модель перечитывает материалы в каждом задании)."""
+        from forlabs.core.models import Material
+        from forlabs.pipeline.materials import MATERIALS_MAX, MAX_FILES, PAGE_CHARS, pages
+
+        others = [m for m in st.materials if m.name != name]
+        used = sum(len(m.text) for m in others)
+        if used + len(text) > MATERIALS_MAX:
+            left = max(MATERIALS_MAX - used, 0)
+            problems.append(
+                f"«{name}» не добавлен: в нём ≈{pages(len(text))} стр. текста, а на все файлы к лабе можно "
+                f"до {MATERIALS_MAX // PAGE_CHARS} стр." + (f" (свободно ≈{left // PAGE_CHARS} стр.)" if used else "")
+                + ". Оставь только нужные страницы: модель перечитывает файлы в каждом задании, "
+                  "и большой файл съест дневной лимит.")
+            return False
+        if len(others) >= MAX_FILES:
+            problems.append(f"«{name}» не добавлен: к лабе можно приложить до {MAX_FILES} файлов и ссылок.")
+            return False
+        st.materials = [*others, Material(name=name, text=text)]
+        return True
+
+    def add_link(self, st: LabState, url: str, http=None) -> tuple[LabState, list[str]]:
+        """Страница по ссылке — материал лабы (текст, поля форм, кнопки, ссылки): модель читает её как методичку."""
+        from forlabs.pipeline import weblink
+
+        try:
+            name, text = weblink.fetch(url, http=http, tesseract=self.tesseract)
+        except weblink.LinkError as e:
+            return st, [f"Ссылка не добавлена: {e}."]
+        problems: list[str] = []
+        with self.lock(st):
+            self._put_material(st, name, text, problems)
             st = self._save(st)
         return st, problems
 

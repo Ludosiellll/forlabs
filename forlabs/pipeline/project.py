@@ -55,8 +55,8 @@ PROJECT_SYSTEM = """Ты собираешь из отчёта по лабора�
    преподавателя ForLabs положит сам.
 4. Пиши как студент колледжа: заголовки окон, надписи и сообщения — по-русски и по теме лабы; имена — как в отчёте.
    Никаких служебных пометок, «TODO», «generated», английских надписей, отладочного вывода и лишних окон.
-5. Программа не трогает файлы вне своей папки, не запускает другие программы, не обращается к реестру и сети
-   (кроме локального сервера для сайта на PHP).
+5. Программа не трогает файлы вне своей папки, не запускает другие программы, не обращается к реестру. В интернет —
+   только если этого требует задание (запрос к сайту, API, загрузка страницы): ForLabs запустит её в песочнице.
 6. name — короткое название по-русски, 1–4 слова (это имя папки проекта): без двоеточий, кавычек, слэшей и
    названия языка. language — один из: csharp, cpp, python, java, javascript, web, php, go, mysql; kind — console,
    winforms, wpf, web, script, sql или gui (окно Swing/tkinter); entry — главный файл (у сайта на PHP — файл .php).
@@ -118,14 +118,15 @@ FILE_SYSTEM = """Ты пишешь один файл проекта лабора
 {"path": "…", "content": "полный текст файла"}. Код из листингов отчёта, которые берутся из этого файла, входит в него
 дословно; с уже написанными файлами проекта файл должен собираться вместе (те же имена классов, полей, функций).
 Правила те же: русские надписи, без служебных пометок и отладочного вывода, без работы с файлами вне папки
-программы, процессами и сетью."""
+программы и процессами; в интернет — только если этого требует задание."""
 
 FIX_SYSTEM = """Ты исправляешь проект лабораторной работы: сборка не прошла. Верни только JSON с изменёнными файлами
 целиком: {"files": [{"path": "…", "content": "…"}], "listings": [{"section": 1, "block": 2, "file": "…",
 "code": "новый текст листинга"}]}. Исправляй причину ошибки, меняй как можно меньше, тем же стилем. Если изменился
 код, который входит в листинг отчёта (список ниже), верни этот листинг в listings — так, как он теперь стоит в файле.
 Файлы сборки (csproj, go.mod, pom.xml, package.json, CMakeLists.txt) делает ForLabs — не пиши и не меняй их. Правила
-те же: русские надписи, без служебных пометок, без работы с файлами вне папки программы, процессами и сетью."""
+те же: русские надписи, без служебных пометок, без работы с файлами вне папки программы и процессами; в интернет —
+только если этого требует задание."""
 
 PLAN_MAX_TOKENS = 8000
 FILE_MAX_TOKENS = 8000  # один файл большого проекта (план по частям)
@@ -348,6 +349,23 @@ def page_uri(root: Path, url: str) -> str:
     return page.as_uri() + m[2]
 
 
+def sandbox_has_internet(pipe) -> bool:
+    """Снимки идут в песочнице AppContainer (Windows): там программе можно дать интернет без доступа к файлам."""
+    shooter = getattr(pipe, "shooter", None)
+    if shooter is not None:
+        return bool(getattr(shooter, "container", False))
+    return sys.platform == "win32"
+
+
+def _blocked(pipe, plan: ProjectPlan) -> tuple[list[str], bool]:
+    """(почему не запускать, нужен ли программе интернет)."""
+    found = safety.scan(plan)
+    network = any(safety.NET in r for r in found)
+    if network and sandbox_has_internet(pipe):
+        found = [r for r in found if safety.NET not in r]
+    return found, network
+
+
 def _target_and_shot(plan: ProjectPlan, spec, shot, work: Path, hand_in: Path, static: bool):
     """Как запустить программу для снимка и какой адрес открыть. Адрес вне проекта — ValueError."""
     from forlabs.runner.shots import RunTarget
@@ -432,8 +450,9 @@ def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None) 
     result = None
     shutil.rmtree(work, ignore_errors=True)
     languages.materialize(plan, work, tools)
-    # опасный код не собирается вовсе: сборка и проверка синтаксиса — тоже запуск чужих инструментов над ним
-    info.blocked = safety.scan(plan)
+    # опасный код не собирается вовсе: сборка и проверка синтаксиса — тоже запуск чужих инструментов над ним.
+    # Сеть — не опасность, если программа работает в песочнице: файлы пользователя ей закрыты, отправить нечего
+    info.blocked, network = _blocked(pipe, plan)
     if not info.missing and not info.blocked:
         emit("Собираю программу")
         result = languages.build(work, plan, tools)
@@ -446,7 +465,7 @@ def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None) 
             plan = fixed
             shutil.rmtree(work, ignore_errors=True)
             languages.materialize(plan, work, tools)
-            info.blocked = safety.scan(plan)  # исправление тоже проверяется до сборки
+            info.blocked, network = _blocked(pipe, plan)  # исправление тоже проверяется до сборки
             if info.blocked:
                 break
             result = languages.build(work, plan, tools)
@@ -546,6 +565,7 @@ def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None) 
             static = plan.language == "web"  # страница без сервера — из папки сдачи (адресная строка как у студента)
             try:
                 target, shot = _target_and_shot(plan, spec, shot, work, hand_in, static)
+                target.network = network
             except ValueError as e:
                 b.auto_note = f"Сам не снял: {e}."
                 continue

@@ -59,7 +59,12 @@
           <input class="visually-hidden" type="file" name="materials" multiple accept="{{ materials_accept }}" data-autosubmit></label>
         <noscript><button class="btn small" type="submit">Загрузить</button></noscript>
       </form>
-      <div class="hint">Данные, текст или код, которые выдал преподаватель. Модель читает их целиком в каждом задании. На все файлы — до {{ materials_pages }} страниц.</div>
+      <form method="post" action="{{ base_url }}/materials/link" class="row until" data-once style="margin-top:6px">
+        <label class="visually-hidden" for="mat-link">Ссылка на страницу</label>
+        <input id="mat-link" name="url" type="url" maxlength="2000" placeholder="Ссылка на страницу (сайт для тест-кейсов, статья)">
+        <button class="btn small" type="submit">Добавить ссылку</button>
+      </form>
+      <div class="hint">Данные, текст или код, которые выдал преподаватель, и страницы по ссылкам. Модель читает их целиком в каждом задании. На всё — до {{ materials_pages }} страниц.</div>
     </details>
 
     <details class="rules-mem subject-mem">

@@ -810,6 +810,18 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
             return redirect(lab_url(p, s, n), err=" ".join(problems))
         return redirect(lab_url(p, s, n), msg="Файлы добавлены, модель прочитает их в каждом задании")
 
+    @app.post("/labs/{p}/{s}/{n}/materials/link")
+    async def lab_materials_link(p: str, s: str, n: str, url: str = Form("")):
+        if busy_lab(p, s, n):
+            return redirect(lab_url(p, s, n), err=BUSY)
+        if not url.strip():
+            return redirect(lab_url(p, s, n), err="Вставь ссылку на страницу")
+        st = load(p, s, n)
+        st, problems = await asyncio.to_thread(ctx.pipeline.add_link, st, url)
+        if problems:
+            return redirect(lab_url(p, s, n), err=" ".join(problems))
+        return redirect(lab_url(p, s, n), msg="Страница добавлена: модель прочитает её вместе с методичкой")
+
     @app.post("/labs/{p}/{s}/{n}/materials/remove")
     def lab_materials_remove(p: str, s: str, n: str, name: str = Form("")):
         if busy_lab(p, s, n):

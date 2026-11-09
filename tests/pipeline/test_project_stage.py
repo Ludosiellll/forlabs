@@ -425,3 +425,26 @@ def test_mysql_server_that_did_not_start_leaves_notes_not_errors(tmp_home, tmp_p
     for f in figures(st):
         assert not f.image_path and "нет сервера (mysqld)" in f.auto_note
     assert st.project.built and st.docx_path  # отчёт собран, проект в папке сдачи
+
+
+NET_CODE = ('import urllib.request\n\nhtml = urllib.request.urlopen("https://example.com").read().decode()\n'
+            'print("Длина страницы:", len(html))\n')
+NET_PLAN = {"language": "python", "kind": "console", "name": "Запрос", "entry": "main.py",
+            "files": [{"path": "main.py", "content": NET_CODE}],
+            "shots": [{"section": 1, "block": 3, "mode": "console", "expect": "Длина страницы"}]}
+
+
+def test_program_that_needs_internet_runs_only_in_sandbox(tmp_home, tmp_path):
+    sandboxed = FakeShooter()
+    sandboxed.container = True  # снимки в песочнице: файлы пользователя программе закрыты
+    pipe, fake, st = make(tmp_home, tmp_path, [NET_PLAN], shooter=sandboxed)
+    st = pipe.execute(st)
+    assert st.project.built and not st.project.blocked
+    (target, _), = sandboxed.calls
+    assert target.network  # песочнице выдадут интернет
+
+
+def test_program_that_needs_internet_is_not_run_without_sandbox(tmp_home, tmp_path):
+    pipe, fake, st = make(tmp_home, tmp_path, [NET_PLAN])  # FakeShooter без песочницы
+    st = pipe.execute(st)
+    assert st.project.blocked and "сети" in st.project.blocked[0] and pipe.shooter.calls == []

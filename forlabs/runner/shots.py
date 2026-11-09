@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import shutil
@@ -33,6 +34,7 @@ class RunTarget:
     server: list[str] | None = None  # сайт на PHP: команда встроенного сервера
     title: str | None = None  # заголовок консоли (путь к программе, как при обычном запуске)
     env: dict = field(default_factory=dict)
+    network: bool = False  # программе нужен интернет: только в песочнице (файлы пользователя ей закрыты)
 
 
 @dataclass
@@ -41,6 +43,7 @@ class ShotResult:
     image: Path | None = None
     reason: str = ""  # почему снимка нет — студент увидит это в «Нужно от тебя»
     seen: str = ""  # текст, который был на экране (для проверки и отладки)
+    sandbox: str = ""  # как работала программа: container (AppContainer), low (уровень Low), "" — без песочницы
 
 
 class Shooter(Protocol):
@@ -200,14 +203,34 @@ def _texts_with_timeout(hwnd: int, timeout: float = 8.0) -> str:
     return " | ".join(out)
 
 
+LAUNCH_PROBLEMS = ("окно программы не появилось", "окно консоли не появилось", "программа завершилась сразу",
+                   "песочница:", "не получилось снять окно программы")
+
+
+def _launch_problem(reason: str) -> bool:
+    """Программа не запустилась или сразу упала — в песочнице ей могло не хватить доступа: повторить без неё."""
+    return any(reason.startswith(p) or p in reason for p in LAUNCH_PROBLEMS)
+
+
+def _tool_dirs(cmd: list[str], work: Path) -> list[Path]:
+    """Папки инструментов, которые программе нужно читать в песочнице: exe из команды (python, java, node) и всё,
+    что нашёл languages.detect() (DLL MinGW, JDK), плюс программы, поставленные ForLabs."""
+    from forlabs.runner.appcontainer import tool_dirs
+
+    return tool_dirs(cmd, work)
+
+
 class WindowsShooter:
     """Настоящие снимки. Каждый запуск — своя копия программы в папке с меткой Low, процесс с уровнем Low в задании
     (лимит памяти, процессов; закрытие убивает всё)."""
 
-    def __init__(self, timeout: float = 45.0, low: bool = True):
+    def __init__(self, timeout: float = 45.0, low: bool = True, container: bool = True):
         if sys.platform != "win32":
             raise OSError("снимки окон программ делаются только в Windows")
         self.timeout, self.low = timeout, low
+        self.container = container and low  # AppContainer: ни файлов пользователя, ни сети
+        self._in_container = False
+        self._network = False
 
     def shoot(self, target: RunTarget, shot, out: Path) -> ShotResult:
         if not DESKTOP.acquire(timeout=900):  # агент другой лабы ещё работает в программе
@@ -222,10 +245,30 @@ class WindowsShooter:
         try:
             if mode == "browser":
                 return self._browser(target, shot, out)
-            work = self._stage(target)
-            if mode == "console" or target.console:
-                return self._console(target, work, shot, out)
-            return self._window(target, work, shot, out)
+            run = self._console if (mode == "console" or target.console) else self._window
+            self._network = bool(target.network)
+            if self.container:
+                self._in_container = True
+                try:
+                    res = run(target, self._stage(target), shot, out)
+                except Exception as e:  # noqa: BLE001 — песочница не создалась: как раньше, уровень Low
+                    res = ShotResult(False, reason=f"песочница: {type(e).__name__}: {e}")
+                finally:
+                    self._in_container = False
+                if res.ok or not _launch_problem(res.reason):
+                    res.sandbox = "container"
+                    return res
+                if target.network:  # без песочницы сетевая программа могла бы отправить файлы пользователя
+                    return ShotResult(False, reason="программе нужен интернет, а запустить её в песочнице не вышло "
+                                                    f"({res.reason}); без песочницы ForLabs такие программы не запускает",
+                                      sandbox="container")
+                logging.getLogger("forlabs").info("в песочнице не вышло (%s) — снимаю с уровнем Low", res.reason)
+            if target.network and self.low:
+                return ShotResult(False, reason="программе нужен интернет: ForLabs запускает такие программы только "
+                                                "в песочнице, а она здесь недоступна")
+            res = run(target, self._stage(target), shot, out)
+            res.sandbox = "low" if self.low else ""
+            return res
         except Exception as e:  # любой сбой — причиной для студента, а не падением этапа
             return ShotResult(False, reason=f"не получилось снять окно программы ({type(e).__name__}: {e})")
 
@@ -241,6 +284,24 @@ class WindowsShooter:
         shutil.copytree(target.cwd, dst, ignore=shutil.ignore_patterns("obj", ".git", ".vs", "node_modules"))
         winapi.low_label_dir(str(work))
         return dst
+
+    def _spawn(self, line: str, work: Path, cmd: list[str], env: dict | None):
+        """Запуск программы: в AppContainer (сейчас идёт попытка в песочнице) или с уровнем Low."""
+        from forlabs.runner import winapi
+
+        if not self._in_container:
+            return winapi.spawn(line, str(work), low=self.low, env=env or None)
+        from forlabs.runner import appcontainer
+
+        sid = appcontainer.sid()
+        root = work.parent  # папка запуска: копия проекта — пишет программа только сюда
+        if not appcontainer.grant(root, sid, appcontainer.FULL):
+            raise appcontainer.ContainerError("папка запуска не открылась для песочницы")
+        tmp = root / ".tmp"
+        tmp.mkdir(exist_ok=True)
+        appcontainer.ensure_read(_tool_dirs(cmd, work), sid)
+        extra = {"TEMP": str(tmp), "TMP": str(tmp), "PYTHONNOUSERSITE": "1"}
+        return appcontainer.spawn(line, str(work), sid, env={**(env or {}), **extra}, internet=self._network)
 
     def _remap(self, target: RunTarget, work: Path) -> list[str]:
         """Пути в команде — на копию в папке запуска."""
@@ -258,7 +319,7 @@ class WindowsShooter:
         from forlabs.runner import console, winapi
 
         cmd = self._remap(target, work)
-        app = winapi.spawn(console.console_command(cmd, work), str(work), low=self.low, env=target.env or None)
+        app = self._spawn(console.console_command(cmd, work), work, cmd, target.env)
         try:
             w = winapi.wait_window({app.pid}, self.timeout,
                                    lambda x: x.cls == "ConsoleWindowClass" and min(winapi.size_of(x.hwnd)) > 40)
@@ -319,7 +380,7 @@ class WindowsShooter:
         from forlabs.runner import uia, winapi
 
         cmd = self._remap(target, work)
-        app = winapi.spawn(self._line(cmd), str(work), low=self.low, env=target.env or None)
+        app = self._spawn(self._line(cmd), work, cmd, target.env)
         try:
             w = winapi.wait_window({app.pid}, self.timeout)
             if not w:

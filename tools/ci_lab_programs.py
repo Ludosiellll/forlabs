@@ -317,6 +317,32 @@ SELECT user, host FROM mysql.user WHERE user = 'student';
 }
 
 
+# песочница: программа нарочно пробует прочитать файл владельца и выйти в интернет
+PROBE = '''import os, urllib.request
+try:
+    open(os.path.join(os.environ.get("FORLABS_SECRET", "x"))).read()
+    print("ФАЙЛ: прочитан")
+except OSError:
+    print("ФАЙЛ: закрыт")
+try:
+    urllib.request.urlopen("https://example.com", timeout=10).read(100)
+    print("СЕТЬ: есть")
+except Exception:
+    print("СЕТЬ: закрыта")
+try:
+    open("своя запись.txt", "w", encoding="utf-8").write("ok")
+    print("ЗАПИСЬ: да")
+except OSError:
+    print("ЗАПИСЬ: нет")
+'''
+SANDBOX_CASES = {
+    "sandbox_no_internet": (plan("python", "console", "Проверка", "main.py", {"main.py": PROBE},
+                                 {"mode": "console", "expect": "ФАЙЛ: закрыт"}), False, "СЕТЬ: закрыта"),
+    "sandbox_with_internet": (plan("python", "console", "Проверка", "main.py", {"main.py": PROBE},
+                                   {"mode": "console", "expect": "ФАЙЛ: закрыт"}), True, "СЕТЬ: есть"),
+}
+
+
 def mysql_variants(tools, report) -> None:
     """Диагностика: как запуск клиента MySQL доходит до программы (напрямую, через файл настроек, по имени)."""
     from forlabs.pipeline.project import start_mysql
@@ -365,7 +391,11 @@ def main() -> int:
         mysql_variants(tools, report)
     except Exception as e:  # noqa: BLE001
         report.setdefault("mysql_variants", {}).update(error=f"{type(e).__name__}: {e}", detail=getattr(e, "detail", ""))
+    secret = Path(os.environ.get("USERPROFILE", str(Path.home()))) / "Documents" / "forlabs-secret.txt"
+    secret.parent.mkdir(parents=True, exist_ok=True)
+    secret.write_text("личное", encoding="utf-8")
     runs = [(name, raw, tools, {}) for name, raw in CASES.items()]
+    runs += [(name, raw, tools, {"FORLABS_SECRET": str(secret)}) for name, (raw, _, _) in SANDBOX_CASES.items()]
     # профиль студента с кириллицей и пробелом (C:\\Users\\Иван Петров): папки запуска и сервер MySQL — под ним
     runs.append(("mysql_cyrillic_profile", CASES["mysql_script"], tools,
                  {"USERPROFILE": str(WORK / "Профиль Иван Петров")}))
@@ -384,7 +414,7 @@ def main() -> int:
                 problems = validate(p)
                 if problems:
                     raise RuntimeError("план: " + "; ".join(problems))
-                if blocked := safety.scan(p):  # как в ForLabs: опасное не запускается
+                if name not in SANDBOX_CASES and (blocked := safety.scan(p)):  # как в ForLabs: опасное не запускается
                     raise RuntimeError("проверка безопасности: " + "; ".join(blocked))
                 lack = languages.missing(p, tools)
                 if lack:
@@ -406,14 +436,22 @@ def main() -> int:
                 php_web = bool(spec.url) and p.language == "php"
                 target = RunTarget(cmd=[] if php_web else list(spec.cmd), cwd=Path(spec.cwd), console=spec.console,
                                    url=spec.url or None, env=dict(spec.env or {}),
-                                   server=list(spec.cmd) if php_web else None, title=None)
+                                   server=list(spec.cmd) if php_web else None, title=None,
+                                   network=name in SANDBOX_CASES and SANDBOX_CASES[name][1])
+                if name in SANDBOX_CASES:
+                    target.env = {**target.env, "FORLABS_SECRET": env["FORLABS_SECRET"]}
                 shot = p.shots[0]
                 try:
                     r = shooter.shoot(target, shot, SHOTS / f"{name}.png")
                 finally:
                     if p.language == "mysql":
                         lab_srv.stop()
-                res.update(ok=r.ok, reason=r.reason, seen=r.seen[:1500], cmd=list(target.cmd))
+                res.update(ok=r.ok, reason=r.reason, seen=r.seen[:1500], cmd=list(target.cmd), sandbox=r.sandbox)
+                if name in SANDBOX_CASES:
+                    must = SANDBOX_CASES[name][2]
+                    res["ok"] = r.ok and r.sandbox == "container" and must in r.seen and "ЗАПИСЬ: да" in r.seen
+                    if not res["ok"]:
+                        res["reason"] = (r.reason or "") + f" | нужно: песочница, «{must}», «ЗАПИСЬ: да»"
             except Exception as e:  # noqa: BLE001
                 res.update(ok=False, error=f"{type(e).__name__}: {e}", detail=getattr(e, "detail", ""),
                            trace=traceback.format_exc()[-1500:])
