@@ -17,10 +17,11 @@ def test_private_server_clean_limited_and_removed(tmp_path):
     except mysqlrun.MysqlError as e:
         pytest.skip(f"сервер не поднялся здесь: {e}")
     try:
-        sql = ("CREATE DATABASE shop; USE shop; CREATE TABLE t (n INT); INSERT INTO t VALUES (17); "
-               "SELECT CONCAT('итог=', n) FROM t;")
+        sql = ("CREATE DATABASE shop; USE shop; CREATE TABLE t (n INT, title VARCHAR(50)); "
+               "INSERT INTO t VALUES (17, 'Мастер и Маргарита'); SELECT CONCAT(title, ' — ', n) FROM t;")
         r = subprocess.run([*srv.client(), "-N", "-e", sql], capture_output=True, text=True, timeout=30)
-        assert r.returncode == 0 and "итог=17" in r.stdout, r.stderr
+        # кириллица в таблице без указания кодировки: у MariaDB (XAMPP) по умолчанию latin1
+        assert r.returncode == 0 and "Мастер и Маргарита — 17" in r.stdout, r.stderr
         outside = tmp_path / "outside.txt"
         r = subprocess.run([*srv.client(), "-e", f"SELECT 1 INTO OUTFILE '{outside}'"], capture_output=True,
                            text=True, timeout=30)

@@ -205,6 +205,7 @@ def start(mysql_client: str, work_root: Path, timeout: float = 90, low: bool = T
     port = _free_port()
     args = [str(mysqld), "--no-defaults", f"--basedir={base}", f"--datadir={db}",
             f"--port={port}", "--bind-address=127.0.0.1", f"--secure-file-priv={files}", f"--tmpdir={tmp}",
+            "--character-set-server=utf8mb4",  # у MariaDB 10.4 (XAMPP) по умолчанию latin1: кириллица не вставится
             f"--pid-file={data / 'server.pid'}", f"--log-error={data / 'server.err'}", *as_root]
     if not WINDOWS:
         args.append(f"--socket={data / 'server.sock'}")

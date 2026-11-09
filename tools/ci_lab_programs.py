@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from forlabs.runner import languages  # noqa: E402
+from forlabs.runner import languages, safety  # noqa: E402
 from forlabs.runner.plan import ProjectPlan, validate  # noqa: E402
 from forlabs.runner.shots import RunTarget, WindowsShooter  # noqa: E402
 
@@ -306,6 +306,14 @@ CREATE TABLE books (id INT PRIMARY KEY AUTO_INCREMENT, title VARCHAR(100), autho
        "input": "CREATE DATABASE library;\nUSE library;\nCREATE TABLE books (id INT PRIMARY KEY AUTO_INCREMENT, "
                 "title VARCHAR(100), author VARCHAR(100));\nINSERT INTO books (title, author) VALUES "
                 "('Мастер и Маргарита', 'Булгаков'), ('Война и мир', 'Толстой');\nSELECT * FROM books;\n"}),
+    "mysql_users": plan("mysql", "sql", "Права", "users.sql", {"users.sql": '''DROP USER IF EXISTS 'student'@'localhost';
+CREATE USER 'student'@'localhost' IDENTIFIED BY 'Pass_2026';
+DROP DATABASE IF EXISTS shop;
+CREATE DATABASE shop;
+GRANT SELECT, INSERT ON shop.* TO 'student'@'localhost';
+SELECT user, host FROM mysql.user WHERE user = 'student';
+'''}, {"mode": "console", "input": "source users.sql\nSHOW GRANTS FOR 'student'@'localhost';\n",
+         "expect": "GRANT SELECT, INSERT ON"}),
 }
 
 
@@ -376,6 +384,8 @@ def main() -> int:
                 problems = validate(p)
                 if problems:
                     raise RuntimeError("план: " + "; ".join(problems))
+                if blocked := safety.scan(p):  # как в ForLabs: опасное не запускается
+                    raise RuntimeError("проверка безопасности: " + "; ".join(blocked))
                 lack = languages.missing(p, tools)
                 if lack:
                     raise RuntimeError("нет инструментов: " + ", ".join(lack))

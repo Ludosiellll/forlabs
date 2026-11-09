@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sys
 import time
@@ -121,6 +122,24 @@ def edge_command(edge: str, profile: Path, url: str) -> str:
     return subprocess.list2cmdline([edge, f"--user-data-dir={profile}", "--no-first-run", "--no-default-browser-check",
                                     "--disable-features=msEdgeFirstRunExperience,msImplicitSignin",
                                     "--window-size=1200,800", "--new-window", "--", url])
+
+
+def typed_text(shot) -> str:
+    """Что ForLabs сам ввёл в программу: ввод консоли и значения шагов (набор, поля формы, выбор в списке)."""
+    parts = [_get(shot, "input") or ""]
+    parts += [_get(st, "value") or "" for st in _get(shot, "steps", None) or []
+              if _get(st, "action") in ("type", "set", "select")]
+    return "\n".join(parts)
+
+
+def shown(expect: str, seen: str, typed: str = "") -> bool:
+    """Ожидаемое видно как результат, а не только как набранный ForLabs текст (эхо ввода в консоли, поле формы):
+    на экране его больше, чем во вводе. Пробелы и переносы не считаются — длинная строка в консоли переносится."""
+    def squash(text: str) -> str:
+        return re.sub(r"\s+", "", text or "")
+
+    e = squash(expect)
+    return not e or squash(seen).count(e) > squash(typed).count(e)
 
 
 def runs_root() -> Path:
@@ -269,7 +288,7 @@ class WindowsShooter:
                 return ShotResult(False, reason=f"окно консоли не снялось ({e}; окна: {winapi.describe({app.pid})})",
                                   seen=seen)
             expect = _get(shot, "expect") or ""
-            if expect and expect not in seen:
+            if expect and not shown(expect, seen, typed_text(shot)):
                 img.save(out.with_name(out.stem + ".fail.png"))  # для разбора: что было на экране
                 why = read.get("error") or (seen.strip().splitlines() or ["пусто"])[-1][:120]
                 return ShotResult(False, reason=f"программа вывела не то, что ожидалось («{expect}»; на экране: {why})",
@@ -321,7 +340,7 @@ class WindowsShooter:
             hwnd = fresh[-1].hwnd if capture == "last" and fresh else w.hwnd
             seen = " | ".join(winapi.child_texts(hwnd)) if fresh and hwnd != w.hwnd else _texts_with_timeout(hwnd)
             expect = _get(shot, "expect") or ""
-            if expect and seen and expect not in seen:
+            if expect and seen and not shown(expect, seen, typed_text(shot)):
                 return ShotResult(False, reason=f"в окне нет ожидаемого «{expect}»", seen=seen)
             img = winapi.capture(hwnd)
             if winapi.blank(img):
@@ -386,7 +405,7 @@ class WindowsShooter:
                 time.sleep(2.0)  # страница после отправки формы
             seen = _texts_with_timeout(w.hwnd) if (steps or _get(shot, "expect")) else w.title
             expect = _get(shot, "expect") or ""
-            if expect and seen and expect not in seen:
+            if expect and seen and not shown(expect, seen, typed_text(shot)):
                 return ShotResult(False, reason=f"на странице нет ожидаемого «{expect}»", seen=seen)
             img = winapi.capture(w.hwnd)
             if winapi.blank(img):

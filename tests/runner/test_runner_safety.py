@@ -4,7 +4,7 @@ import re
 
 import pytest
 
-from forlabs.runner.plan import ProjectPlan
+from forlabs.runner.plan import ProjectPlan, ShotPlan
 from forlabs.runner.safety import scan
 
 ENTRY = {"csharp": "Program.cs", "cpp": "main.cpp", "python": "main.py", "java": "Main.java", "javascript": "main.js",
@@ -942,14 +942,20 @@ SHOW TABLES;
 ''',
 }
 
-SQL_BAD = {
+# лабы про пользователей и права: .sql-лаба выполняется только на своём одноразовом сервере ForLabs
+SQL_OWN_SERVER = {
     "DROP DATABASE чужой": ("DROP DATABASE world;", "баз"),
-    "DROP SCHEMA системной": ("CREATE DATABASE mysql2;\nDROP SCHEMA IF EXISTS `sys`;", "баз"),
     "CREATE USER": ("CREATE USER 'student'@'localhost' IDENTIFIED BY '123';", "пользоват"),
     "GRANT": ("GRANT SELECT, INSERT ON shop.* TO 'student'@'localhost';", "пользоват"),
+    "REVOKE и SET PASSWORD": ("REVOKE INSERT ON shop.* FROM 'student'@'localhost';\n"
+                              "SET PASSWORD FOR 'student'@'localhost' = 'qwerty';", "пользоват"),
     "DROP USER": ("DROP USER 'root'@'%';", "пользоват"),
     "mysql.user": ("SELECT user, host FROM mysql.user;", "mysql"),
     "USE mysql": ("USE mysql;\nSHOW TABLES;", "mysql"),
+}
+
+SQL_BAD = {
+    "DROP SCHEMA системной": ("CREATE DATABASE mysql2;\nDROP SCHEMA IF EXISTS `sys`;", "баз"),
     "LOAD DATA LOCAL": ("LOAD DATA LOCAL INFILE 'C:/data.csv' INTO TABLE t FIELDS TERMINATED BY ';';", "файл"),
     "INTO OUTFILE": ("SELECT * FROM goods INTO OUTFILE '/tmp/goods.txt';", "файл"),
     "SET GLOBAL": ("SET GLOBAL max_connections = 1000;", "настройки"),
@@ -967,6 +973,41 @@ def test_mysql_dangerous(name):
     code, word = SQL_BAD[name]
     found = scan(plan("mysql", code))
     assert found and any(word in r for r in found), found
+
+
+@pytest.mark.parametrize("name", SQL_OWN_SERVER)
+def test_users_and_privileges_lab_runs_on_own_server(name):
+    assert scan(plan("mysql", SQL_OWN_SERVER[name][0])) == []
+
+
+@pytest.mark.parametrize("name", SQL_OWN_SERVER)
+def test_same_sql_from_a_program_is_still_blocked(name):
+    """Программа на PHP ходит на сервер студента: там права и чужие базы трогать нельзя."""
+    code, word = SQL_OWN_SERVER[name]
+    sql = code.replace("\n", " ").replace('"', "'")
+    found = scan(plan("php", f'<?php\n$db = new mysqli("localhost", "root", "");\n$db->query("{sql}");\n'))
+    assert found and any(word in r for r in found), found
+
+
+def mysql_shot(text):
+    p = plan("mysql", "CREATE DATABASE shop;\nUSE shop;\nCREATE TABLE t (n INT);\n")
+    return p.model_copy(update={"shots": [ShotPlan(section=2, block=3, mode="console", input=text)]})
+
+
+@pytest.mark.parametrize("text, word", [
+    ("source lab.sql\nsystem del /q C:\\Users\\*.*\n", "запускает"),
+    ("source lab.sql\n\\! calc\n", "запускает"),
+    ("SELECT * FROM shop.t INTO OUTFILE 'C:/Users/x.txt';\n", "файл"),
+    ("INSTALL PLUGIN x SONAME 'evil.dll';\n", "настройки"),
+    ("SET GLOBAL local_infile = 1;\n", "настройки"),
+])
+def test_text_typed_into_mysql_console_is_checked(text, word):
+    found = scan(mysql_shot(text))
+    assert found and any(word in r and "Снимок 2.3" in r for r in found), found
+
+
+def test_ordinary_typed_queries_pass():
+    assert scan(mysql_shot("source lab.sql\nSELECT * FROM shop.t;\nCREATE USER 'u'@'localhost';\n")) == []
 
 
 # ---------- общее ----------

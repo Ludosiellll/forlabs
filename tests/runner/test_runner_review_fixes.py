@@ -82,7 +82,7 @@ def sql(text):
                                        "files": [{"path": "db.sql", "content": text}]})
 
 
-@pytest.mark.parametrize("text", ["/*!50000 GRANT ALL ON *.* TO x@'%' */;", "/*!DROP DATABASE mysql*/;",
+@pytest.mark.parametrize("text", ["/*!50000 INSTALL PLUGIN x SONAME 'a.dll' */;", "/*!DROP DATABASE mysql*/;",
                                   "SET GLOBAL general_log_file := 'x.bat';", "SET @@global.general_log = 1;",
                                   "SELECT 1 /*!INTO OUTFILE 'C:/x.bat' */;"])
 def test_sql_hidden_in_executable_comments_is_caught(text):
@@ -97,3 +97,21 @@ def test_python_dynamic_import_is_caught(code):
     p = ProjectPlan.model_validate({"language": "python", "kind": "console", "name": "Лаба", "entry": "main.py",
                                     "files": [{"path": "main.py", "content": code + "print(1)\n"}]})
     assert safety.scan(p), code
+
+
+@pytest.mark.parametrize("expect, seen, typed, ok", [
+    # MariaDB не вставила строку, а «Булгаков» на экране только в эхе набранного INSERT — это не результат
+    ("Булгаков", "MariaDB [library]> INSERT INTO books VALUES ('Мастер', 'Булг\nаков');\nERROR 1366\nEmpty set",
+     "INSERT INTO books VALUES ('Мастер', 'Булгаков');\nSELECT * FROM books;\n", False),
+    ("Булгаков", "mysql> INSERT INTO books VALUES ('Мастер', 'Булгаков');\n| 1 | Мастер | Булгаков |",
+     "INSERT INTO books VALUES ('Мастер', 'Булгаков');\n", True),
+    ("Сумма: 17", "Введите a: 12\nВведите b: 5\nСумма: 17", "12\n5\n", True),
+    ("Сумма: 17", "Введите a: 12\nВведите b: 5\nОшибка", "12\n5\n", False),
+    ("12", "Введите a: 12\nВы ввели 12", "12\n", True),
+    ("12", "Введите a: 12\nОшибка", "12\n", False),
+    ("Итого", "Итого: 5", "", True),
+])
+def test_expect_must_be_in_output_not_only_in_typed_text(expect, seen, typed, ok):
+    from forlabs.runner.shots import shown
+
+    assert shown(expect, seen, typed) is ok

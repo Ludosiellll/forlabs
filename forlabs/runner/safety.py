@@ -400,29 +400,42 @@ def _modules(src: _Src) -> list[tuple[int, str]]:
     return out
 
 
-def _sql(text: str, created: set[str], src: _Src | None = None) -> list[tuple[int, str, str]]:
+# что можно на своём одноразовом сервере ForLabs (лаба на MySQL), но не на сервере студента (SQL из программы)
+OWN_SERVER_OK = {SQL_USERS, SQL_SYSTEM}
+
+
+def _sql(text: str, created: set[str], src: _Src | None = None, own: bool = False) -> list[tuple[int, str, str]]:
     """Опасный SQL в тексте (файл .sql — src задан, иначе строка из кода): (строка, что делает, фрагмент).
-    Свою базу (её CREATE DATABASE есть в проекте) удалять можно."""
+    Свою базу (её CREATE DATABASE есть в проекте) удалять можно. own — запросы идут на свой чистый сервер ForLabs:
+    пользователи, права и чужие (там их нет) базы — тоже можно."""
     out = []
     for m in SQL_DROP_DB.finditer(text):
         name = m[1].lower()
-        if name in SQL_SYSTEM_DBS or name not in created:
+        if name in SQL_SYSTEM_DBS or (name not in created and not own):
             out.append((src.line(m.start()) if src else 0, SQL_DROP, " ".join(m[0].split()).replace("`", "")))
     for pat, what in SQL_RULES:
+        if own and what in OWN_SERVER_OK:
+            continue
         for m in re.finditer(pat, text, re.I | re.M):
             out.append((src.line(m.start()) if src else 0, what, src.show(m[0]) if src else _short(m[0], 40)))
     return out
 
 
+# команды самого клиента mysql: пишутся без «;» и заканчиваются вместе со строкой
+CLIENT_CMD = re.compile(r"(?:source|use|tee|notee|status|charset|connect|delimiter|warnings|nowarning|prompt|"
+                        r"rehash|help|exit|quit|ego|go|print|pager|nopager|system|edit|resetconnection)\b|\\.|\?",
+                        re.I)
+
+
 def _mysql_client(src: _Src) -> list[tuple[int, str, str]]:
-    """Команды клиента mysql, запускающие программы: «system …» и «\\! …» в начале запроса."""
+    """Команды клиента mysql, запускающие программы: «system …» в начале запроса и «\\!» в любом месте строки."""
     out, start = [], True
     for n, raw in enumerate(src.code.split("\n"), 1):
         s = raw.strip()
-        if start and re.match(r"(?:\\!|system\s)", s, re.I):
+        if (start and re.match(r"system\s", s, re.I)) or "\\!" in s:
             out.append((n, PROC, _short(s, 40)))
         if s:
-            start = s.endswith((";", "//", "$$")) or s.lower().startswith("delimiter")
+            start = s.endswith((";", "//", "$$", "\\g", "\\G")) or bool(start and CLIENT_CMD.match(s))
     return out
 
 
@@ -449,8 +462,8 @@ def _scan_source(src: _Src, plan: ProjectPlan, created: set[str]) -> list[tuple[
             found.append((line, OUT, p))
         if src.lang != "sql" and SQL_START.match(s):
             found += [(line, w, t) for _, w, t in _sql(s, created)]
-    if src.lang == "sql":
-        found += _sql(src.code, created, src) + _mysql_client(src)
+    if src.lang == "sql":  # .sql лабы на MySQL выполняет только свой сервер; в PHP-проекте — сервер студента
+        found += _sql(src.code, created, src, own=plan.language == "mysql") + _mysql_client(src)
     found += _network(src, plan)
     return found
 
@@ -495,9 +508,22 @@ def _shots(plan: ProjectPlan) -> list[str]:
     return out
 
 
+def _typed(plan: ProjectPlan) -> list[_Src]:
+    """Что ForLabs наберёт в консоли mysql на снимке — тоже запросы (и команды клиента вроде «system …»)."""
+    if plan.language != "mysql":
+        return []
+    out = []
+    for shot in plan.shots:
+        text = "\n".join([shot.input] + [st.value for st in shot.steps if st.action == "type"]).strip()
+        if text:
+            code, strings = lex(text + "\n", "sql")
+            out.append(_Src(f"Снимок {shot.section}.{shot.block}", "sql", code, strings, 0, False))
+    return out
+
+
 def scan(plan: ProjectPlan) -> list[str]:
     """Почему ForLabs не должен запускать эту программу сам (по-русски). Пустой список — можно запускать."""
-    sources = _sources(plan)
+    sources = _sources(plan) + _typed(plan)
     created = set()
     for src in sources:
         for text in [src.code if src.lang == "sql" else ""] + [s for _, s, _ in src.strings if SQL_START.match(s)]:
