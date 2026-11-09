@@ -1,0 +1,199 @@
+{
+  "_": "Программы для лаб. Все адреса — здесь: сменился адрес у издателя — правится только этот файл. kind: portable — ForLabs ставит сам в свою папку tools (без прав администратора); manual — только с сайта издателя; system — часть Windows. folder/exe — где программа лежит после установки (tools/<folder>/<exe>), этот путь ищет languages.detect. source.type — как узнать последнюю версию и её контрольную сумму (разбор — в tools.py, функции _resolve_<type>). size_mb — примерный размер загрузки, disk_mb — сколько места займёт.",
+  "vcredist": {
+    "name": "Visual C++ для Windows",
+    "url": "https://aka.ms/vs/17/release/vc_redist.x64.exe",
+    "page": "https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist",
+    "size_mb": 25
+  },
+  "tools": [
+    {
+      "key": "dotnet",
+      "name": ".NET SDK 8",
+      "for": "C#: консоль, WinForms, WPF",
+      "kind": "portable",
+      "size_mb": 290,
+      "disk_mb": 800,
+      "folder": "dotnet",
+      "exe": "dotnet.exe",
+      "version_args": ["--version"],
+      "source": {
+        "type": "dotnet",
+        "index": "https://builds.dotnet.microsoft.com/dotnet/release-metadata/releases-index.json",
+        "channel": "10.0",
+        "file": "dotnet-sdk-win-x64.zip"
+      },
+      "link_names": ["^dotnet-sdk-[0-9.]+-win-x64\\.zip$"],
+      "page": "https://dotnet.microsoft.com/download/dotnet/10.0"
+    },
+    {
+      "key": "msvc",
+      "name": "Visual C++ (MSVC)",
+      "for": "C++ в Visual Studio",
+      "kind": "manual",
+      "size_mb": 2000,
+      "note": "Только с сайта Microsoft, нужны права администратора. Для лаб хватит g++.",
+      "alternative": "gpp",
+      "page": "https://visualstudio.microsoft.com/visual-cpp-build-tools/"
+    },
+    {
+      "key": "gpp",
+      "name": "g++ (MinGW-w64)",
+      "for": "C++",
+      "kind": "portable",
+      "size_mb": 260,
+      "disk_mb": 1100,
+      "folder": "mingw64",
+      "exe": "bin/g++.exe",
+      "version_args": ["--version"],
+      "source": {
+        "type": "github",
+        "api": "https://api.github.com/repos/brechtsanders/winlibs_mingw/releases?per_page=20",
+        "assets": [
+          "^winlibs-x86_64-posix-seh-gcc-[0-9.]+-mingw-w64ucrt-[0-9.]+-r[0-9]+\\.zip$",
+          "^winlibs-x86_64-mcf-seh-gcc-[0-9.]+-mingw-w64ucrt-[0-9.]+-r[0-9]+\\.zip$"
+        ]
+      },
+      "link_names": ["^winlibs-x86_64-.*\\.zip$"],
+      "page": "https://winlibs.com/"
+    },
+    {
+      "key": "clang",
+      "name": "Clang (LLVM)",
+      "for": "C++",
+      "kind": "manual",
+      "size_mb": 400,
+      "note": "Только с сайта LLVM. Для лаб хватит g++.",
+      "alternative": "gpp",
+      "page": "https://github.com/llvm/llvm-project/releases"
+    },
+    {
+      "key": "python",
+      "name": "Python 3",
+      "for": "Python, окна tkinter",
+      "kind": "portable",
+      "size_mb": 45,
+      "disk_mb": 200,
+      "folder": "python",
+      "exe": "python.exe",
+      "version_args": ["--version"],
+      "sources": [
+        {
+          "type": "pymanager",
+          "index": "https://www.python.org/ftp/python/index-windows.json",
+          "id": "^pythoncore-3\\.[0-9]+-64$"
+        },
+        {
+          "type": "nuget",
+          "registration": "https://api.nuget.org/v3/registration5-gz-semver2/python/index.json"
+        }
+      ],
+      "link_names": ["^python-3[0-9.]+-(embed-)?amd64\\.zip$", "^python\\.3[0-9.]+\\.nupkg$"],
+      "page": "https://www.python.org/downloads/windows/"
+    },
+    {
+      "key": "java",
+      "name": "JDK 21 (Temurin)",
+      "for": "Java, окна Swing",
+      "kind": "portable",
+      "size_mb": 190,
+      "disk_mb": 350,
+      "folder": "jdk",
+      "exe": "bin/javac.exe",
+      "version_args": ["-version"],
+      "source": {
+        "type": "adoptium",
+        "api": "https://api.adoptium.net/v3/assets/latest/21/hotspot?architecture=x64&image_type=jdk&os=windows&vendor=eclipse"
+      },
+      "link_names": ["^OpenJDK21U-jdk_x64_windows_hotspot_.*\\.zip$"],
+      "page": "https://adoptium.net/temurin/releases/?version=21&os=windows"
+    },
+    {
+      "key": "node",
+      "name": "Node.js LTS",
+      "for": "JavaScript",
+      "kind": "portable",
+      "size_mb": 42,
+      "disk_mb": 160,
+      "folder": "node",
+      "exe": "node.exe",
+      "version_args": ["--version"],
+      "source": {
+        "type": "node",
+        "index": "https://nodejs.org/dist/index.json",
+        "dist": "https://nodejs.org/dist/"
+      },
+      "link_names": ["^node-v[0-9.]+-win-x64\\.zip$"],
+      "page": "https://nodejs.org/en/download"
+    },
+    {
+      "key": "go",
+      "name": "Go",
+      "for": "Go",
+      "kind": "portable",
+      "size_mb": 80,
+      "disk_mb": 280,
+      "folder": "go",
+      "exe": "bin/go.exe",
+      "version_args": ["version"],
+      "source": {
+        "type": "go",
+        "index": "https://go.dev/dl/?mode=json",
+        "dl": "https://go.dev/dl/"
+      },
+      "link_names": ["^go[0-9.]+\\.windows-amd64\\.zip$"],
+      "page": "https://go.dev/dl/"
+    },
+    {
+      "key": "php",
+      "name": "PHP",
+      "for": "PHP и сайты на PHP",
+      "kind": "portable",
+      "size_mb": 32,
+      "disk_mb": 120,
+      "folder": "php",
+      "exe": "php.exe",
+      "version_args": ["-v"],
+      "needs_vcredist": true,
+      "after": "php_ini",
+      "source": {
+        "type": "php",
+        "index": "https://windows.php.net/downloads/releases/releases.json",
+        "build": "^nts-vs[0-9]+-x64$"
+      },
+      "link_names": ["^php-[0-9.]+-(nts-)?Win32-v[cs][0-9]+-x64\\.zip$"],
+      "page": "https://windows.php.net/download/"
+    },
+    {
+      "key": "mysql",
+      "name": "MySQL Server 8.4",
+      "for": "SQL-запросы в консоли mysql",
+      "kind": "portable",
+      "size_mb": 250,
+      "disk_mb": 1300,
+      "folder": "mysql",
+      "exe": "bin/mysql.exe",
+      "also": ["bin/mysqld.exe"],
+      "version_args": ["--version"],
+      "needs_vcredist": true,
+      "after": "mysql_init",
+      "source": {
+        "type": "mysql",
+        "page": "https://dev.mysql.com/downloads/mysql/8.4.html?os=3",
+        "series": "8.4",
+        "download": "https://dev.mysql.com/get/Downloads/MySQL-{series}/{file}"
+      },
+      "link_names": ["^mysql-[0-9.]+-winx64\\.zip$"],
+      "page": "https://dev.mysql.com/downloads/mysql/"
+    },
+    {
+      "key": "edge",
+      "name": "Microsoft Edge",
+      "for": "HTML/CSS/JS, сайты",
+      "kind": "system",
+      "size_mb": 180,
+      "note": "Edge входит в Windows. Если его нет — поставь с сайта Microsoft.",
+      "page": "https://www.microsoft.com/edge/download"
+    }
+  ]
+}

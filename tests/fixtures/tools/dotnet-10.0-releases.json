@@ -1,0 +1,44 @@
+{
+ "channel-version": "10.0",
+ "latest-release": "8.0.33",
+ "latest-sdk": "10.0.103",
+ "support-phase": "maintenance",
+ "eol-date": "2026-11-10",
+ "releases": [
+  {
+   "release-version": "8.0.33",
+   "sdk": {
+    "version": "10.0.103",
+    "version-display": "10.0.103",
+    "runtime-version": "8.0.33",
+    "vs-version": "",
+    "vs-mac-version": "",
+    "vs-support": "",
+    "vs-mac-support": "",
+    "csharp-version": "12.0",
+    "fsharp-version": "10.0",
+    "vb-version": "16.9",
+    "files": [
+     {
+      "name": "dotnet-sdk-linux-x64.tar.gz",
+      "rid": "linux-x64",
+      "url": "https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.103/dotnet-sdk-10.0.103-linux-x64.tar.gz",
+      "hash": "85725692f465f5024b9b42a159a29d9f73e8c57ad9e8bfe1e7028a505d18031d68931e8aa3f9de44145b08170dde897c8a78e1aa18d4219698b6891af7095d39"
+     },
+     {
+      "name": "dotnet-sdk-win-x64.exe",
+      "rid": "win-x64",
+      "url": "https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.103/dotnet-sdk-10.0.103-win-x64.exe",
+      "hash": "004696a103c8aaa32b504f4cd5cc0a138563c3a883f45a8e7ee575d5c0360439250593771342cd3422653559191015d84696f0ef4d70d56ad6dc25a6ffffc446"
+     },
+     {
+      "name": "dotnet-sdk-win-x64.zip",
+      "rid": "win-x64",
+      "url": "https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.103/dotnet-sdk-10.0.103-win-x64.zip",
+      "hash": "a4dd6eb2bf2a2f6fb10997d3e044a229b23ad96a5c86d20494687e34ee73b537d7bd14488ce14cded6917f6778da4d66360e2734020b7ef487d0f29ab144489d"
+     }
+    ]
+   }
+  }
+ ]
+}

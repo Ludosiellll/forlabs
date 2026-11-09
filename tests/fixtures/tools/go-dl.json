@@ -1,0 +1,11 @@
+[
+ {"version": "go1.25.4", "stable": true, "files": [
+  {"filename": "go1.25.4.src.tar.gz", "os": "", "arch": "", "version": "go1.25.4", "sha256": "aaaa000000000000000000000000000000000000000000000000000000000000", "size": 31000000, "kind": "source"},
+  {"filename": "go1.25.4.windows-386.zip", "os": "windows", "arch": "386", "version": "go1.25.4", "sha256": "bbbb000000000000000000000000000000000000000000000000000000000000", "size": 70000000, "kind": "archive"},
+  {"filename": "go1.25.4.windows-amd64.msi", "os": "windows", "arch": "amd64", "version": "go1.25.4", "sha256": "cccc000000000000000000000000000000000000000000000000000000000000", "size": 66000000, "kind": "installer"},
+  {"filename": "go1.25.4.windows-amd64.zip", "os": "windows", "arch": "amd64", "version": "go1.25.4", "sha256": "dddd000000000000000000000000000000000000000000000000000000000000", "size": 78000000, "kind": "archive"}
+ ]},
+ {"version": "go1.24.10", "stable": true, "files": [
+  {"filename": "go1.24.10.windows-amd64.zip", "os": "windows", "arch": "amd64", "version": "go1.24.10", "sha256": "eeee000000000000000000000000000000000000000000000000000000000000", "size": 76000000, "kind": "archive"}
+ ]}
+]

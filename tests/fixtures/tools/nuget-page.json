@@ -1,0 +1,49 @@
+{
+ "@id": "https://api.nuget.org/v3/registration5-gz-semver2/python/page/3.15.0/3.16.0-a1.json",
+ "items": [
+  {
+   "@id": "https://api.nuget.org/v3/registration5-gz-semver2/python/3.15.0.json",
+   "packageContent": "https://api.nuget.org/v3-flatcontainer/python/3.15.0/python.3.15.0.nupkg",
+   "catalogEntry": {
+    "@id": "https://api.nuget.org/v3/catalog0/data/2026.10.09.13.59.20/python.3.15.0.json",
+    "id": "python",
+    "version": "3.15.0",
+    "listed": true,
+    "packageContent": "https://api.nuget.org/v3-flatcontainer/python/3.15.0/python.3.15.0.nupkg"
+   }
+  },
+  {
+   "@id": "https://api.nuget.org/v3/registration5-gz-semver2/python/3.15.1.json",
+   "packageContent": "https://api.nuget.org/v3-flatcontainer/python/3.15.1/python.3.15.1.nupkg",
+   "catalogEntry": {
+    "@id": "https://api.nuget.org/v3/catalog0/data/2026.10.21.08.30.07/python.3.15.1.json",
+    "id": "python",
+    "version": "3.15.1",
+    "listed": true,
+    "packageContent": "https://api.nuget.org/v3-flatcontainer/python/3.15.1/python.3.15.1.nupkg"
+   }
+  },
+  {
+   "@id": "https://api.nuget.org/v3/registration5-gz-semver2/python/3.15.2.json",
+   "packageContent": "https://api.nuget.org/v3-flatcontainer/python/3.15.2/python.3.15.2.nupkg",
+   "catalogEntry": {
+    "@id": "https://api.nuget.org/v3/catalog0/data/2026.10.26.04.37.04/python.3.15.2.json",
+    "id": "python",
+    "version": "3.15.2",
+    "listed": true,
+    "packageContent": "https://api.nuget.org/v3-flatcontainer/python/3.15.2/python.3.15.2.nupkg"
+   }
+  },
+  {
+   "@id": "https://api.nuget.org/v3/registration5-gz-semver2/python/3.16.0-a1.json",
+   "packageContent": "https://api.nuget.org/v3-flatcontainer/python/3.16.0-a1/python.3.16.0-a1.nupkg",
+   "catalogEntry": {
+    "@id": "https://api.nuget.org/v3/catalog0/data/2026.10.13.19.29.47/python.3.16.0-a1.json",
+    "id": "python",
+    "version": "3.16.0-a1",
+    "listed": true,
+    "packageContent": "https://api.nuget.org/v3-flatcontainer/python/3.16.0-a1/python.3.16.0-a1.nupkg"
+   }
+  }
+ ]
+}
