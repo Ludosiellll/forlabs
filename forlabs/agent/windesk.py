@@ -173,7 +173,7 @@ class WinDesk:
                 _u.ShowWindow(hwnd, 3)  # SW_MAXIMIZE
                 time.sleep(0.8)
 
-    def _alive(self, grace: float = 45) -> None:
+    def _alive(self, grace: float = 45, relaunch: float = 20) -> None:
         """Главное окно на месте; закрылось — найти новое (окно входа сменилось главным окном Visual Studio, заставка —
         программой). Пока процесс программы жив, новое окно ждём до grace секунд."""
         if self.watch:
@@ -181,13 +181,19 @@ class WinDesk:
         if _u.IsWindow(self.main):
             return
         end = time.monotonic() + grace
+        gone_since = None  # Visual Studio после первого запуска перезапускает себя: процесса нет пару секунд
         while True:
             big = [w for w in self._mine(owned=False) if w.title and min(self._size(w.hwnd)) >= 150]
             if big:
                 self.main = max(big, key=lambda w: self._size(w.hwnd)[0] * self._size(w.hwnd)[1]).hwnd
                 self.last_fg = None
                 return
-            if not self.targets() or time.monotonic() > end:
+            now = time.monotonic()
+            if self.targets():
+                gone_since = None
+            else:
+                gone_since = gone_since or now
+            if now > end or (gone_since and now - gone_since > relaunch):
                 raise Stopped(f"программа «{self.app.title}» закрылась")
             if self.watch:
                 self.watch.check()
