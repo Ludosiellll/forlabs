@@ -314,7 +314,7 @@ def main() -> int:
     tools = languages.detect()
     report: dict = {"tools": {k: [t.path, t.version] for k, t in tools.items()}, "cases": {}}
     print("инструменты:", {k: t.version for k, t in tools.items()}, flush=True)
-    srv = start_mysql()
+    srv = None  # MySQL поднимается на каждую лабу отдельно (mysqlrun)
     shooter = WindowsShooter()
     try:
         for name, raw in CASES.items():
@@ -336,12 +336,22 @@ def main() -> int:
                 if not b.ok:
                     raise RuntimeError("сборка: " + b.log[-1500:])
                 spec = languages.run_spec(p, b.artifact, work, tools)
+                if p.language == "mysql":  # свой сервер с чистой папкой данных — как в ForLabs у студента
+                    from forlabs.runner import mysqlrun
+
+                    lab_srv = mysqlrun.start(tools["mysql"].path, WORK)
+                    spec.cmd = lab_srv.client()
+                    res["mysql_port"] = lab_srv.port
                 php_web = bool(spec.url) and p.language == "php"
                 target = RunTarget(cmd=[] if php_web else list(spec.cmd), cwd=Path(spec.cwd), console=spec.console,
                                    url=spec.url or None, env=dict(spec.env or {}),
                                    server=list(spec.cmd) if php_web else None, title=None)
                 shot = p.shots[0]
-                r = shooter.shoot(target, shot, SHOTS / f"{name}.png")
+                try:
+                    r = shooter.shoot(target, shot, SHOTS / f"{name}.png")
+                finally:
+                    if p.language == "mysql":
+                        lab_srv.stop()
                 res.update(ok=r.ok, reason=r.reason, seen=r.seen[-400:])
             except Exception as e:  # noqa: BLE001
                 res.update(ok=False, error=f"{type(e).__name__}: {e}", trace=traceback.format_exc()[-1500:])
