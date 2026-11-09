@@ -157,8 +157,10 @@ jobs:
           $target = "$env:RUNNER_TEMP\Программы студента\ForLabs"
           $log = "$env:RUNNER_TEMP\setup.log"
           function Fail($title, $file) {
-            if ($file -and (Test-Path $file)) { Get-Content $file -Encoding utf8 | ForEach-Object { Write-Output "::error title=$title::$_" } }
+            if ($file -and (Test-Path $file)) { Write-Output ("::error title=$title::" + ((Get-Content $file -Encoding utf8) -join "%0A")) }
             else { Write-Output "::error title=$title::$file" }
+            $slog = "$env:TEMP\ForLabsSetup.log"
+            if (Test-Path $slog) { Write-Output ("::error title=ForLabsSetup.log::" + ((Get-Content $slog -Tail 40 -Encoding utf8) -join "%0A")) }
             exit 1
           }
           $p = Start-Process build/ForLabsSetup.exe -ArgumentList "--silent --target `"$target`" --log `"$log`"" -Wait -PassThru
@@ -169,7 +171,7 @@ jobs:
           if (-not $entry -or $entry.InstallLocation -ne $target) { Fail "registry" "нет строки в «Приложениях»" }
           Write-Output "UninstallString: $($entry.UninstallString)"
           $lnk = Join-Path ([Environment]::GetFolderPath("Programs")) "ForLabs.lnk"
-          if (-not (Test-Path $lnk)) { Fail "shortcut" "нет ярлыка $lnk" }
+          if (-not (Test-Path $lnk)) { Write-Output "::error title=shortcut::нет ярлыка $lnk"; Fail "setup.log" $log }
           $out = "$env:RUNNER_TEMP\selfcheck-installed.txt"
           $p = Start-Process "$target\ForLabs.exe" -ArgumentList "--selfcheck --offline --out `"$out`"" -Wait -PassThru
           if (Test-Path $out) { Get-Content $out -Encoding utf8 }

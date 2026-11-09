@@ -38,6 +38,8 @@ class WindowsShell:
         return _shell_folder(CSIDL_DESKTOPDIRECTORY) or Path.home() / "Desktop"
 
     def create_shortcut(self, lnk: Path, target: Path, workdir: Path, description: str) -> None:
+        """Ярлык через COM (pywin32), при любой ошибке — через PowerShell; не вышло обоими — обе причины."""
+        com_error = ""
         try:
             import pythoncom
             import win32com.client
@@ -48,16 +50,21 @@ class WindowsShell:
                 s.TargetPath, s.WorkingDirectory = str(target), str(workdir)
                 s.IconLocation, s.Description = f"{target},0", description
                 s.Save()
-                return
             finally:
                 pythoncom.CoUninitialize()
-        except ImportError:
-            pass
+            if Path(lnk).exists():
+                return
+            com_error = "COM не сохранил ярлык"
+        except Exception as e:
+            com_error = f"{type(e).__name__}: {e}"
         script = (f"$s=(New-Object -ComObject WScript.Shell).CreateShortcut({_ps_quote(str(lnk))});"
                   f"$s.TargetPath={_ps_quote(str(target))};$s.WorkingDirectory={_ps_quote(str(workdir))};"
                   f"$s.IconLocation={_ps_quote(str(target) + ',0')};$s.Description={_ps_quote(description)};$s.Save()")
-        subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script], check=True,
-                       capture_output=True, timeout=60, creationflags=subprocess.CREATE_NO_WINDOW)
+        r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],  # noqa: S603,S607
+                           capture_output=True, timeout=60, creationflags=subprocess.CREATE_NO_WINDOW)
+        if r.returncode != 0 or not Path(lnk).exists():
+            err = (r.stderr or b"").decode("utf-8", errors="replace").strip()[:300]
+            raise OSError(f"COM: {com_error or 'нет'}; PowerShell: код {r.returncode} {err}")
 
     def remove_shortcut(self, lnk: Path) -> None:
         Path(lnk).unlink(missing_ok=True)
