@@ -47,6 +47,7 @@ class Settings(BaseModel):
     temperature: float = 0.4
     browser_channel: str | None = None
     tour_done: bool = False  # обучение при первом запуске пройдено или пропущено
+    app_paths: dict[str, str] = {}  # программы для снимков, которые студент указал сам (ключ → путь к .exe)
 
     @field_validator("model")
     @classmethod

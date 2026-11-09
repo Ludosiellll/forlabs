@@ -58,6 +58,7 @@ class AppContext:
         self.updater = Updater()  # только в установленной программе на Windows; иначе выключен
         self.spawn_installer = spawn_detached
         self.quit: Callable[[], None] | None = None  # закрыть окно ForLabs (задаёт запуск окна)
+        self.minimize: Callable[[], None] | None = None  # свернуть окно ForLabs, пока агент работает в программе
         self._tools = None  # программы для лаб: создаются при первом обращении
         if self.cloud:
             self.auth.load_session()
@@ -132,6 +133,10 @@ class AppContext:
                                       soffice=self.settings.soffice_path, memory=self.memory(),
                                       tesseract=self.settings.tesseract_path)
             self._pipeline.projects = self.llm_override is None  # в приложении — собирать программы лаб и снимать окна
+            self._pipeline.agents = self.llm_override is None  # и снимать окна программ студента (агент)
+            self._pipeline.app_paths = dict(self.settings.app_paths or {})
+            self._pipeline.app_hooks = (lambda: self.minimize and self.minimize(),
+                                        lambda: getattr(self, "focus", None) and self.focus())
         return self._pipeline
 
     @property

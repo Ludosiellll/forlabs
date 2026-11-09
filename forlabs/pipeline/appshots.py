@@ -154,9 +154,10 @@ def note_for(b: Figure, have: dict[str, str]) -> str:
             "в программах».")
 
 
-def run(pipe, st: LabState, llm, emit=None, before=None, after=None, desk_factory=None, watch_factory=None) -> LabState:
+def run(pipe, st: LabState, llm, emit=None, before=None, after=None, desk_factory=None, watch_factory=None,
+        finder=None) -> LabState:
     """Проход агента по рисункам с app_task. before/after — свернуть и вернуть окно ForLabs; desk_factory и
-    watch_factory подменяются в тестах. Меняет st (картинки, пометки)."""
+    watch_factory и finder подменяются в тестах. Меняет st (картинки, пометки)."""
     from forlabs.agent import apps, core
 
     emit = emit or (lambda text, kind="info": None)
@@ -183,7 +184,7 @@ def run(pipe, st: LabState, llm, emit=None, before=None, after=None, desk_factor
             if stopped:
                 break
             app = apps.APPS[key]
-            exe = apps.find(key, custom) if desk_factory is None else "fake.exe"
+            exe = (finder or apps.find)(key, custom)
             if not exe:
                 for _, _, b in items:
                     b.need_tool = f"app:{key}"

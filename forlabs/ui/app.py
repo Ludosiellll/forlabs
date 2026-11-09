@@ -607,6 +607,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
             for b in numbered_blocks(st.report):
                 numbers[(st.report.sections[b.section_index].n, b.block_index + 1)] = b.n
         slot_items = [(sec_n, blk, numbers.get((sec_n, blk), "?"), fig) for sec_n, blk, fig in ctx.pipeline.slots(st)]
+        app_items, missing_apps = _app_items(slot_items)
         if tab not in ("report", "spec", "journal"):
             tab = "journal" if busy else ("spec" if st.status in ("parsed", "confirmed") else "report")
         current = next((e.step for e in reversed(events) if e.step), None) if busy else None
@@ -658,6 +659,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
                       elsewhere=running_elsewhere(st),
                       complete=lab_complete(st),
                       events=events, journal=journal, slot_items=slot_items, errors=errors, tab=tab, steps=STEPS,
+                      app_items=app_items, missing_apps=missing_apps,
                       step_state=step_state, conclusion=conclusion, conclusion_note=conclusion_note,
                       base_url=lab_url(p, s, n), last_seq=max([e.seq for e in events] + [0]), nav="home")
 
@@ -941,6 +943,47 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         if target and Path(target).exists():
             _open_local(target)
         return redirect(lab_url(p, s, n))
+
+    def _app_items(slot_items):
+        """Рисунки, которые снимет агент: (номер, рисунок, программа, есть ли она) и программы, которых нет."""
+        from forlabs.agent import apps as agent_apps
+
+        items = [(num, fig) for _, _, num, fig in slot_items if fig.app_task and fig.app_task.app in agent_apps.APPS]
+        if not items:
+            return [], []
+        have = agent_apps.installed(ctx.settings.app_paths) if sys.platform == "win32" else {}
+        out = [(num, fig, agent_apps.APPS[fig.app_task.app], fig.app_task.app in have) for num, fig in items]
+        missing = list({a.key: a for _, _, a, ok in out if not ok}.values())
+        return out, missing
+
+    @app.post("/labs/{p}/{s}/{n}/apps/run")
+    def lab_apps_run(p: str, s: str, n: str):
+        if busy_lab(p, s, n):
+            return redirect(lab_url(p, s, n), err=BUSY)
+        st = load(p, s, n)
+        if sys.platform != "win32":
+            return redirect(lab_url(p, s, n), err="Снимки в программах ForLabs делает только в Windows.")
+        ctx.run(ctx.pipeline.key(st), ctx.pipeline.app_shots, st)
+        return redirect(lab_url(p, s, n), msg="ForLabs работает в программах: не трогай мышь и клавиатуру, Esc — "
+                                              "остановить")
+
+    @app.post("/labs/{p}/{s}/{n}/apps/path")
+    async def lab_apps_path(request: Request, p: str, s: str, n: str):
+        from forlabs.agent import apps as agent_apps
+
+        form = await request.form()
+        key, path = str(form.get("key") or ""), str(form.get("path") or "").strip().strip('"')
+        if key not in agent_apps.APPS:
+            return redirect(lab_url(p, s, n), err="Неизвестная программа")
+        if not path.lower().endswith(".exe") or not Path(path).is_file():
+            return redirect(lab_url(p, s, n), err="Не нашёл такой файл программы: укажи путь к .exe полностью "
+                                                  "(например C:\\Program Files\\…\\program.exe).")
+        paths = {**(ctx.settings.app_paths or {}), key: path}
+        ctx.settings = ctx.settings.model_copy(update={"app_paths": paths})
+        save_settings(ctx.settings)
+        ctx.pipeline.app_paths = dict(paths)
+        return redirect(lab_url(p, s, n), msg=f"Запомнил, где «{agent_apps.APPS[key].title}». Нажми «Сделать снимки "
+                                              "в программах».")
 
     @app.post("/labs/{p}/{s}/{n}/project/retry")
     def lab_project_retry(p: str, s: str, n: str):

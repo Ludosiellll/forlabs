@@ -105,6 +105,14 @@ def _open_window(url: str, ctx=None) -> None:
                 pass
 
         ctx.focus = focus
+
+        def minimize():  # агент работает в программе студента: окно ForLabs не должно её закрывать
+            try:
+                window.minimize()
+            except Exception:
+                pass
+
+        ctx.minimize = minimize
     # на Windows только WebView2: без него pywebview тихо взял бы движок IE (без fetch и потоков событий) —
     # лучше ошибка, тогда откроется обычный браузер
     webview.start(gui="edgechromium") if sys.platform == "win32" else webview.start()
