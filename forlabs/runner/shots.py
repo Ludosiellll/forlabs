@@ -155,7 +155,9 @@ class WindowsShooter:
             if not winapi.program_alive(app.pid):  # программа уже завершилась (ошибка запуска, нет подключения…)
                 early = console.act(pid, read=True).get("screen", "").strip()
                 if _get(shot, "input") or any(_get(s, "action") in ("type", "key") for s in _get(shot, "steps", []) or []):
-                    last = " ".join(early.splitlines()[-3:])[:300] or "окно пустое"
+                    lines = [ln for ln in early.splitlines() if ln.strip()]
+                    head = " ".join(lines[:3])
+                    last = (head if len(lines) <= 3 else f"{head} … {lines[-1]}")[:400] or "окно пустое"
                     return ShotResult(False, reason=f"программа завершилась сразу после запуска: {last}", seen=early)
             text = _get(shot, "input") or ""
             for step in _get(shot, "steps", None) or []:  # ввод по шагам: type/key/wait

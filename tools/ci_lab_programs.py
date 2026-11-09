@@ -352,7 +352,7 @@ def main() -> int:
                 finally:
                     if p.language == "mysql":
                         lab_srv.stop()
-                res.update(ok=r.ok, reason=r.reason, seen=r.seen[-400:])
+                res.update(ok=r.ok, reason=r.reason, seen=r.seen[:1500], cmd=list(target.cmd))
             except Exception as e:  # noqa: BLE001
                 res.update(ok=False, error=f"{type(e).__name__}: {e}", trace=traceback.format_exc()[-1500:])
             res["sec"] = round(time.time() - t0, 1)
