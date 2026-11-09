@@ -156,8 +156,14 @@ def build_cs(name, src, csproj):
 def uia_fill(hwnd):
     import clr  # pythonnet
 
-    clr.AddReference("UIAutomationClient")
-    clr.AddReference("UIAutomationTypes")
+    for asm in ("UIAutomationClient", "UIAutomationTypes"):
+        try:
+            clr.AddReference(f"{asm}, Version=4.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35")
+        except Exception:  # noqa: BLE001
+            import glob
+            path = (glob.glob(rf"C:\Windows\Microsoft.NET\assembly\GAC_MSIL\{asm}\*\{asm}.dll")
+                    + glob.glob(rf"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\WPF\{asm}.dll"))[0]
+            clr.AddReference(path)
     from System import IntPtr
     from System.Windows.Automation import (AutomationElement, InvokePattern, PropertyCondition, TreeScope,
                                            ValuePattern)
@@ -241,7 +247,7 @@ def type_into_console(pid, text):
 def console_case(name, cmd, cwd, inputs, low=False, expect=None, conhost=True):
     from forlabs.runner import winapi
 
-    full = f'conhost.exe {cmd}' if conhost else cmd
+    full = (f'conhost.exe cmd.exe /d /c "chcp 65001>nul & {cmd} & pause>nul"' if conhost else cmd)
     app = winapi.spawn(full, str(cwd), low=low, new_console=not conhost)
     try:
         w = winapi.wait_window({app.pid}, 30, lambda x: x.cls in ("ConsoleWindowClass", "CASCADIA_HOSTING_WINDOW_CLASS"))
@@ -249,7 +255,7 @@ def console_case(name, cmd, cwd, inputs, low=False, expect=None, conhost=True):
             raise RuntimeError(f"окно консоли не появилось (жив={app.alive()})")
         time.sleep(1.5)
         tree = winapi.process_tree({app.pid})
-        target = next((p for p in tree if p != app.pid), app.pid)
+        target = next((p for p in sorted(tree) if p != app.pid), app.pid)
         type_into_console(target if conhost else app.pid, inputs)
         time.sleep(1.5)
         res = {"title": w.title, "class": w.cls}
@@ -384,16 +390,28 @@ def c10():
 
 @case("mysql")
 def c11():
-    code, out = run(["powershell", "-NoProfile", "-Command",
-                     "Get-Service *mysql* | Select-Object -First 1 | Start-Service; Get-Service *mysql* | Format-List Name,Status"],
-                    timeout=120)
-    res = {"start": out[-500:]}
-    code, out = run(["mysql", "-u", "root", "-proot", "-e", "SELECT VERSION(); SHOW DATABASES;"], timeout=60)
-    res["root_root"] = [code, out[-500:]]
-    if code:
-        code, out = run(["mysql", "-u", "root", "-e", "SELECT VERSION();"], timeout=60)
-        res["root_nopass"] = [code, out[-500:]]
-    res["ok"] = code == 0
+    mysql = shutil.which("mysql")
+    bindir = Path(mysql).parent
+    data = WORK / "mysql-data"
+    shutil.rmtree(data, ignore_errors=True)
+    code, out = run([str(bindir / "mysqld.exe"), "--initialize-insecure", f"--datadir={data}"], timeout=300)
+    res = {"init": [code, out[-600:]]}
+    srv = subprocess.Popen([str(bindir / "mysqld.exe"), f"--datadir={data}", "--port=3306", "--console"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for _ in range(60):
+        code, out = run(["mysql", "-u", "root", "-e", "SELECT VERSION();"], timeout=20)
+        if code == 0:
+            break
+        time.sleep(1)
+    res["select"] = [code, out[-300:]]
+    sql = ("CREATE DATABASE library; USE library; CREATE TABLE books (id INT PRIMARY KEY AUTO_INCREMENT, title VARCHAR(100), "
+           "author VARCHAR(100)); INSERT INTO books (title, author) VALUES ('Мастер и Маргарита','Булгаков'),('Война и мир','Толстой');\n"
+           "SELECT * FROM books;\n")
+    try:
+        res["console"] = console_case("mysql_console", "mysql -u root --default-character-set=utf8mb4", WORK, sql)
+        res["ok"] = res["console"]["ok"] and code == 0
+    finally:
+        srv.terminate()
     return res
 
 

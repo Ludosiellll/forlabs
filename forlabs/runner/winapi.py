@@ -38,17 +38,48 @@ class BITMAPINFOHEADER(ctypes.Structure):
                 ("biYPelsPerMeter", ctypes.c_long), ("biClrUsed", wintypes.DWORD), ("biClrImportant", wintypes.DWORD)]
 
 
-kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
-user32.GetWindowDC.restype = wintypes.HDC
-gdi32.CreateCompatibleDC.restype = wintypes.HDC
-gdi32.CreateCompatibleBitmap.restype = wintypes.HBITMAP
-gdi32.SelectObject.restype = wintypes.HGDIOBJ
 WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+
+def _sig(fn, restype, *argtypes):
+    """Типы аргументов обязательны: 64-битные дескрипторы окон не влезают в int по умолчанию у ctypes."""
+    fn.restype, fn.argtypes = restype, list(argtypes)
+
+
+H, HW = wintypes.HANDLE, wintypes.HWND
+_sig(kernel32.CreateToolhelp32Snapshot, H, wintypes.DWORD, wintypes.DWORD)
+_sig(kernel32.Process32FirstW, wintypes.BOOL, H, ctypes.POINTER(PROCESSENTRY32W))
+_sig(kernel32.Process32NextW, wintypes.BOOL, H, ctypes.POINTER(PROCESSENTRY32W))
+_sig(kernel32.CloseHandle, wintypes.BOOL, H)
+_sig(user32.EnumWindows, wintypes.BOOL, WNDENUMPROC, wintypes.LPARAM)
+_sig(user32.IsWindowVisible, wintypes.BOOL, HW)
+_sig(user32.GetWindow, HW, HW, wintypes.UINT)
+_sig(user32.GetWindowThreadProcessId, wintypes.DWORD, HW, ctypes.POINTER(wintypes.DWORD))
+_sig(user32.GetWindowTextLengthW, ctypes.c_int, HW)
+_sig(user32.GetWindowTextW, ctypes.c_int, HW, wintypes.LPWSTR, ctypes.c_int)
+_sig(user32.GetClassNameW, ctypes.c_int, HW, wintypes.LPWSTR, ctypes.c_int)
+_sig(user32.GetWindowRect, wintypes.BOOL, HW, ctypes.POINTER(wintypes.RECT))
+_sig(user32.GetWindowDC, wintypes.HDC, HW)
+_sig(user32.ReleaseDC, ctypes.c_int, HW, wintypes.HDC)
+_sig(user32.PrintWindow, wintypes.BOOL, HW, wintypes.HDC, wintypes.UINT)
+_sig(user32.ShowWindow, wintypes.BOOL, HW, ctypes.c_int)
+_sig(user32.SetForegroundWindow, wintypes.BOOL, HW)
+_sig(user32.PostMessageW, wintypes.BOOL, HW, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+_sig(gdi32.CreateCompatibleDC, wintypes.HDC, wintypes.HDC)
+_sig(gdi32.CreateCompatibleBitmap, wintypes.HBITMAP, wintypes.HDC, ctypes.c_int, ctypes.c_int)
+_sig(gdi32.SelectObject, wintypes.HGDIOBJ, wintypes.HDC, wintypes.HGDIOBJ)
+_sig(gdi32.DeleteObject, wintypes.BOOL, wintypes.HGDIOBJ)
+_sig(gdi32.DeleteDC, wintypes.BOOL, wintypes.HDC)
+_sig(gdi32.GetDIBits, ctypes.c_int, wintypes.HDC, wintypes.HBITMAP, wintypes.UINT, wintypes.UINT, ctypes.c_void_p,
+     ctypes.c_void_p, wintypes.UINT)
+_sig(dwmapi.DwmGetWindowAttribute, ctypes.c_long, HW, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD)
 
 
 def dpi_aware() -> None:
     """Координаты и снимки — в настоящих пикселях экрана (масштаб 125–150 % не мешает)."""
     try:
+        user32.SetThreadDpiAwarenessContext.restype = ctypes.c_void_p
+        user32.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]
         user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))  # PER_MONITOR_AWARE_V2
     except (AttributeError, OSError):
         pass
@@ -101,7 +132,7 @@ def windows_of(pids: set[int]) -> list[Window]:
             user32.GetWindowTextW(hwnd, buf, n + 1)
             cls = ctypes.create_unicode_buffer(256)
             user32.GetClassNameW(hwnd, cls, 256)
-            found.append(Window(int(hwnd), pid.value, buf.value, cls.value))
+            found.append(Window(int(hwnd or 0), pid.value, buf.value, cls.value))
         return True
 
     user32.EnumWindows(WNDENUMPROC(cb), 0)
@@ -147,7 +178,7 @@ def capture(hwnd: int):
         bi = BITMAPINFOHEADER()
         bi.biSize, bi.biWidth, bi.biHeight, bi.biPlanes, bi.biBitCount = ctypes.sizeof(bi), w, -h, 1, 32
         buf = ctypes.create_string_buffer(w * h * 4)
-        if not gdi32.GetDIBits(mem_dc, bmp, 0, h, buf, ctypes.byref(bi), 0):
+        if not gdi32.GetDIBits(mem_dc, bmp, 0, h, ctypes.cast(buf, ctypes.c_void_p), ctypes.cast(ctypes.byref(bi), ctypes.c_void_p), 0):
             raise OSError("GetDIBits не удался")
         img = Image.frombuffer("RGB", (w, h), buf.raw, "raw", "BGRX", 0, 1)
     finally:
