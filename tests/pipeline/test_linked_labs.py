@@ -229,7 +229,7 @@ def test_methodology_reference_taken_from_report_without_typing(tmp_home, tmp_pa
     st3 = pipe.store.load_lab("ivanov", "psip", st2.number)
     st3.linked_texts = {}
     msgs = " ".join(f.message for f in pipe._link_findings(st3))
-    assert "Нужна предыдущая лаба" in msgs and "«Связанные лабы и файлы»" in msgs
+    assert "Нет предыдущей лабы ни в ForLabs, ни в отчёте" in msgs and "прикрепи общий отчёт" in msgs
 
 
 def test_link_findings_refreshed_before_execute(tmp_home, tmp_path):

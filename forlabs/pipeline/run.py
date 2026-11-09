@@ -686,7 +686,7 @@ class Pipeline:
                     lab, key = None, prev  # в отчёте есть ровно предыдущая — она точнее более ранней из ForLabs
                 elif lab is not None:
                     key = lab.number
-                label = "предыдущая лаба"
+                label = "предыдущей лабы"
             else:
                 if ref != st.number:
                     try:
@@ -712,21 +712,21 @@ class Pipeline:
         found, missing = self._linked_labs(st)
         def where(n: str, src: str, text: str) -> str:
             if src == "forlabs":
-                return " — из ForLabs, с кодом."
+                return ": из ForLabs, с кодом."
             how = st.linked_how.get(n)
             if how:
                 first = " ".join(text.split())[:90]
-                return (f" — в отчёте не было заголовка, модель нашла её {how}: начинается с «{first}». "
-                        "Если не та — поправь номер или добавь в отчёт заголовок «Лабораторная работа №…».")
-            return " — из прикреплённого отчёта."
+                return (f": заголовка в отчёте не было, модель нашла её {how}. Начинается с «{first}». "
+                        "Если не та, поправь номер.")
+            return ": из прикреплённого отчёта."
 
         out = [Finding(stage="spec", rule_id="spec.linked_lab", severity="warn", location="Связь с прошлыми лабами",
-                       message=f"Опираюсь на ЛР {n}" + (f" «{topic}»" if topic else "") + where(n, src, text))
+                       message=f"ЛР {n}" + (f" «{topic}»" if topic else "") + where(n, src, text))
                for n, src, topic, text in found]
         out += [Finding(stage="spec", rule_id="spec.linked_lab_missing", severity="warn",
                         location="Связь с прошлыми лабами",
-                        message=f"Нужна {m}, а её нет ни в ForLabs, ни в прикреплённом отчёте — прикрепи общий отчёт "
-                                "с ней (слева, «Связанные лабы и файлы») или напиши в пожеланиях тему и что было сделано.")
+                        message=f"Нет {m} ни в ForLabs, ни в отчёте: прикрепи общий отчёт с ней или опиши её "
+                                "в пожеланиях.")
                 for m in missing]
         return out
 

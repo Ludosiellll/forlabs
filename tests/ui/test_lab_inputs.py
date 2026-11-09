@@ -57,7 +57,7 @@ def test_new_lab_takes_linked_labs_and_files(app):
     assert [m.name for m in st.materials] == ["данные.csv"]
     assert any(f.rule_id == "spec.linked_lab" and "ЛР 27" in f.message for f in st.findings)
     page = client.get(r.headers["location"]).text
-    assert "данные.csv" in page and 'value="1, 27"' in page and "Опираюсь на ЛР 27" in page
+    assert "данные.csv" in page and 'value="1, 27"' in page and "ЛР 27: из прикреплённого отчёта" in page
     assert "Методичка ссылается на ЛР 2" in page
 
 
