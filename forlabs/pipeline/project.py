@@ -205,6 +205,25 @@ def _blocks(st: LabState):
             yield sec.n, bi, b
 
 
+def report_sha(st: LabState) -> str:
+    """Отпечаток того, по чему строится проект: код листингов и рисунки отчёта с их местами. План проекта ссылается
+    на блоки по номерам, поэтому после правки кода или перестановки блоков он уже не от этого отчёта."""
+    import hashlib
+
+    parts = []
+    for n, bi, b in _blocks(st):
+        if isinstance(b, Listing):
+            parts.append(f"L{n}.{bi}:{_squash(b.code)}")
+        elif isinstance(b, Figure):
+            parts.append(f"F{n}.{bi}:{b.topic}|{b.slot or ''}")
+    return hashlib.sha1("\n".join(parts).encode("utf-8")).hexdigest()
+
+
+def stale(st: LabState) -> bool:
+    """Проект собран по другому отчёту: код или рисунки с тех пор меняли (в чате правок)."""
+    return bool(st.project and st.project.report_sha and st.project.report_sha != report_sha(st))
+
+
 def needs_project(st: LabState) -> bool:
     """Есть ли в отчёте программа: листинг на поддерживаемом языке."""
     return any(isinstance(b, Listing) and (b.language or "").strip().lower() in CODE_LANGS for _, _, b in _blocks(st))
@@ -733,6 +752,7 @@ def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None) 
         pipe._sync(st, ["project/plan.json"])
     except Exception:
         pass
+    info.report_sha = report_sha(st)
     st.project = info
     st.docx_sha = None
     return st

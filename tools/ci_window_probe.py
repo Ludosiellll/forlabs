@@ -421,6 +421,24 @@ def repair_case(report: dict) -> None:
           f"{res.get('error') or [f.get('note') for f in res.get('figures', [])]}", flush=True)
 
 
+def plan_file_case(path: Path, tools, report: dict) -> None:
+    """Готовый план проекта из файла (FORLABS_PROBE_PLAN): собрать и снять все его оконные и консольные снимки —
+    так на Windows проверяется проект, который исправила настоящая модель."""
+    shooter = WindowsShooter()
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    target = build("from_file", {**raw, "shots": []}, tools)
+    for i, shot in enumerate(s for s in raw.get("shots", []) if s.get("mode") in ("window", "console")):
+        name, t0, res = f"plan_file_shot_{i + 1}", time.time(), {}
+        try:
+            r = shooter.shoot(target, shot, SHOTS / f"win_{name}.png")
+            res.update(ok=r.ok, reason=r.reason, kind=r.kind, sandbox=r.sandbox, seen=r.seen[:800], ui=r.ui[:2500])
+        except Exception as e:  # noqa: BLE001
+            res.update(ok=False, error=f"{type(e).__name__}: {e}", trace=traceback.format_exc()[-1500:])
+        res["sec"] = round(time.time() - t0, 1)
+        report["cases"][name] = res
+        print(f"[{name}] {'OK' if res.get('ok') else 'FAIL'} {res.get('reason') or res.get('error') or ''}", flush=True)
+
+
 def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
     SHOTS.mkdir(parents=True, exist_ok=True)
@@ -433,6 +451,16 @@ def main() -> int:
         report["cases"]["direct"] = {"ok": False, "error": f"{type(e).__name__}: {e}",
                                      "trace": traceback.format_exc()[-2500:]}
     repair_case(report)
+    extra = os.environ.get("FORLABS_PROBE_PLAN")
+    if extra:
+        try:
+            plan_file_case(ROOT / extra, tools, report)
+        except Exception as e:  # noqa: BLE001
+            report["cases"]["plan_file"] = {"ok": False, "error": f"{type(e).__name__}: {e}",
+                                            "trace": traceback.format_exc()[-2500:]}
+    import locale
+
+    report["locale"] = locale.getlocale()[0]
     (OUT / "windows.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     bad = [k for k, v in report["cases"].items() if not v.get("ok")]
     print("НЕ ПРОШЛИ:", bad, flush=True)

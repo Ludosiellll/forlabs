@@ -225,6 +225,7 @@ class ProjectInfo(BaseModel):
     blocked: list[str] = Field(default_factory=list)  # почему не запускается сам (опасный код)
     note: str = ""  # итог для студента
     folder: str = ""  # папка проекта в папке сдачи
+    report_sha: str = ""  # листинги и рисунки отчёта, по которым собран проект (правка в чате — проект устарел)
 
 
 class LabState(BaseModel):

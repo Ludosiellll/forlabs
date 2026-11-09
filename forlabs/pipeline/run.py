@@ -16,6 +16,7 @@ from forlabs.core.fs import atomic_write_bytes, durable_replace, os_error_text
 from forlabs.core.models import (
     ChatMessage,
     Figure,
+    Listing,
     LabSpec,
     LabState,
     Profile,
@@ -855,15 +856,48 @@ class Pipeline:
         from forlabs.pipeline import project as proj
 
         with self.lock(st):
-            plan = proj.load_plan(self, st)
-            if plan is None:
+            if proj.load_plan(self, st) is None:
                 raise PipelineError("Проекта ещё нет — выполни лабу.")
             projects, self.projects = self.projects, True
             try:
-                st = self._project(st, self._llm(st), plan=plan)
+                st = self._reproject(st, self._llm(st))
             finally:
                 self.projects = projects
         return self.render(st)
+
+    def _reproject(self, st: LabState, llm) -> LabState:
+        """Программа и снимки заново. Прежний план годится, только если отчёт с тех пор не меняли: план ссылается на
+        блоки по номерам, и после правки кода в чате он вернул бы в отчёт старый код. Иначе план составляется снова."""
+        from forlabs.pipeline import project as proj
+
+        plan = None if proj.stale(st) else proj.load_plan(self, st)
+        return self._project(st, llm, plan=plan)
+
+    def _chat_reshoot(self, st: LabState, llm) -> tuple[LabState, str]:
+        """Снимки программы по просьбе в чате или после правки кода. → (лаба, что получилось — строками для ответа)."""
+        from forlabs.pipeline import project as proj
+
+        def missing() -> dict[tuple[int, int], Figure]:
+            return {(sec.n, i): b for sec in st.report.sections for i, b in enumerate(sec.blocks, start=1)
+                    if isinstance(b, Figure) and not b.image_path}
+
+        if not self.projects:
+            return st, ""
+        if st.project is None and not proj.needs_project(st):
+            return st, "\nВ этой лабе нет программы, которую ForLabs мог бы запустить сам, — скриншоты добавь ты."
+        before = missing()
+        if not before:
+            return st, "\nВсе рисунки уже на месте."
+        st = self._reproject(st, llm)
+        left = missing()
+        taken = [b.topic for key, b in before.items() if key not in left]
+        lines = []
+        if taken:
+            lines.append("Снял сам: " + "; ".join(f"«{t}»" for t in taken[:6]) + ".")
+        for b in list(left.values())[:5]:
+            why = (b.auto_note or "").removeprefix("Сам не снял: ").rstrip(".")
+            lines.append(f"Не получилось: «{b.topic}»" + (f" — {why}." if why else "."))
+        return st, "".join("\n" + ln for ln in lines)
 
     def _linked_labs(self, st: LabState) -> tuple[list[tuple[str, str, str, str]], list[str]]:
         """Прошлые лабы для этой: выбранные студентом и те, на которые ссылается методичка. Каждая —
@@ -1037,64 +1071,84 @@ class Pipeline:
 
                 was_final = st.status == "final"
                 if plan.kind != "edit":
+                    shots = ""
+                    if plan.reshoot:  # «сними сам ещё раз»
+                        st, shots = self._chat_reshoot(st, llm)
                     note = remember_rule()
-                    st.chat.append(ChatMessage(id=uuid.uuid4().hex[:8], role="assistant", text=plan.reply + note,
-                                               at=_now(), kind=plan.kind, profile=proposals))
+                    reply = ChatMessage(id=uuid.uuid4().hex[:8], role="assistant",
+                                        text=(plan.reply + shots + note).strip(), at=_now(), kind=plan.kind,
+                                        profile=proposals)
+                    st.chat.append(reply)
                     self._emit(st, "Ответ в чате правок", "done", step="write")
-                    return self._save(st)
-                vid = push_version(st, message)
-                changed: list[str] = []
-                if plan.variant is not None and plan.variant != st.spec.variant:
-                    st.spec.variant = plan.variant
-                    changed.append(f"вариант {plan.variant}")
-                if plan.variant_text and plan.variant_text.strip() != (st.spec.variant_text or ""):
-                    st.spec.variant_text = plan.variant_text.strip()
-                    changed.append("текст варианта")
-                if plan.conclusion:
-                    text = " ".join(plan.conclusion.split()).rstrip(".") + "."
-                    st.spec.conclusion = text
-                    changed.append("вывод")
-                memory = self._memory_text(st)
-                assets = self.lab_dir(st) / "assets"
-                assets.mkdir(parents=True, exist_ok=True)
-                retake: list[str] = []
-                for edit in plan.tasks:
-                    idx = next((i for i, s in enumerate(st.report.sections) if s.n == edit.n), None)
-                    if idx is None:
-                        continue
-                    self._emit(st, f"Правлю задание {edit.n}", step="write")
-                    section, again = revise_section(st.spec, st.report.sections[idx], edit.instruction, profile,
-                                                    subject, llm, self.rules, assets, memory, self.render_diagrams)
-                    st.report.sections[idx] = section
-                    retake += again
-                    changed.append(f"задание {edit.n}")
-                if plan.questions:
-                    self._emit(st, "Правлю ответы на вопросы", step="write")
-                    st.report.questions = revise_answers(st.spec, st.report.questions, plan.questions, profile,
-                                                         subject, llm, self.rules)
-                    changed.append("ответы на вопросы " + ", ".join(str(q.n) for q in plan.questions))
-                self._emit(st, "Проверяю по стандарту и на признаки ИИ", step="check")
-                # чиним только то, что правили, и не трогаем принятые студентом замечания
-                touched = {f"Задание {e.n}," for e in plan.tasks} | {f"Вопрос {q.n}" for q in plan.questions}
-                accepted = set(st.accepted_rules)
-                report, findings = check_and_repair(
-                    st.report, st.spec, profile, llm, self.rules, self._others(st),
-                    on_event=lambda t: self._emit(st, t, step="check"),
-                    scope=lambda f: any(f.location.startswith(t) for t in touched) and not is_accepted(f, accepted))
-                st.report = _relative_images(report, self.lab_dir(st))
-                st.findings = _keep_spec(st.findings, findings)
-                self._sync_assets(st)
-                text = plan.reply or "Готово."
-                if changed:
-                    text += "\nИзменено: " + ", ".join(changed) + "."
-                if retake:
-                    text += "\nПересними: " + "; ".join(retake) + " — места появились в «Нужно от тебя»."
-                if was_final:
-                    text += "\nЛаба уже была сдана. Сдай заново, чтобы в папке сдачи был новый файл."
-                note = remember_rule()
-                reply = ChatMessage(id=uuid.uuid4().hex[:8], role="assistant", text=text + note, at=_now(),
-                                    kind="edit", changed=changed, retake=retake, version=vid, profile=proposals)
-                st.chat.append(reply)
+                    if not shots:
+                        return self._save(st)
+                if plan.kind == "edit":
+                    vid = push_version(st, message)
+                    changed: list[str] = []
+                    if plan.variant is not None and plan.variant != st.spec.variant:
+                        st.spec.variant = plan.variant
+                        changed.append(f"вариант {plan.variant}")
+                    if plan.variant_text and plan.variant_text.strip() != (st.spec.variant_text or ""):
+                        st.spec.variant_text = plan.variant_text.strip()
+                        changed.append("текст варианта")
+                    if plan.conclusion:
+                        text = " ".join(plan.conclusion.split()).rstrip(".") + "."
+                        st.spec.conclusion = text
+                        changed.append("вывод")
+                    memory = self._memory_text(st)
+                    assets = self.lab_dir(st) / "assets"
+                    assets.mkdir(parents=True, exist_ok=True)
+                    retake: list[str] = []
+                    for edit in plan.tasks:
+                        idx = next((i for i, s in enumerate(st.report.sections) if s.n == edit.n), None)
+                        if idx is None:
+                            continue
+                        self._emit(st, f"Правлю задание {edit.n}", step="write")
+                        section, again = revise_section(st.spec, st.report.sections[idx], edit.instruction, profile,
+                                                        subject, llm, self.rules, assets, memory, self.render_diagrams)
+                        st.report.sections[idx] = section
+                        retake += again
+                        changed.append(f"задание {edit.n}")
+                    if plan.questions:
+                        self._emit(st, "Правлю ответы на вопросы", step="write")
+                        st.report.questions = revise_answers(st.spec, st.report.questions, plan.questions, profile,
+                                                             subject, llm, self.rules)
+                        changed.append("ответы на вопросы " + ", ".join(str(q.n) for q in plan.questions))
+                    self._emit(st, "Проверяю по стандарту и на признаки ИИ", step="check")
+                    # чиним только то, что правили, и не трогаем принятые студентом замечания
+                    touched = {f"Задание {e.n}," for e in plan.tasks} | {f"Вопрос {q.n}" for q in plan.questions}
+                    accepted = set(st.accepted_rules)
+                    report, findings = check_and_repair(
+                        st.report, st.spec, profile, llm, self.rules, self._others(st),
+                        on_event=lambda t: self._emit(st, t, step="check"),
+                        scope=lambda f: any(f.location.startswith(t) for t in touched) and not is_accepted(f, accepted))
+                    st.report = _relative_images(report, self.lab_dir(st))
+                    st.findings = _keep_spec(st.findings, findings)
+                    self._sync_assets(st)
+                    shots = ""
+                    codes = lambda r: [b.code for sec in r.sections for b in sec.blocks  # noqa: E731
+                                       if isinstance(b, Listing)]
+                    if self.projects and (plan.reshoot or ((retake or codes(st.report) != codes(backup_report))
+                                                           and st.project is not None)):
+                        # код отчёта изменился: программа в папке сдачи и снимки должны быть от нового кода
+                        st, shots = self._chat_reshoot(st, llm)
+                        open_topics = {b.topic for sec in st.report.sections for b in sec.blocks
+                                       if isinstance(b, Figure) and not b.image_path}
+                        retake = [t for t in retake if t in open_topics]
+                    text = plan.reply or "Готово."
+                    if changed:
+                        text += "\nИзменено: " + ", ".join(changed) + "."
+                    text += shots
+                    if retake and not shots:
+                        text += "\nПересними: " + "; ".join(retake) + " — места появились в «Нужно от тебя»."
+                    elif retake:
+                        text += "\nЭти рисунки сними сам — места в «Нужно от тебя»."
+                    if was_final:
+                        text += "\nЛаба уже была сдана. Сдай заново, чтобы в папке сдачи был новый файл."
+                    note = remember_rule()
+                    reply = ChatMessage(id=uuid.uuid4().hex[:8], role="assistant", text=text + note, at=_now(),
+                                        kind="edit", changed=changed, retake=retake, version=vid, profile=proposals)
+                    st.chat.append(reply)
             except Exception as e:  # сбой посреди правки: разбор и отчёт — как до неё
                 st.spec, st.report = backup_spec, backup_report
                 if vid is not None:

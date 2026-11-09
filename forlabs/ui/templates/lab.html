@@ -102,6 +102,13 @@
     {% if slot_items %}
     <h2 style="margin-top:18px">Нужно от тебя: {{ slot_items|length }}</h2>
     <p class="small muted">Выбери рисунок и вставь скриншот через Ctrl+V или перетащи файл.</p>
+    {% set shots = namespace(failed=0) %}{% for _s, _b, _n, fig in slot_items %}{% if fig.auto_note and fig.auto_note.startswith('Сам не снял') %}{% set shots.failed = shots.failed + 1 %}{% endif %}{% endfor %}
+    {% if shots.failed and st.project %}
+    <form method="post" action="{{ base_url }}/project/retry" class="retake">
+      <button class="btn small" type="submit"{{ ' disabled' if busy }}>Снять ещё раз</button>
+      <span class="small muted">ForLabs найдёт причину, поправит программу или шаги и снимет сам.</span>
+    </form>
+    {% endif %}
     {% for sec_n, blk, num, fig in slot_items %}
       <div class="slot{{ ' on' if loop.first }}" tabindex="0" role="button" data-slot="{{ base_url }}/screenshot/{{ sec_n }}/{{ blk }}"
            aria-label="Рисунок {{ num }}: выбрать для вставки">

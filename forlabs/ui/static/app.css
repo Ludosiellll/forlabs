@@ -403,6 +403,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .program-box .bad { color: var(--err); }
 .program-box .until { flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .slot .auto-note { margin-top: 6px; color: var(--warn); }
+.retake { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 12px; }
 
 /* программы для лаб: строки в Настройках и блок «нет программы» на странице лабы */
 .tools { margin-top: 22px; }

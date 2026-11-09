@@ -78,6 +78,7 @@ class EditPlan(BaseModel):
     variant_text: str | None = None
     conclusion: str | None = None
     remember: str | None = None
+    reshoot: bool = False  # студент просит ForLabs самому снять скриншоты окон программы ещё раз
 
     @property
     def changes_anything(self) -> bool:
@@ -138,7 +139,8 @@ def describe_block(label: str, b) -> str:
         elif b.image_path:
             state = "скриншот вставлен"
         else:
-            state = f"ждёт скриншот: {b.slot or ''}".strip()
+            why = f"не снят — {b.auto_note.strip()} " if b.auto_note else ""
+            state = f"{why}ждёт скриншот: {b.slot or ''}".strip()
         return f"{label} [рисунок: {b.topic}] ({state})"
     if isinstance(b, Table):
         return f"{label} [таблица: {b.topic}] " + " / ".join(" | ".join(r) for r in b.rows[:12])
@@ -243,9 +245,15 @@ def plan_edit(st: LabState, message: str, profile: Profile, subject: Subject, ll
     if plan.kind in ("answer", "offtopic", "question"):
         plan.reply = _short(plan.reply)
     plan.remember = (plan.remember or "").strip() or None
+    if plan.kind == "offtopic":
+        plan.reshoot = False
+    elif plan.reshoot and plan.kind == "question":  # просьба понятна: снять заново
+        plan.kind = "answer"
     if plan.kind != "edit":
         plan.tasks, plan.questions = [], []
         plan.variant = plan.variant_text = plan.conclusion = None
+    elif not plan.changes_anything and plan.reshoot:
+        plan.kind = "answer"
     elif not plan.changes_anything:
         plan.kind = "question"
         if dropped:  # модель обещала правку задания, которого нет — не повторяем обещание
