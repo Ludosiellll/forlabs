@@ -383,10 +383,15 @@ def delayed_delete_command(target: Path, pid: int) -> list[str]:
     return ["powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-EncodedCommand", encoded]
 
 
+CREATE_NO_WINDOW, CREATE_NEW_PROCESS_GROUP = 0x08000000, 0x00000200
+
+
 def spawn_detached(cmd: list[str]) -> None:
+    """Команда, которая переживёт выход ForLabs. Скрытая консоль (CREATE_NO_WINDOW), а не DETACHED_PROCESS:
+    консольный PowerShell без консоли молча завершается, ничего не сделав."""
     flags = 0
     if sys.platform == "win32":
-        flags = subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        flags = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
     subprocess.Popen(cmd, cwd=tempfile.gettempdir(), creationflags=flags, close_fds=True,  # noqa: S603
                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 

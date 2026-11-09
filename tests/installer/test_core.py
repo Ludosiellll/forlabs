@@ -287,3 +287,19 @@ def test_uninstall_refuses_folder_without_program(tmp_path, shell):
     with pytest.raises(InstallError, match="нет ForLabs"):
         uninstall(docs, shell=shell, data_dir=tmp_path / "d", remove_data=False)
     assert (docs / "курсовая.docx").exists()
+
+
+# CI на Windows: PowerShell с DETACHED_PROCESS (без консоли) молча завершался — папка программы оставалась
+def test_delayed_delete_runs_with_hidden_console_not_detached(monkeypatch):
+    seen = {}
+
+    class P:
+        def __init__(self, cmd, **kw):
+            seen.update(kw, cmd=cmd)
+
+    monkeypatch.setattr(core.sys, "platform", "win32")
+    monkeypatch.setattr(core.subprocess, "Popen", P)
+    core.spawn_detached(["powershell", "-EncodedCommand", "x"])
+    flags = seen["creationflags"]
+    assert flags & 0x08000000  # CREATE_NO_WINDOW — скрытая консоль
+    assert not flags & 0x00000008  # не DETACHED_PROCESS
