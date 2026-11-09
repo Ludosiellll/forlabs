@@ -55,6 +55,7 @@ class FakeSupabase:
         self.support_bound = False  # владелец привязал Telegram
         self.support_secrets = True  # секреты бота заданы в Supabase
         self.no_support = False  # сервер без миграции 0006 и функции support
+        self.autoconfirm = False  # в Supabase выключено «Confirm email»: регистрация сразу даёт вход
         self.support_objects = {}  # бакет support: путь → байты
 
     def _is_admin(self) -> bool:
@@ -78,6 +79,8 @@ class FakeSupabase:
                 return httpx.Response(400, json={"error": "invalid_grant", "error_description": "Invalid login credentials"})
             return httpx.Response(200, json=self.session())
         if path == "/auth/v1/signup":
+            if self.autoconfirm:
+                return httpx.Response(200, json=self.session())
             return httpx.Response(200, json={"id": UID, "email": "a@b.c", "confirmation_sent_at": "now"})
         assert req.headers["authorization"].startswith("Bearer tok")
         if req.headers["authorization"][7:] in self.expired and path.startswith("/rest/v1/"):

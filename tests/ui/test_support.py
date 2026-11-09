@@ -121,3 +121,25 @@ def test_unread_badge_is_cached_between_pages(fake, tmp_home):
     c.get("/settings")
     c.get("/profiles")
     assert sum(1 for r in fake.requests if r.url.path.endswith("/support_messages")) == before
+
+
+def test_signup_without_email_confirmation_logs_in_and_shows_pending(fake, tmp_home):
+    import httpx
+    from fastapi.testclient import TestClient
+
+    from forlabs.cloud.auth import CloudAuth
+    from forlabs.cloud.store import CloudStore
+    from forlabs.ui.app import create_app
+    from forlabs.ui.context import AppContext
+    from test_cloud import CFG
+
+    fake.autoconfirm = True
+    fake.tables["members"][0].update({"role": "member", "approved": False})
+    auth = CloudAuth(CFG, http=httpx.Client(transport=httpx.MockTransport(fake)), use_keyring=False)
+    ctx = AppContext(settings=Settings(mode="cloud"), synchronous=True)
+    ctx.auth, ctx._store = auth, CloudStore(auth)
+    c = TestClient(create_app(ctx), base_url="http://127.0.0.1:8765")
+    r = c.post("/register", data={"email": "a@b.c", "password": "верный", "name": "Аня"}, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"].startswith("/?") and "подтверди" not in r.headers["location"]
+    page = c.get("/").text
+    assert "ждёт одобрения" in page and 'href="/support"' in page
