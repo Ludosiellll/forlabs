@@ -307,6 +307,32 @@ def start_mysql() -> subprocess.Popen | None:
     return srv
 
 
+def mysql_variants(tools, report) -> None:
+    """Диагностика: как запуск клиента MySQL доходит до программы (напрямую, через файл настроек, по имени)."""
+    from forlabs.runner import mysqlrun
+
+    srv = mysqlrun.start(tools["mysql"].path, WORK)
+    out = {}
+    try:
+        base = srv.client()
+        r = subprocess.run([*base, "-e", "SELECT 'прямой запуск'"], capture_output=True, text=True, timeout=30)
+        out["direct"] = [r.returncode, (r.stdout + r.stderr)[:300]]
+        cnf = WORK / "client.cnf"
+        cnf.write_text(f"[client]\nuser=root\nhost=127.0.0.1\nport={srv.port}\ndefault-character-set=utf8mb4\n",
+                       encoding="utf-8")
+        r = subprocess.run([base[0], f"--defaults-extra-file={cnf}", "-e", "SELECT 'через файл'"], capture_output=True,
+                           text=True, timeout=30)
+        out["cnf"] = [r.returncode, (r.stdout + r.stderr)[:300]]
+        line = " ".join(f'"{a}"' if " " in a else a for a in base)
+        r = subprocess.run(f'cmd.exe /d /s /c "chcp 65001>nul & {line} -e \"SELECT 1\""', capture_output=True,
+                           text=True, timeout=30, shell=False)
+        out["cmd_wrap"] = [r.returncode, (r.stdout + r.stderr)[:300]]
+    finally:
+        srv.stop()
+    report["mysql_variants"] = out
+    print("mysql варианты:", out, flush=True)
+
+
 def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
     SHOTS.mkdir(parents=True, exist_ok=True)
@@ -316,6 +342,10 @@ def main() -> int:
     print("инструменты:", {k: t.version for k, t in tools.items()}, flush=True)
     srv = None  # MySQL поднимается на каждую лабу отдельно (mysqlrun)
     shooter = WindowsShooter()
+    try:
+        mysql_variants(tools, report)
+    except Exception as e:  # noqa: BLE001
+        report["mysql_variants"] = {"error": f"{type(e).__name__}: {e}"}
     try:
         for name, raw in CASES.items():
             t0 = time.time()
