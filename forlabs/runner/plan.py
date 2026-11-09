@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 from pathlib import PurePosixPath
 from typing import Any, Literal
 
@@ -165,6 +166,14 @@ class ProjectPlan(_Model):
         real = {f.path.lower(): f.path for f in self.files}
         if self.entry not in {f.path for f in self.files}:
             self.entry = real.get(self.entry.lower(), self.entry)
+        code = CODE_EXT.get(self.language, set())
+        if code and Path(self.entry).suffix.lower() in EXTRA_EXT.get(self.language, set()):  # «App.xaml» у WPF
+            same = real.get(f"{self.entry}.cs".lower())
+            cands = [f.path for f in self.files if Path(f.path).suffix.lower() in code]
+            best = same or next((c for c in cands if Path(c).stem.lower().split(".")[0] in
+                                 ("program", "main", "app", "index")), None) or (cands[0] if cands else None)
+            if best:
+                self.entry = best
         for ref in self.listings:
             ref.file = real.get(ref.file.lower(), ref.file) if ref.file not in real.values() else ref.file
         return self

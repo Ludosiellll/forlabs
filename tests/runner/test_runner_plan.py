@@ -211,3 +211,14 @@ def test_bad_project_name(name):
 def test_good_project_names():
     for name in ["Калькулятор", "Lab 3 Matrix", "ЛР_5-сортировка"]:
         assert validate(make(name=name)) == []
+
+
+
+def test_wpf_entry_xaml_points_to_code_file():
+    from forlabs.runner.plan import ProjectPlan, validate
+
+    p = ProjectPlan.model_validate({"language": "csharp", "kind": "wpf", "name": "Книги", "entry": "App.xaml",
+                                    "files": [{"path": "App.xaml", "content": "<Application/>"},
+                                              {"path": "App.xaml.cs", "content": "class App {}"},
+                                              {"path": "MainWindow.xaml.cs", "content": "class W {}"}]})
+    assert p.entry == "App.xaml.cs" and validate(p) == []

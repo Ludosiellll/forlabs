@@ -1,0 +1,362 @@
+"""Windows (CI): программы лаб на всех языках — готовый план → проект → сборка инструментами сборщика →
+запуск в песочнице → сценарий → снимок окна. Отчёт: build/probe/report.json, снимки: build/probe/shots/*.png."""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+import traceback
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from forlabs.runner import languages  # noqa: E402
+from forlabs.runner.plan import ProjectPlan, validate  # noqa: E402
+from forlabs.runner.shots import RunTarget, WindowsShooter  # noqa: E402
+
+OUT = Path("build/probe")
+SHOTS = OUT / "shots"
+WORK = Path(os.environ.get("RUNNER_TEMP", "build")) / "lab-programs"
+
+CS_CALC = '''using System;
+using System.Windows.Forms;
+
+namespace Calculator
+{
+    public class MainForm : Form
+    {
+        private TextBox txtA = new TextBox { Name = "txtA", Left = 20, Top = 20, Width = 120 };
+        private TextBox txtB = new TextBox { Name = "txtB", Left = 160, Top = 20, Width = 120 };
+        private ComboBox cmbOp = new ComboBox { Name = "cmbOp", Left = 20, Top = 60, Width = 260,
+            DropDownStyle = ComboBoxStyle.DropDownList };
+        private Button btnCalc = new Button { Name = "btnCalc", Text = "Вычислить", Left = 20, Top = 100, Width = 120 };
+        private Label lblResult = new Label { Name = "lblResult", Text = "Результат:", Left = 160, Top = 105, Width = 200 };
+
+        public MainForm()
+        {
+            Text = "Калькулятор";
+            Width = 340;
+            Height = 200;
+            cmbOp.Items.AddRange(new object[] { "Сумма", "Разность", "Произведение" });
+            cmbOp.SelectedIndex = 0;
+            btnCalc.Click += BtnCalc_Click;
+            Controls.AddRange(new Control[] { txtA, txtB, cmbOp, btnCalc, lblResult });
+        }
+
+        private void BtnCalc_Click(object sender, EventArgs e)
+        {
+            double a = double.Parse(txtA.Text), b = double.Parse(txtB.Text);
+            double r = cmbOp.SelectedIndex == 0 ? a + b : cmbOp.SelectedIndex == 1 ? a - b : a * b;
+            lblResult.Text = "Результат: " + r;
+            MessageBox.Show("Ответ: " + r, "Результат");
+        }
+
+        [STAThread]
+        static void Main()
+        {
+            Application.EnableVisualStyles();
+            Application.Run(new MainForm());
+        }
+    }
+}
+'''
+
+WPF_XAML = '''<Window x:Class="Books.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="Учёт книг" Width="380" Height="240">
+    <StackPanel Margin="12">
+        <TextBox x:Name="txtTitle" Margin="0,0,0,8"/>
+        <Button x:Name="btnAdd" Content="Добавить" Click="BtnAdd_Click" Width="120" HorizontalAlignment="Left"/>
+        <ListBox x:Name="lstBooks" Height="90" Margin="0,8,0,0"/>
+    </StackPanel>
+</Window>
+'''
+WPF_CS = '''using System.Windows;
+
+namespace Books
+{
+    public partial class MainWindow : Window
+    {
+        public MainWindow()
+        {
+            InitializeComponent();
+        }
+
+        private void BtnAdd_Click(object sender, RoutedEventArgs e)
+        {
+            lstBooks.Items.Add(txtTitle.Text);
+            txtTitle.Clear();
+        }
+    }
+}
+'''
+WPF_APP_XAML = '''<Application x:Class="Books.App" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" StartupUri="MainWindow.xaml"/>
+'''
+WPF_APP_CS = '''using System.Windows;
+
+namespace Books
+{
+    public partial class App : Application
+    {
+    }
+}
+'''
+
+
+def plan(language, kind, name, entry, files, shot):
+    return {"language": language, "kind": kind, "name": name, "entry": entry,
+            "files": [{"path": p, "content": c} for p, c in files.items()], "listings": [],
+            "shots": [{"section": 1, "block": 1, **shot}]}
+
+
+CASES = {
+    "csharp_console": plan("csharp", "console", "Сумма", "Program.cs", {"Program.cs": '''using System;
+
+class Program
+{
+    static void Main()
+    {
+        Console.Write("Введите первое число: ");
+        double a = double.Parse(Console.ReadLine());
+        Console.Write("Введите второе число: ");
+        double b = double.Parse(Console.ReadLine());
+        Console.WriteLine("Сумма: " + (a + b));
+        Console.ReadKey();
+    }
+}
+'''}, {"mode": "console", "input": "12\n5\n", "expect": "Сумма: 17"}),
+    "csharp_winforms_messagebox": plan("csharp", "winforms", "Калькулятор", "MainForm.cs", {"MainForm.cs": CS_CALC},
+                                       {"mode": "window", "expect": "Ответ: 17", "steps": [
+                                           {"action": "set", "target": "txtA", "value": "12"},
+                                           {"action": "set", "target": "txtB", "value": "5"},
+                                           {"action": "select", "target": "cmbOp", "value": "Сумма"},
+                                           {"action": "click", "target": "Вычислить"}]}),
+    "csharp_wpf": plan("csharp", "wpf", "Книги", "App.xaml", {"App.xaml": WPF_APP_XAML, "App.xaml.cs": WPF_APP_CS,
+                                                              "MainWindow.xaml": WPF_XAML, "MainWindow.xaml.cs": WPF_CS},
+                       {"mode": "window", "expect": "Война и мир", "steps": [
+                           {"action": "set", "target": "txtTitle", "value": "Мастер и Маргарита"},
+                           {"action": "click", "target": "btnAdd"},
+                           {"action": "set", "target": "txtTitle", "value": "Война и мир"},
+                           {"action": "click", "target": "btnAdd"}]}),
+    "cpp_console": plan("cpp", "console", "Массив", "main.cpp", {"main.cpp": '''#include <iostream>
+using namespace std;
+
+int main()
+{
+    int n;
+    cout << "Введите количество элементов: ";
+    cin >> n;
+    int sum = 0;
+    for (int i = 0; i < n; i++)
+    {
+        int x;
+        cin >> x;
+        sum += x;
+    }
+    cout << "Сумма элементов: " << sum << endl;
+    return 0;
+}
+'''}, {"mode": "console", "input": "3\n4 5 8\n", "expect": "Сумма элементов: 17"}),
+    "python_console": plan("python", "console", "Список", "main.py", {"main.py": '''numbers = [int(x) for x in input("Введите числа через пробел: ").split()]
+print("Максимум:", max(numbers))
+print("Сумма:", sum(numbers))
+'''}, {"mode": "console", "input": "12 5\n", "expect": "Сумма: 17"}),
+    "python_tkinter": plan("python", "gui", "Калькулятор", "main.py", {"main.py": '''import tkinter as tk
+
+
+def calc(event=None):
+    result.config(text=f"Результат: {float(entry_a.get()) + float(entry_b.get())}")
+
+
+root = tk.Tk()
+root.title("Калькулятор")
+root.geometry("380x140")
+entry_a = tk.Entry(root)
+entry_b = tk.Entry(root)
+entry_a.pack(pady=4)
+entry_b.pack(pady=4)
+tk.Button(root, text="Вычислить", command=calc).pack()
+result = tk.Label(root, text="Результат:")
+result.pack()
+root.bind("<Return>", calc)
+entry_a.focus_force()
+root.mainloop()
+'''}, {"mode": "window", "steps": [{"action": "type", "value": "12"}, {"action": "key", "value": "tab"},
+                                    {"action": "type", "value": "5"}, {"action": "key", "value": "enter"}]}),
+    "java_console": plan("java", "console", "Студенты", "Main.java", {"Main.java": '''import java.util.Scanner;
+
+public class Main {
+    public static void main(String[] args) {
+        Scanner in = new Scanner(System.in);
+        System.out.print("Введите два числа: ");
+        int a = in.nextInt();
+        int b = in.nextInt();
+        System.out.println("Сумма: " + (a + b));
+    }
+}
+'''}, {"mode": "console", "input": "12 5\n", "expect": "Сумма: 17"}),
+    "java_swing": plan("java", "gui", "Калькулятор", "Main.java", {"Main.java": '''import javax.swing.*;
+import java.awt.*;
+
+public class Main {
+    public static void main(String[] args) {
+        SwingUtilities.invokeLater(() -> {
+            JFrame frame = new JFrame("Калькулятор");
+            frame.setLayout(new FlowLayout());
+            JTextField a = new JTextField(6);
+            JTextField b = new JTextField(6);
+            JButton calc = new JButton("Вычислить");
+            JLabel result = new JLabel("Результат:");
+            calc.addActionListener(e -> result.setText("Результат: "
+                    + (Integer.parseInt(a.getText()) + Integer.parseInt(b.getText()))));
+            frame.add(a);
+            frame.add(b);
+            frame.add(calc);
+            frame.add(result);
+            frame.getRootPane().setDefaultButton(calc);
+            frame.setSize(420, 120);
+            frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+            frame.setVisible(true);
+            a.requestFocusInWindow();
+        });
+    }
+}
+'''}, {"mode": "window", "steps": [{"action": "type", "value": "12"}, {"action": "key", "value": "tab"},
+                                    {"action": "type", "value": "5"}, {"action": "key", "value": "enter"}]}),
+    "node_console": plan("javascript", "console", "Сумма", "main.js", {"main.js": '''const readline = require("readline");
+const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+
+rl.question("Введите два числа: ", (line) => {
+  const [a, b] = line.split(" ").map(Number);
+  console.log("Сумма:", a + b);
+  rl.close();
+});
+'''}, {"mode": "console", "input": "12 5\n", "expect": "Сумма: 17"}),
+    "web_page": plan("web", "web", "Кофейня", "index.html", {"index.html": '''<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Кофейня «Зерно»</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <h1>Кофейня «Зерно»</h1>
+  <ul class="menu"><li>Капучино — 5 р.</li><li>Латте — 6 р.</li></ul>
+</body>
+</html>
+''', "style.css": "body { font-family: Segoe UI, sans-serif; background: #f4efe6; margin: 40px; }\nh1 { color: #6b3e26; }\n"},
+                     {"mode": "browser", "url": "index.html"}),
+    "php_console": plan("php", "console", "Сумма", "main.php", {"main.php": '''<?php
+echo "Введите два числа: ";
+[$a, $b] = array_map("intval", explode(" ", trim(fgets(STDIN))));
+echo "Сумма: " . ($a + $b) . PHP_EOL;
+'''}, {"mode": "console", "input": "12 5\n", "expect": "Сумма: 17"}),
+    "php_web": plan("php", "web", "Библиотека", "index.php", {"index.php": '''<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="UTF-8"><title>Библиотека</title></head>
+<body>
+<h1>Книги</h1>
+<ul>
+<?php foreach (["Мастер и Маргарита", "Война и мир"] as $book): ?>
+  <li><?= htmlspecialchars($book) ?></li>
+<?php endforeach; ?>
+</ul>
+</body>
+</html>
+'''}, {"mode": "browser", "url": "index.php"}),
+    "go_console": plan("go", "console", "Сумма", "main.go", {"main.go": '''package main
+
+import "fmt"
+
+func main() {
+	var a, b int
+	fmt.Print("Введите два числа: ")
+	fmt.Scan(&a, &b)
+	fmt.Println("Сумма:", a+b)
+}
+'''}, {"mode": "console", "input": "12 5\n", "expect": "Сумма: 17"}),
+    "mysql_script": plan("mysql", "sql", "Библиотека", "library.sql", {"library.sql": '''CREATE DATABASE library;
+USE library;
+CREATE TABLE books (id INT PRIMARY KEY AUTO_INCREMENT, title VARCHAR(100), author VARCHAR(100));
+'''}, {"mode": "console", "expect": "Булгаков",
+       "input": "CREATE DATABASE library;\nUSE library;\nCREATE TABLE books (id INT PRIMARY KEY AUTO_INCREMENT, "
+                "title VARCHAR(100), author VARCHAR(100));\nINSERT INTO books (title, author) VALUES "
+                "('Мастер и Маргарита', 'Булгаков'), ('Война и мир', 'Толстой');\nSELECT * FROM books;\n"}),
+}
+
+
+def start_mysql() -> subprocess.Popen | None:
+    mysql = shutil.which("mysql")
+    if not mysql:
+        return None
+    bindir = Path(mysql).parent
+    data = WORK / "mysql-data"
+    shutil.rmtree(data, ignore_errors=True)
+    subprocess.run([str(bindir / "mysqld.exe"), "--initialize-insecure", f"--datadir={data}"], capture_output=True,
+                   timeout=300)
+    srv = subprocess.Popen([str(bindir / "mysqld.exe"), f"--datadir={data}", "--port=3306"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for _ in range(60):
+        if subprocess.run(["mysql", "-u", "root", "-e", "SELECT 1"], capture_output=True).returncode == 0:
+            break
+        time.sleep(1)
+    return srv
+
+
+def main() -> int:
+    OUT.mkdir(parents=True, exist_ok=True)
+    SHOTS.mkdir(parents=True, exist_ok=True)
+    WORK.mkdir(parents=True, exist_ok=True)
+    tools = languages.detect()
+    report: dict = {"tools": {k: [t.path, t.version] for k, t in tools.items()}, "cases": {}}
+    print("инструменты:", {k: t.version for k, t in tools.items()}, flush=True)
+    srv = start_mysql()
+    shooter = WindowsShooter()
+    try:
+        for name, raw in CASES.items():
+            t0 = time.time()
+            res: dict = {}
+            try:
+                p = ProjectPlan.model_validate(raw)
+                problems = validate(p)
+                if problems:
+                    raise RuntimeError("план: " + "; ".join(problems))
+                lack = languages.missing(p, tools)
+                if lack:
+                    raise RuntimeError("нет инструментов: " + ", ".join(lack))
+                work = WORK / name
+                shutil.rmtree(work, ignore_errors=True)
+                languages.materialize(p, work, tools)
+                b = languages.build(work, p, tools)
+                res["build"] = b.ok
+                if not b.ok:
+                    raise RuntimeError("сборка: " + b.log[-1500:])
+                spec = languages.run_spec(p, b.artifact, work, tools)
+                php_web = bool(spec.url) and p.language == "php"
+                target = RunTarget(cmd=[] if php_web else list(spec.cmd), cwd=Path(spec.cwd), console=spec.console,
+                                   url=spec.url or None, env=dict(spec.env or {}),
+                                   server=list(spec.cmd) if php_web else None, title=None)
+                shot = p.shots[0]
+                r = shooter.shoot(target, shot, SHOTS / f"{name}.png")
+                res.update(ok=r.ok, reason=r.reason, seen=r.seen[-400:])
+            except Exception as e:  # noqa: BLE001
+                res.update(ok=False, error=f"{type(e).__name__}: {e}", trace=traceback.format_exc()[-1500:])
+            res["sec"] = round(time.time() - t0, 1)
+            report["cases"][name] = res
+            print(f"[{name}] {'OK' if res.get('ok') else 'FAIL'} {res.get('reason') or res.get('error') or ''}",
+                  flush=True)
+    finally:
+        if srv is not None:
+            srv.terminate()
+    (OUT / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    bad = [k for k, v in report["cases"].items() if not v.get("ok")]
+    print("НЕ ПРОШЛИ:", bad, flush=True)
+    return 1 if bad else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

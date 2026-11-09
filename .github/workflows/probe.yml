@@ -27,9 +27,9 @@ jobs:
           python-version: "3.12"
       - name: Зависимости
         run: python -m pip install ".[windows]" pythonnet
-      - name: Проверка запуска программ и снимков окон
+      - name: Программы лаб на всех языках (как у студента)
         shell: pwsh
-        run: python tools/ci_probe_exec.py
+        run: python tools/ci_lab_programs.py
       - name: Результаты в ветку probe-results
         if: always()
         shell: pwsh
