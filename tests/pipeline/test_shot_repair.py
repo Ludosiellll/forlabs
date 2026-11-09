@@ -156,3 +156,68 @@ def test_fixed_plan_is_saved_for_the_next_rebuild(tmp_home, tmp_path):
     pipe, fake, st = make(tmp_home, tmp_path, [PLAN, fix], shooter=ScriptShooter(ui_fail(), True))
     st = pipe.execute(st)
     assert proj.load_plan(pipe, st).file("main.py").content == BETTER
+
+
+# --- находки ревью
+
+
+def test_report_listing_follows_the_repaired_file_to_its_last_line(tmp_home, tmp_path):
+    fix = {"files": [{"path": "main.py", "content": BETTER}]}  # модель поменяла последнюю строку и не вернула листинг
+    pipe, fake, st = make(tmp_home, tmp_path, [PLAN, fix], shooter=ScriptShooter(ui_fail(), True))
+    st = pipe.execute(st)
+    assert st.report.sections[0].blocks[1].code == BETTER.rstrip("\n")  # в отчёте — весь код, а не обрезок
+
+
+def test_scenario_only_fix_is_checked_before_anything_is_typed(tmp_home, tmp_path, monkeypatch):
+    real = proj._blocked
+    monkeypatch.setattr(proj, "_blocked", lambda pipe, plan: (
+        (["сценарий запускает команду системы"], False) if any("system" in s.input for s in plan.shots)
+        else real(pipe, plan)))
+    fix = {"shots": [{"section": 1, "block": 3, "mode": "console", "input": "system whoami\n", "expect": "Сумма:"}]}
+    shooter = ScriptShooter(ui_fail(), True)
+    pipe, fake, st = make(tmp_home, tmp_path, [PLAN, fix], shooter=shooter)
+    st = pipe.execute(st)
+    assert len(shooter.calls) == 1  # опасный ввод не набирался
+    assert proj.load_plan(pipe, st).shots[0].input == "12\n5\n" and not st.project.blocked
+
+
+def test_project_info_survives_a_crash_inside_the_repair_round(tmp_home, tmp_path, monkeypatch):
+    from forlabs.runner import languages
+
+    real, calls = languages.build, []
+
+    def build(work, plan, tools, *a, **k):
+        calls.append(1)
+        if len(calls) == 2:  # сборка исправленной программы падает не ошибкой сборки, а исключением
+            raise OSError("диск переполнен")
+        return real(work, plan, tools, *a, **k)
+
+    monkeypatch.setattr(languages, "build", build)
+    fix = {"files": [{"path": "main.py", "content": BETTER}]}
+    pipe, fake, st = make(tmp_home, tmp_path, [PLAN, fix], shooter=ScriptShooter(ui_fail()))
+    st = pipe.execute(st)
+    assert st.project is not None and st.project.built  # программа есть, кнопка «Снять ещё раз» доступна
+    assert "нет пункта" in figures(st)[0].auto_note and hand_in(tmp_path) == GOOD
+
+
+def test_repair_on_retry_retakes_pictures_from_the_earlier_run_too(tmp_home, tmp_path):
+    fix = {"files": [{"path": "main.py", "content": BETTER}]}
+    # первый запуск: рисунок 1 снят, рисунок 2 — окно не появилось; «Снять ещё раз»: сценарий 2 не прошёл,
+    # модель поменяла программу — значит, и рисунок 1 должен быть от новой программы
+    shooter = ScriptShooter(True, ShotResult(False, reason="окно консоли не появилось"), ui_fail(), True, True)
+    pipe, fake, st = make(tmp_home, tmp_path, [TWO, fix], shooter=shooter)
+    st = pipe.execute(st)
+    old = figures(st)[0].image_path
+    st = pipe.retry_project(st)
+    first, second = figures(st)
+    assert len(shooter.calls) == 5 and first.image_path != old and second.image_path
+    assert not (pipe.lab_dir(st) / old).exists()  # прежний снимок убран, а не лежит рядом
+
+
+def test_retake_works_when_plan_file_is_not_on_this_computer(tmp_home, tmp_path):
+    shooter = ScriptShooter(ShotResult(False, reason="окно консоли не появилось"), True)
+    pipe, fake, st = make(tmp_home, tmp_path, [PLAN, PLAN], shooter=shooter)
+    st = pipe.execute(st)
+    (pipe.lab_dir(st) / "project" / "plan.json").unlink()  # лабу открыли на другом компьютере
+    st = pipe.retry_project(st)  # план составляется заново, а не «проекта ещё нет»
+    assert figures(st)[0].image_path

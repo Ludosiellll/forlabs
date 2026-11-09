@@ -97,7 +97,7 @@ def test_events_published(tmp_home, tmp_path):
     st = pipe.create_lab("ivanov", "psip", [(FIXTURE.name, FIXTURE.read_bytes())], number="7")
     st = pipe.execute(pipe.confirm(pipe.parse(st, date="24.09.2026"), None))
     texts = [e.text for e in pipe.bus.history(pipe.key(st))]
-    assert any("Задание 1" in t for t in texts) and any("Вёрстка" in t for t in texts)
+    assert any("Задание 1" in t for t in texts) and any("Верстаю" in t for t in texts)
 
 
 def test_memory_updated_on_final(tmp_home, tmp_path):

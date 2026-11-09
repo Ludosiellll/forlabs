@@ -806,6 +806,8 @@ class Pipeline:
             if plan is None:
                 emit("Составляю проект программы")
                 plan = proj.plan_project(st, llm, self._memory_text(st))
+                if st.project is not None and st.project.name:  # план составлен заново: проект остаётся в своей папке
+                    plan = plan.model_copy(update={"name": st.project.name})
                 problems = proj.validate(plan)
                 if problems and all(p.startswith("Снимок ") for p in problems):
                     plan, problems = proj.drop_bad_shots(plan), []
@@ -813,8 +815,8 @@ class Pipeline:
                     raise PipelineError("план проекта не прошёл проверку: " + "; ".join(problems[:3]))
             st = proj.build_and_shoot(self, st, plan, llm, emit)
             left = [f for f in self.slots(st)]
-            emit("Программа собрана" + (f", снимков сделано сам: {self._auto_shots(st)}" if st.project.built else "")
-                 + (f"; от тебя нужно рисунков: {len(left)}" if left else ""), "done" if st.project.built else "warn")
+            emit("Программа собрана" + (f". Снял сам: {self._auto_shots(st)}" if st.project.built else "")
+                 + (f", нужно от тебя: {len(left)}" if left else ""), "done" if st.project.built else "warn")
         except Exception as e:  # проект — помощь, а не условие: лаба собирается и без него
             logging.getLogger("forlabs").warning("Этап «Проект»: %s", e, exc_info=True)
             emit(f"Программу собрать не получилось ({getattr(e, 'message_ru', None) or e}). Снимки сделай сам.", "warn")
@@ -856,7 +858,7 @@ class Pipeline:
         from forlabs.pipeline import project as proj
 
         with self.lock(st):
-            if proj.load_plan(self, st) is None:
+            if st.project is None and proj.load_plan(self, st) is None:
                 raise PipelineError("Проекта ещё нет — выполни лабу.")
             projects, self.projects = self.projects, True
             try:
@@ -865,16 +867,20 @@ class Pipeline:
                 self.projects = projects
         return self.render(st)
 
-    def _reproject(self, st: LabState, llm) -> LabState:
+    def _reproject(self, st: LabState, llm, fresh: bool = False) -> LabState:
         """Программа и снимки заново. Прежний план годится, только если отчёт с тех пор не меняли: план ссылается на
-        блоки по номерам, и после правки кода в чате он вернул бы в отчёт старый код. Иначе план составляется снова."""
+        блоки по номерам, и после правки кода в чате он вернул бы в отчёт старый код. Иначе (и при fresh — код
+        только что меняли) план составляется снова."""
         from forlabs.pipeline import project as proj
 
-        plan = None if proj.stale(st) else proj.load_plan(self, st)
+        plan = None if fresh else proj.load_plan(self, st)
+        if plan is not None and proj.stale(st, plan):
+            plan = None
         return self._project(st, llm, plan=plan)
 
-    def _chat_reshoot(self, st: LabState, llm) -> tuple[LabState, str]:
-        """Снимки программы по просьбе в чате или после правки кода. → (лаба, что получилось — строками для ответа)."""
+    def _chat_reshoot(self, st: LabState, llm, code_changed: bool = False) -> tuple[LabState, str, bool]:
+        """Снимки программы по просьбе в чате или после правки кода. → (лаба, что получилось — строками для ответа,
+        менялось ли что-то: тогда документ собирается заново)."""
         from forlabs.pipeline import project as proj
 
         def missing() -> dict[tuple[int, int], Figure]:
@@ -882,22 +888,25 @@ class Pipeline:
                     if isinstance(b, Figure) and not b.image_path}
 
         if not self.projects:
-            return st, ""
+            return st, "", False
         if st.project is None and not proj.needs_project(st):
-            return st, "\nВ этой лабе нет программы, которую ForLabs мог бы запустить сам, — скриншоты добавь ты."
+            return st, "\nВ этой лабе нет программы, которую ForLabs мог бы запустить сам, — скриншоты добавь ты.", False
         before = missing()
-        if not before:
-            return st, "\nВсе рисунки уже на месте."
-        st = self._reproject(st, llm)
+        outdated = code_changed or proj.stale(st, proj.load_plan(self, st))
+        if not before and not outdated:
+            return st, "\nВсе рисунки уже на месте.", False
+        st = self._reproject(st, llm, fresh=code_changed)
         left = missing()
         taken = [b.topic for key, b in before.items() if key not in left]
         lines = []
+        if outdated and st.project is not None and st.project.built:
+            lines.append("Программу пересобрал под новый код.")
         if taken:
             lines.append("Снял сам: " + "; ".join(f"«{t}»" for t in taken[:6]) + ".")
         for b in list(left.values())[:5]:
             why = (b.auto_note or "").removeprefix("Сам не снял: ").rstrip(".")
             lines.append(f"Не получилось: «{b.topic}»" + (f" — {why}." if why else "."))
-        return st, "".join("\n" + ln for ln in lines)
+        return st, "".join("\n" + ln for ln in lines), True
 
     def _linked_labs(self, st: LabState) -> tuple[list[tuple[str, str, str, str]], list[str]]:
         """Прошлые лабы для этой: выбранные студентом и те, на которые ссылается методичка. Каждая —
@@ -1071,16 +1080,18 @@ class Pipeline:
 
                 was_final = st.status == "final"
                 if plan.kind != "edit":
-                    shots = ""
+                    shots, touched = "", False
                     if plan.reshoot:  # «сними сам ещё раз»
-                        st, shots = self._chat_reshoot(st, llm)
+                        st, shots, touched = self._chat_reshoot(st, llm)
+                        if touched and was_final:
+                            shots += "\nЛаба уже была сдана. Сдай заново, чтобы в папке сдачи был новый файл."
                     note = remember_rule()
                     reply = ChatMessage(id=uuid.uuid4().hex[:8], role="assistant",
                                         text=(plan.reply + shots + note).strip(), at=_now(), kind=plan.kind,
                                         profile=proposals)
                     st.chat.append(reply)
                     self._emit(st, "Ответ в чате правок", "done", step="write")
-                    if not shots:
+                    if not touched:  # ничего не менялось — документ остаётся как был (сданная лаба — сданной)
                         return self._save(st)
                 if plan.kind == "edit":
                     vid = push_version(st, message)
@@ -1114,7 +1125,7 @@ class Pipeline:
                         st.report.questions = revise_answers(st.spec, st.report.questions, plan.questions, profile,
                                                              subject, llm, self.rules)
                         changed.append("ответы на вопросы " + ", ".join(str(q.n) for q in plan.questions))
-                    self._emit(st, "Проверяю по стандарту и на признаки ИИ", step="check")
+                    self._emit(st, "Проверяю текст", step="check")
                     # чиним только то, что правили, и не трогаем принятые студентом замечания
                     touched = {f"Задание {e.n}," for e in plan.tasks} | {f"Вопрос {q.n}" for q in plan.questions}
                     accepted = set(st.accepted_rules)
@@ -1128,10 +1139,10 @@ class Pipeline:
                     shots = ""
                     codes = lambda r: [b.code for sec in r.sections for b in sec.blocks  # noqa: E731
                                        if isinstance(b, Listing)]
-                    if self.projects and (plan.reshoot or ((retake or codes(st.report) != codes(backup_report))
-                                                           and st.project is not None)):
+                    code_changed = codes(st.report) != codes(backup_report)
+                    if self.projects and (plan.reshoot or ((retake or code_changed) and st.project is not None)):
                         # код отчёта изменился: программа в папке сдачи и снимки должны быть от нового кода
-                        st, shots = self._chat_reshoot(st, llm)
+                        st, shots, _ = self._chat_reshoot(st, llm, code_changed)
                         open_topics = {b.topic for sec in st.report.sections for b in sec.blocks
                                        if isinstance(b, Figure) and not b.image_path}
                         retake = [t for t in retake if t in open_topics]
@@ -1262,7 +1273,7 @@ class Pipeline:
                                       on_event=lambda t: self._emit(st, t, step="write"),
                                       render_diagrams=self.render_diagrams, existing=st.report, only=only,
                                       on_progress=progress)
-                self._emit(st, "Проверяю по стандарту и на признаки ИИ", step="check")
+                self._emit(st, "Проверяю текст", step="check")
                 report, findings = check_and_repair(report, st.spec, profile, llm, self.rules, self._others(st),
                                                     on_event=lambda t: self._emit(st, t, step="check"))
                 st.report = _relative_images(report, self.lab_dir(st))
@@ -1346,7 +1357,7 @@ class Pipeline:
                 # профиль или разбор могли поменяться после выполнения: шапка, вывод и проверки — по текущим
                 st.report = refresh_derived(st.report, st.spec, profile, self._enrollment(profile, st.subject_id))
                 st.findings = _keep_spec(st.findings, check_all(st.report, st.spec, profile, self._others(st)))
-            self._emit(st, "Вёрстка по канону", step="render")
+            self._emit(st, "Верстаю документ", step="render")
             d = self.lab_dir(st)
             self._retry_pending(st)
             self._fetch_missing(st)
@@ -1357,7 +1368,7 @@ class Pipeline:
             except PermissionError as e:
                 raise PipelineError("report.docx открыт в Word или другой программе — закрой его и нажми "
                                     "«Пересобрать документ».") from e
-            self._emit(st, "Доводка документа и предпросмотр", step="finalize")
+            self._emit(st, "Собираю документ и предпросмотр", step="finalize")
             rep = finalize(docx, profile.doc_author or profile.full_name, d / "render", self.soffice,
                            prefer_word=self.prefer_word)
             # последний шлюз: готовый документ (после доводки) сверяется с эталоном абзац за абзацем

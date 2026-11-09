@@ -31,7 +31,7 @@ def lab(tmp_home, tmp_path):
 def test_chat_hidden_until_report_exists(lab):
     client, ctx, url = lab
     page = client.get(url + "?tab=report").text
-    assert 'name="message"' not in page and "после выполнения" in page
+    assert 'name="message"' not in page and "когда отчёт будет написан" in page
 
 
 def test_chat_edit_and_revert(lab):
@@ -233,7 +233,7 @@ def test_profile_offer_buttons_apply_and_decline(lab):
 def test_subject_memory_visible_and_theme_editable(lab):
     client, ctx, url = lab
     page = client.get(url).text
-    assert "Что ForLabs помнит о предмете" in page and 'name="theme"' in page
+    assert "Память предмета" in page and 'name="theme"' in page
     r = client.post(url + "/memory/theme", data={"theme": "сайт кофейни «Зерно»"}, follow_redirects=False)
     assert r.status_code == 303
     assert ctx.memory().theme("ivanov_ivan_petrovich", "psip") == "сайт кофейни «Зерно»"

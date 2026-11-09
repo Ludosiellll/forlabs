@@ -2,12 +2,13 @@
 {% block title %}ЛР {{ st.number }} · {{ subject.short_name }}{% endblock %}
 {% block body %}
 <div class="lab" data-lab data-base="{{ base_url }}" data-busy="{{ '1' if busy else '0' }}" data-seq="{{ last_seq }}" data-status="{{ st.status }}">
-  <aside class="lab-left" aria-label="Этапы">
-    <div class="lab-title">{{ profile.full_name if profile else st.profile_id }} · {{ subject.name }}</div>
+  <aside class="lab-left" aria-label="О лабе">
+    <div class="lab-title">{{ subject.short_name }}{% if profile %} · {{ profile.title_name or profile.full_name }}{% endif %}</div>
     <h1>ЛР {{ st.number }}</h1>
-    {% if st.spec %}<p class="small muted">{{ st.spec.topic }}</p>{% endif %}
+    {% if st.spec %}<p class="small muted lab-topic" title="{{ st.spec.topic }}">{{ st.spec.topic }}</p>{% endif %}
     <p class="small muted src-names">{% if source_names %}Методичка: {{ source_names|join(', ') }} · {% endif %}<a href="{{ base_url }}?tab=spec&replace=1#replace">{{ 'заменить' if source_names else 'Заменить методичку' }}</a></p>
-    <ol class="steps" data-steps>
+    {% set progress = namespace(done=true) %}{% for key, _t in steps %}{% if step_state[key] != 'done' %}{% set progress.done = false %}{% endif %}{% endfor %}
+    <ol class="steps" data-steps{{ ' hidden' if progress.done and not busy }}>
       {% for key, title in steps %}
         {% set i = loop.index %}
         <li data-step="{{ key }}" class="{{ step_state[key] }}">
@@ -16,37 +17,57 @@
         </li>
       {% endfor %}
     </ol>
+
     {% if st.project %}{% set pr = st.project %}
-    <section class="program-box" aria-labelledby="prog-h">
-      <h2 id="prog-h" class="small">Программа</h2>
-      <p class="small"><b>{{ pr.name }}</b> · {{ {'csharp': 'C#', 'cpp': 'C++', 'python': 'Python', 'java': 'Java', 'javascript': 'JavaScript', 'web': 'HTML/CSS', 'php': 'PHP', 'go': 'Go', 'mysql': 'MySQL'}.get(pr.language, pr.language) }} ·
-        {% if pr.built %}<span class="ok">собрана</span>{% elif pr.missing %}<span class="bad">не собрана</span>{% else %}<span class="bad">не собралась</span>{% endif %}</p>
+    <details class="fold program-box"{{ ' open' if pr.missing or pr.blocked or not pr.built }}>
+      <summary>Программа · {% if pr.built %}<span class="ok">собрана</span>{% elif pr.missing %}<span class="bad">не собрана</span>{% else %}<span class="bad">не собралась</span>{% endif %}</summary>
+      <p class="small"><b>{{ pr.name }}</b> · {{ {'csharp': 'C#', 'cpp': 'C++', 'python': 'Python', 'java': 'Java', 'javascript': 'JavaScript', 'web': 'HTML/CSS', 'php': 'PHP', 'go': 'Go', 'mysql': 'MySQL'}.get(pr.language, pr.language) }}</p>
       {% if pr.missing %}<p class="small">Не хватает: {{ pr.missing|map('tool_title')|join(', ') }}. Установи и нажми «Повторить».</p>
         {% for key in pr.missing %}{% if key in ctx.tools.tools %}{% with tool=ctx.tools.tool_status(key) %}{% include "_tool_missing.html" %}{% endwith %}{% endif %}{% endfor %}
       {% endif %}
       {% if pr.blocked %}<p class="small muted">Сам не запускал: {{ pr.blocked[0] }}</p>{% endif %}
       {% if pr.note and not pr.built and not pr.missing %}<p class="small muted">{{ pr.note }}</p>{% endif %}
       <div class="row until">
-        {% if pr.folder %}<form method="post" action="{{ base_url }}/project/open"><button class="btn small" type="submit">Открыть папку проекта</button></form>
-        <a class="btn small" href="{{ base_url }}/project.zip">Скачать .zip</a>{% endif %}
+        {% if pr.folder %}<form method="post" action="{{ base_url }}/project/open"><button class="btn small" type="submit">Папка проекта</button></form>
+        <a class="btn small" href="{{ base_url }}/project.zip">.zip</a>{% endif %}
         <form method="post" action="{{ base_url }}/project/retry"><button class="btn small" type="submit">{{ 'Повторить' if pr.missing or not pr.built else 'Пересобрать' }}</button></form>
       </div>
-    </section>
+    </details>
     {% endif %}
 
-    <details class="rules-mem subject-mem lab-inputs"{{ ' open' if st.linked or materials }}>
-      <summary class="small">Связанные лабы и файлы{% if st.linked or materials %} ({{ st.linked|length + materials|length }}){% endif %}</summary>
+    {% if app_items %}
+    <details class="fold program-box" open>
+      <summary id="apps-h">Снимки в программах: {{ app_items|length }}</summary>
+      <ul class="small">{% for num, fig, app, ok in app_items %}
+        <li>Рисунок {{ num }} – {{ fig.topic }} · {{ app.title }}{% if not ok %} · <span class="bad">нет программы</span>{% endif %}</li>
+      {% endfor %}</ul>
+      {% for app in missing_apps %}
+      <div class="small" style="margin:6px 0">Нет программы «{{ app.title }}».{% if app.get %} <a href="{{ app.get }}" target="_blank" rel="noopener">Скачать с официального сайта</a>.{% endif %}{% if app.note %} {{ app.note|capitalize }}.{% endif %}
+        <form method="post" action="{{ base_url }}/apps/path" class="row until" style="margin-top:4px">
+          <input type="hidden" name="key" value="{{ app.key }}">
+          <label class="visually-hidden" for="path-{{ app.key }}">Где установлена «{{ app.title }}»</label>
+          <input id="path-{{ app.key }}" name="path" type="text" maxlength="400" placeholder="Она у меня есть: путь к .exe">
+          <button class="btn small" type="submit">Сохранить</button>
+        </form></div>
+      {% endfor %}
+      <p class="small muted">ForLabs сам откроет программу и снимет окно. Не трогай мышь и клавиатуру, Esc — остановить. Снимки окна уходят модели.</p>
+      <form method="post" action="{{ base_url }}/apps/run" onsubmit="return confirm('ForLabs откроет программы и несколько минут будет сам управлять мышью и клавиатурой. Не трогай их, пока он работает; Esc — остановить. Начать?')">
+        <button class="btn" type="submit"{{ ' disabled' if busy }}>Сделать снимки в программах</button></form>
+    </details>
+    {% endif %}
+
+    <details class="fold lab-inputs"{{ ' open' if link_notes }}>
+      <summary>Файлы и прошлые лабы{% if st.linked or materials %} · {{ st.linked|length + materials|length }}{% endif %}</summary>
       <form method="post" action="{{ base_url }}/links" enctype="multipart/form-data" class="stack" data-once>
-        <label class="small" for="linked">Номера прошлых лаб, на которых строится эта</label>
+        <label class="small" for="linked">Прошлые лабы, на которых строится эта</label>
         <input id="linked" name="linked" type="text" maxlength="60" value="{{ st.linked|join(', ') }}" placeholder="например: 1, 27">
         <label class="btn link small filebtn">Общий отчёт с ними (DOCX, PDF)
           <input class="visually-hidden" type="file" name="linked_report" accept=".docx,.pdf" data-images-input id="linked-report"></label>
         <span class="small muted" data-images-picked="linked-report"></span>
         <button class="btn small" type="submit">Сохранить</button>
       </form>
-      {% if auto_refs %}<div class="small muted">Методичка ссылается на {{ auto_refs|join(', ') }}: ForLabs возьмёт их из сделанных лаб или из прикреплённого отчёта.</div>{% endif %}
+      {% if auto_refs %}<div class="small muted">Методичка ссылается на {{ auto_refs|join(', ') }}.</div>{% endif %}
       {% if link_notes %}<ul class="small">{% for m in link_notes %}<li>{{ m }}</li>{% endfor %}</ul>{% endif %}
-      <div class="hint">Из общего отчёта ForLabs берёт только эти лабы, весь отчёт модель не читает. Лабу, сделанную в ForLabs, берёт целиком, с кодом.</div>
 
       <h3 class="small" style="margin:12px 0 4px">Файлы к лабе</h3>
       {% if materials %}<ul class="small mats">{% for name, pg in materials %}
@@ -61,139 +82,30 @@
       </form>
       <form method="post" action="{{ base_url }}/materials/link" class="row until" data-once style="margin-top:6px">
         <label class="visually-hidden" for="mat-link">Ссылка на страницу</label>
-        <input id="mat-link" name="url" type="url" maxlength="2000" placeholder="Ссылка на страницу (сайт для тест-кейсов, статья)">
-        <button class="btn small" type="submit">Добавить ссылку</button>
+        <input id="mat-link" name="url" type="url" maxlength="2000" placeholder="Ссылка на страницу">
+        <button class="btn small" type="submit">Добавить</button>
       </form>
-      <div class="hint">Данные, текст или код, которые выдал преподаватель, и страницы по ссылкам. Модель читает их целиком в каждом задании. На всё — до {{ materials_pages }} страниц.</div>
+      <div class="hint">Данные и код от преподавателя, страницы по ссылкам. До {{ materials_pages }} страниц на всё.</div>
     </details>
 
-    <details class="rules-mem subject-mem">
-      <summary class="small">Что ForLabs помнит о предмете{% if subject_theme %}: {{ subject_theme }}{% endif %}</summary>
+    <details class="fold subject-mem">
+      <summary>Память предмета{% if subject_theme %} · {{ subject_theme }}{% endif %}</summary>
       <form method="post" action="{{ base_url }}/memory/theme" class="row until" style="margin:6px 0">
         <label class="visually-hidden" for="theme">Тематика предмета</label>
-        <input id="theme" name="theme" type="text" maxlength="300" value="{{ subject_theme }}" placeholder="Тематика: например «сайт кофейни „Зерно“»">
+        <input id="theme" name="theme" type="text" maxlength="300" value="{{ subject_theme }}" placeholder="Тематика: «сайт кофейни „Зерно“»">
         <button class="btn small" type="submit">Сохранить</button>
       </form>
       {% if subject_memory %}<ul class="small">{% for line in subject_memory %}<li>{{ line }}</li>{% endfor %}</ul>{% endif %}
-      <div class="hint">Тематику и выжимки прошлых лаб модель получает во всех лабах предмета.</div>
+      {% if teacher_rules %}
+      <h3 class="small" style="margin:10px 0 4px">Требования преподавателя</h3>
+      <ul class="small">{% for r in teacher_rules %}<li>{{ r }}
+        <form method="post" action="{{ base_url }}/teacher/remove/{{ r|teacher_key }}" style="display:inline"><button class="btn link small" type="submit" title="Больше не учитывать в следующих лабах">убрать</button></form></li>{% endfor %}</ul>
+      {% endif %}
+      <div class="hint">Учитывается во всех лабах предмета.</div>
     </details>
 
-    {% if app_items %}
-    <section class="program-box" aria-labelledby="apps-h">
-      <h2 id="apps-h" class="small">Снимки в программах: {{ app_items|length }}</h2>
-      <ul class="small">{% for num, fig, app, ok in app_items %}
-        <li>Рисунок {{ num }} – {{ fig.topic }} · {{ app.title }}{% if not ok %} · <span class="bad">нет программы</span>{% endif %}</li>
-      {% endfor %}</ul>
-      {% for app in missing_apps %}
-      <div class="small" style="margin:6px 0">Нет программы «{{ app.title }}».{% if app.get %} <a href="{{ app.get }}" target="_blank" rel="noopener">Скачать с официального сайта</a>.{% endif %}{% if app.note %} {{ app.note|capitalize }}.{% endif %}
-        <form method="post" action="{{ base_url }}/apps/path" class="row until" style="margin-top:4px">
-          <input type="hidden" name="key" value="{{ app.key }}">
-          <label class="visually-hidden" for="path-{{ app.key }}">Где установлена «{{ app.title }}»</label>
-          <input id="path-{{ app.key }}" name="path" type="text" maxlength="400" placeholder="Она у меня есть: путь к .exe">
-          <button class="btn small" type="submit">Сохранить</button>
-        </form></div>
-      {% endfor %}
-      <p class="small muted">ForLabs сам откроет программу, сделает в ней нужное и снимет окно. Пока он работает, не трогай мышь и клавиатуру. Esc — остановить. Снимки окна программы уходят модели.</p>
-      <form method="post" action="{{ base_url }}/apps/run" onsubmit="return confirm('ForLabs откроет программы и несколько минут будет сам управлять мышью и клавиатурой. Не трогай их, пока он работает; Esc — остановить. Начать?')">
-        <button class="btn" type="submit"{{ ' disabled' if busy }}>Сделать снимки в программах</button></form>
-    </section>
-    {% endif %}
-
-    {% if slot_items %}
-    <h2 style="margin-top:18px">Нужно от тебя: {{ slot_items|length }}</h2>
-    <p class="small muted">Выбери рисунок и вставь скриншот через Ctrl+V или перетащи файл.</p>
-    {% set shots = namespace(failed=0) %}{% for _s, _b, _n, fig in slot_items %}{% if fig.auto_note and fig.auto_note.startswith('Сам не снял') %}{% set shots.failed = shots.failed + 1 %}{% endif %}{% endfor %}
-    {% if shots.failed and st.project %}
-    <form method="post" action="{{ base_url }}/project/retry" class="retake">
-      <button class="btn small" type="submit"{{ ' disabled' if busy }}>Снять ещё раз</button>
-      <span class="small muted">ForLabs найдёт причину, поправит программу или шаги и снимет сам.</span>
-    </form>
-    {% endif %}
-    {% for sec_n, blk, num, fig in slot_items %}
-      <div class="slot{{ ' on' if loop.first }}" tabindex="0" role="button" data-slot="{{ base_url }}/screenshot/{{ sec_n }}/{{ blk }}"
-           aria-label="Рисунок {{ num }}: выбрать для вставки">
-        <div class="t">Рисунок {{ num }} – {{ fig.topic }}</div>
-        <div class="i">{{ fig.slot }}</div>
-        {% if fig.auto_note %}<div class="auto-note small">{{ fig.auto_note }}</div>{% endif %}
-        <label class="btn filebtn">Выбрать файл
-          <input class="visually-hidden" type="file" accept="image/png,image/jpeg" data-slot-file></label>
-      </div>
-    {% endfor %}
-    {% endif %}
-
-    {% if st.report and not complete %}
-    <p class="small muted" style="margin-top:18px">Лаба дописана не до конца: нажми «Продолжить» сверху. Чат правок появится, когда всё будет написано.</p>
-    {% elif st.report %}
-    {% set version_ids = st.versions|map(attribute='id')|list %}
-    <section class="chat" aria-labelledby="chat-h">
-      <h2 id="chat-h">Правки</h2>
-      <div class="chat-log" data-chat-log>
-        {% for m in st.chat %}
-          <div class="msg msg-{{ m.role }} k-{{ m.kind }}">
-            <div class="who-said">{{ 'Ты' if m.role == 'user' else 'ForLabs' }}{% if m.role == 'user' and m.remember %} · запомнить{% endif %}</div>
-            {% if m.text %}<div class="txt">{{ m.text }}</div>{% endif %}
-            {% if m.images %}<div class="thumbs">{% for img in m.images %}<a href="{{ base_url }}/{{ img }}"><img src="{{ base_url }}/{{ img }}" alt="Фото к сообщению" loading="lazy"></a>{% endfor %}</div>{% endif %}
-            {% if m.image_text %}<details class="read"><summary>Что прочитано с фото</summary><div class="txt">{{ m.image_text }}</div></details>{% endif %}
-            {% if m.profile %}
-            <div class="profile-offer">
-              <div class="small">Поменять в профиле:</div>
-              <ul class="small">{% for c in m.profile %}<li>{{ c.label }}: <span class="muted">{{ {'m': 'мужской', 'f': 'женский'}.get(c.old, c.old) or '—' }}</span> → <b>{{ {'m': 'мужской', 'f': 'женский'}.get(c.value, c.value) }}</b></li>{% endfor %}</ul>
-              {% if m.profile_state == 'applied' %}<div class="small muted">Поменяно в профиле.</div>
-              {% elif m.profile_state == 'declined' %}<div class="small muted">Оставлено как было.</div>
-              {% else %}
-              <form method="post" action="{{ base_url }}/chat/profile/{{ m.id }}" class="row">
-                <button class="btn small primary" type="submit" name="apply" value="1" {{ 'disabled' if busy }}>Поменять в профиле</button>
-                <button class="btn small link" type="submit" name="apply" value="0" {{ 'disabled' if busy }}>Не менять</button>
-              </form>
-              <div class="hint">Профиль общий для всех лаб: эта пересоберётся сразу, остальные — по кнопке «Пересобрать документ».{% if m.profile|selectattr('field', 'equalto', 'gender')|list %} Написанный текст не изменится, окончания поправь сообщением в чате.{% endif %}</div>
-              {% endif %}
-            </div>
-            {% endif %}
-            {% if m.role == 'assistant' and m.version in version_ids %}
-            <form method="post" action="{{ base_url }}/chat/revert/{{ m.version }}" onsubmit="return confirm('Вернуть отчёт к состоянию до этого сообщения? Правки после него тоже откатятся.')">
-              <button class="btn link small" type="submit" {{ 'disabled' if busy }}>{{ 'Отменить откат' if m.kind == 'revert' else 'Вернуть как было' }}</button></form>
-            {% endif %}
-          </div>
-        {% else %}
-          <p class="small muted">Например: «во втором задании добавить проверку ввода» или «вывод подробнее». Поменяю только нужное и пересоберу документ.</p>
-        {% endfor %}
-      </div>
-      {% if teacher_rules %}
-      <details class="rules-mem">
-        <summary class="small">Требования преподавателя: {{ teacher_rules|length }}</summary>
-        <ul>{% for r in teacher_rules %}<li>{{ r }}
-          <form method="post" action="{{ base_url }}/teacher/remove/{{ r|teacher_key }}" style="display:inline"><button class="btn link small" type="submit" title="Больше не учитывать в следующих лабах">убрать</button></form></li>{% endfor %}</ul>
-        <div class="hint">Учитываются во всех лабах этого предмета.</div>
-      </details>
-      {% endif %}
-      <form method="post" action="{{ base_url }}/chat" class="chat-form" data-chat-form enctype="multipart/form-data">
-        <label class="visually-hidden" for="chat-msg">Что сказал преподаватель</label>
-        <textarea id="chat-msg" name="message" rows="3" maxlength="4000" placeholder="Что сказал преподаватель… Фото можно вставить через Ctrl+V" data-paste-images="chat-images" {{ 'disabled' if busy }}></textarea>
-        <div class="row attach-row">
-          <label class="btn link small">Прикрепить фото<input id="chat-images" class="visually-hidden" type="file" name="images" accept="image/png,image/jpeg,image/webp" multiple data-images-input {{ 'disabled' if busy }}></label>
-          <span class="small muted" data-images-picked="chat-images"></span>
-        </div>
-        <label class="check small"><input type="checkbox" name="remember" value="1" {{ 'disabled' if busy }}> Запомнить для следующих лаб по предмету</label>
-        <div class="row"><button class="btn primary small" type="submit" {{ 'disabled' if busy }}>Отправить</button><span class="hint">Ctrl+Enter</span>
-          {% if trial %}{% set used = trial.chats_used(st.profile_id ~ '/' ~ st.subject_id ~ '/' ~ st.number) %}
-          <span class="spacer"></span><span class="small {{ 'warn-text' if used >= trial.chat_limit else 'muted' }}">Пробный доступ: правок {{ [trial.chat_limit - used, 0]|max }} из {{ trial.chat_limit }}</span>{% endif %}</div>
-      </form>
-      <details class="redo">
-        <summary class="small">Переписать задание целиком</summary>
-        <form method="post" data-redo class="row">
-          <select aria-label="Задание" data-redo-select style="flex:1">
-            {% for s in st.report.sections %}<option value="{{ s.n }}">Задание {{ s.n }}</option>{% endfor %}
-          </select>
-          <button class="btn small" type="submit" {{ 'disabled' if busy }}>Переписать</button>
-        </form>
-      </details>
-      <form method="post" action="{{ base_url }}/rerender" style="margin-top:8px"><button class="btn small" type="submit" {{ 'disabled' if busy }}>Пересобрать документ</button></form>
-    </section>
-    {% elif st.spec %}
-    <p class="small muted" style="margin-top:18px">Чат для замечаний преподавателя появится после выполнения.</p>
-    {% endif %}
-    <form method="post" action="{{ base_url }}/delete" style="margin-top:22px" onsubmit="return confirm('Удалить лабу со всеми файлами?')">
-      <button class="btn danger small" type="submit" {{ 'disabled' if busy }}>Удалить лабу</button></form>
+    <form method="post" action="{{ base_url }}/delete" class="lab-delete" onsubmit="return confirm('Удалить лабу со всеми файлами?')">
+      <button class="btn link small danger-link" type="submit" {{ 'disabled' if busy }}>Удалить лабу</button></form>
   </aside>
 
   <section class="lab-center" aria-label="Документ">
@@ -339,38 +251,145 @@
     {% endif %}
   </section>
 
-  <aside class="lab-right" aria-label="Документ и замечания">
+  <aside class="lab-right" aria-label="Отчёт и правки">
+    {% set shown = st.findings|rejectattr('stage', 'equalto', 'spec')|list %}
+    {% set chat_ready = st.report and complete %}
+    {% set side = 'shots' if slot_items and not st.chat else 'chat' %}
     <div class="actions">
       {% if st.status in ('rendered', 'final') %}
       <form method="post" action="{{ base_url }}/final" class="wide">
-        <button class="btn primary" type="submit" {{ 'disabled' if errors or busy }}>{{ 'Положить в папку сдачи ещё раз' if st.status == 'final' else 'Сдать в папку сдачи' }}</button>
-        {% if errors %}<div class="hint">Сначала разберись с замечаниями ниже.</div>{% endif %}
+        <button class="btn primary" type="submit" {{ 'disabled' if errors or busy }}>{{ 'Сдать ещё раз' if st.status == 'final' else 'Сдать в папку сдачи' }}</button>
+        {% if errors %}<div class="hint">Сначала разберись с <a href="#notes" data-side-go="notes">замечаниями</a>.</div>{% endif %}
       </form>
       {% endif %}
       {% if docx_here %}
-      <a class="btn {{ 'primary' if st.status not in ('rendered', 'final') }} wide" href="{{ base_url }}/docx">Скачать .docx</a>
-      <form method="post" action="{{ base_url }}/open"><input type="hidden" name="what" value="docx"><button class="btn" type="submit">Открыть в Word</button></form>
+      <a class="btn {{ 'primary' if st.status not in ('rendered', 'final') }}" href="{{ base_url }}/docx">Скачать .docx</a>
+      <form method="post" action="{{ base_url }}/open"><input type="hidden" name="what" value="docx"><button class="btn" type="submit">Word</button></form>
       {% endif %}
-      <form method="post" action="{{ base_url }}/open" class="{{ 'wide' if not docx_here }}"><input type="hidden" name="what" value="dir"><button class="btn" type="submit">Папка лабы</button></form>
+      <form method="post" action="{{ base_url }}/open"><input type="hidden" name="what" value="dir"><button class="btn" type="submit">Папка</button></form>
     </div>
-    {% if preview_here or not st.pages %}{% for w in st.warnings %}<div class="notice warn small">{{ w }}</div>{% endfor %}{% endif %}
-    <h2>Замечания</h2>
-    {% set shown = st.findings|rejectattr('stage', 'equalto', 'spec')|list %}
-    {% if not shown %}
-      <p class="small muted">{{ 'Замечаний нет: стандарт РС02-23 и проверки на признаки ИИ пройдены.' if st.report else 'Появятся после проверки текста.' }}</p>
+    {% if preview_here or not st.pages %}{% for w in st.warnings %}
+    <details class="warn-fold small"><summary title="Показать целиком">{{ w }}</summary></details>
+    {% endfor %}{% endif %}
+
+    {% if slot_items or shown %}
+    <div class="side-tabs" role="tablist" aria-label="Что показать" data-side-tabs="{{ base_url }}">
+      <button type="button" role="tab" data-side="chat" aria-selected="{{ 'true' if side == 'chat' else 'false' }}">Правки</button>
+      {% if slot_items %}<button type="button" role="tab" data-side="shots" aria-selected="{{ 'true' if side == 'shots' else 'false' }}">Скриншоты <span class="badge">{{ slot_items|length }}</span></button>{% endif %}
+      {% if shown %}<button type="button" role="tab" data-side="notes" aria-selected="false">Замечания <span class="badge{{ ' err' if errors }}">{{ shown|length }}</span></button>{% endif %}
+    </div>
     {% endif %}
-    {% for f in shown %}
-      {% set accepted = finding_key(f) in st.accepted_rules %}
-      <div class="finding {{ f.severity }}">
-        <div class="where">{{ f.location }}{% if accepted %} · принято{% endif %}</div>
-        <div>{{ f.message }}</div>
-        {% if f.text %}<div class="txt">{{ f.text[:220] }}</div>{% endif %}
-        {% if f.suggestion %}<div class="txt">Как исправить: {{ f.suggestion }}</div>{% endif %}
-        {% if f.severity == 'error' and not accepted %}
-        <form method="post" action="{{ base_url }}/accept" style="margin-top:6px"><input type="hidden" name="rule" value="{{ finding_key(f) }}">
-          <button class="btn link small" type="submit">Оставить как есть</button></form>{% endif %}
+
+    {% if slot_items %}
+    <section class="side-panel todo" data-panel="shots" aria-label="Нужно от тебя"{{ ' hidden' if side != 'shots' }}>
+      <div class="todo-head">
+        <span class="small muted">Нужно от тебя: {{ slot_items|length }}. Ctrl+V, перетащи или выбери файл.</span>
+        {% set shots = namespace(failed=0) %}{% for _s, _b, _n, fig in slot_items %}{% if fig.auto_note and fig.auto_note.startswith('Сам не снял') %}{% set shots.failed = shots.failed + 1 %}{% endif %}{% endfor %}
+        {% if shots.failed and st.project %}
+        <form method="post" action="{{ base_url }}/project/retry" class="retake">
+          <button class="btn small" type="submit" title="ForLabs найдёт причину, поправит программу или шаги и снимет сам"{{ ' disabled' if busy }}>Снять ещё раз</button>
+        </form>
+        {% endif %}
       </div>
-    {% endfor %}
+      {% for sec_n, blk, num, fig in slot_items %}
+        <div class="slot{{ ' on' if loop.first }}" tabindex="0" role="button" data-slot="{{ base_url }}/screenshot/{{ sec_n }}/{{ blk }}"
+             aria-label="Рисунок {{ num }}: выбрать для вставки">
+          <div class="t">Рисунок {{ num }} – {{ fig.topic }}</div>
+          <div class="i">{{ fig.slot }}</div>
+          {% if fig.auto_note %}<div class="auto-note small">{{ fig.auto_note }}</div>{% endif %}
+          <label class="btn filebtn">Выбрать файл
+            <input class="visually-hidden" type="file" accept="image/png,image/jpeg" data-slot-file></label>
+        </div>
+      {% endfor %}
+    </section>
+    {% endif %}
+
+    {% if shown %}
+    <section class="side-panel" data-panel="notes" id="notes" aria-label="Замечания" hidden>
+      {% for f in shown %}
+        {% set accepted = finding_key(f) in st.accepted_rules %}
+        <div class="finding {{ f.severity }}">
+          <div class="where">{{ f.location }}{% if accepted %} · принято{% endif %}</div>
+          <div>{{ f.message }}</div>
+          {% if f.text %}<div class="txt">{{ f.text[:220] }}</div>{% endif %}
+          {% if f.suggestion %}<div class="txt">Как исправить: {{ f.suggestion }}</div>{% endif %}
+          {% if f.severity == 'error' and not accepted %}
+          <form method="post" action="{{ base_url }}/accept" style="margin-top:6px"><input type="hidden" name="rule" value="{{ finding_key(f) }}">
+            <button class="btn link small" type="submit">Оставить как есть</button></form>{% endif %}
+        </div>
+      {% endfor %}
+    </section>
+    {% endif %}
+
+    <section class="side-panel chat" data-panel="chat" aria-labelledby="chat-h"{{ ' hidden' if side != 'chat' }}>
+    {% if chat_ready %}
+    {% set version_ids = st.versions|map(attribute='id')|list %}
+      <h2 id="chat-h" class="chat-title">Правки</h2>
+      <div class="chat-log" data-chat-log>
+        {% for m in st.chat %}
+          <div class="msg msg-{{ m.role }} k-{{ m.kind }}">
+            <div class="who-said visually-hidden">{{ 'Ты' if m.role == 'user' else 'ForLabs' }}</div>
+            {% if m.text %}<div class="txt">{{ m.text }}</div>{% endif %}
+            {% if m.images %}<div class="thumbs">{% for img in m.images %}<a href="{{ base_url }}/{{ img }}"><img src="{{ base_url }}/{{ img }}" alt="Фото к сообщению" loading="lazy"></a>{% endfor %}</div>{% endif %}
+            {% if m.image_text %}<details class="read"><summary>Что прочитано с фото</summary><div class="txt">{{ m.image_text }}</div></details>{% endif %}
+            {% if m.role == 'user' and m.remember %}<div class="tag">запомнить</div>{% endif %}
+            {% if m.profile %}
+            <div class="profile-offer">
+              <div class="small">Поменять в профиле:</div>
+              <ul class="small">{% for c in m.profile %}<li>{{ c.label }}: <span class="muted">{{ {'m': 'мужской', 'f': 'женский'}.get(c.old, c.old) or '—' }}</span> → <b>{{ {'m': 'мужской', 'f': 'женский'}.get(c.value, c.value) }}</b></li>{% endfor %}</ul>
+              {% if m.profile_state == 'applied' %}<div class="small muted">Поменяно в профиле.</div>
+              {% elif m.profile_state == 'declined' %}<div class="small muted">Оставлено как было.</div>
+              {% else %}
+              <form method="post" action="{{ base_url }}/chat/profile/{{ m.id }}" class="row">
+                <button class="btn small primary" type="submit" name="apply" value="1" {{ 'disabled' if busy }}>Поменять в профиле</button>
+                <button class="btn small link" type="submit" name="apply" value="0" {{ 'disabled' if busy }}>Не менять</button>
+              </form>
+              <div class="hint">Профиль общий для всех лаб: эта пересоберётся сразу, остальные — по кнопке «Пересобрать документ».{% if m.profile|selectattr('field', 'equalto', 'gender')|list %} Написанный текст не изменится, окончания поправь сообщением в чате.{% endif %}</div>
+              {% endif %}
+            </div>
+            {% endif %}
+            {% if m.role == 'assistant' and m.version in version_ids %}
+            <form method="post" action="{{ base_url }}/chat/revert/{{ m.version }}" onsubmit="return confirm('Вернуть отчёт к состоянию до этого сообщения? Правки после него тоже откатятся.')">
+              <button class="btn link small" type="submit" {{ 'disabled' if busy }}>{{ 'Отменить откат' if m.kind == 'revert' else 'Вернуть как было' }}</button></form>
+            {% endif %}
+          </div>
+        {% else %}
+          <p class="small muted chat-empty">Напиши, что поменять: «во втором задании добавь проверку ввода», «вывод подробнее».</p>
+        {% endfor %}
+      </div>
+      <form id="redo-form" method="post" data-redo hidden></form>
+      <form id="rerender-form" method="post" action="{{ base_url }}/rerender" hidden></form>
+      <form method="post" action="{{ base_url }}/chat" class="chat-form" data-chat-form enctype="multipart/form-data">
+        <label class="visually-hidden" for="chat-msg">Что поменять</label>
+        <textarea id="chat-msg" name="message" rows="2" maxlength="4000" placeholder="Что поменять? Фото — Ctrl+V" data-paste-images="chat-images" {{ 'disabled' if busy }}></textarea>
+        <div class="chat-bar">
+          <label class="btn link small">Фото<input id="chat-images" class="visually-hidden" type="file" name="images" accept="image/png,image/jpeg,image/webp" multiple data-images-input {{ 'disabled' if busy }}></label>
+          <label class="check small" title="Требование учтётся в следующих лабах по предмету"><input type="checkbox" name="remember" value="1" {{ 'disabled' if busy }}> Запомнить</label>
+          <span class="spacer"></span>
+          <button class="btn primary small" type="submit" title="Ctrl+Enter" data-send {{ 'disabled' if busy }}>Отправить</button>
+          <details class="more">
+            <summary class="btn link small" title="Переписать задание, пересобрать документ">Ещё</summary>
+            <div class="more-body">
+              <div class="row">
+                <select aria-label="Задание" data-redo-select form="redo-form" style="flex:1">
+                  {% for s in st.report.sections %}<option value="{{ s.n }}">Задание {{ s.n }}</option>{% endfor %}
+                </select>
+                <button class="btn small" type="submit" form="redo-form" {{ 'disabled' if busy }}>Переписать</button>
+              </div>
+              <button class="btn small" type="submit" form="rerender-form" {{ 'disabled' if busy }}>Пересобрать документ</button>
+            </div>
+          </details>
+        </div>
+        <span class="small muted" data-images-picked="chat-images"></span>
+        {% if trial %}{% set used = trial.chats_used(st.profile_id ~ '/' ~ st.subject_id ~ '/' ~ st.number) %}
+        <div class="small {{ 'warn-text' if used >= trial.chat_limit else 'muted' }}">Пробный доступ: правок {{ [trial.chat_limit - used, 0]|max }} из {{ trial.chat_limit }}</div>{% endif %}
+      </form>
+    {% elif st.report %}
+      <p class="small muted chat-empty">Лаба дописана не до конца: нажми «Продолжить». Потом здесь появится чат правок.</p>
+    {% else %}
+      <p class="small muted chat-empty">Чат правок появится, когда отчёт будет написан.</p>
+    {% endif %}
+    </section>
   </aside>
 </div>
 {% endblock %}

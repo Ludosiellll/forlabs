@@ -17,3 +17,17 @@ def test_retake_button_appears_for_pictures_forlabs_failed_to_take(tmp_home, tmp
 def test_no_retake_button_when_everything_is_taken(tmp_home, tmp_path, monkeypatch):
     c, ctx, url = lab(tmp_home, tmp_path, monkeypatch)
     assert "Снять ещё раз" not in c.get(url).text
+
+
+def test_right_column_is_tabs_with_chat_and_screenshots(tmp_home, tmp_path, monkeypatch):
+    monkeypatch.setattr(FakeShooter, "shoot", lambda self, target, shot, out: ShotResult(False, reason="окно не появилось"))
+    c, ctx, url = lab(tmp_home, tmp_path, monkeypatch)
+    page = c.get(url).text
+    right = page[page.index('class="lab-right"'):]
+    assert 'data-side="chat"' in right and 'data-side="shots"' in right  # вкладки «Правки» и «Скриншоты»
+    assert 'data-panel="shots"' in right and "data-slot=" in right  # рисунки для вставки — справа, не в левой колонке
+    left = page[page.index('class="lab-left"'):page.index('class="lab-center"')]
+    assert "data-slot=" not in left and 'name="message"' not in left  # слева только сведения о лабе
+    # пока переписки нет, открыта вкладка со скриншотами: это первое, что нужно от студента
+    assert 'data-panel="shots" aria-label="Нужно от тебя">' in right or 'data-panel="shots" aria-label="Нужно от тебя" >' in right
+    assert 'data-panel="chat" aria-labelledby="chat-h" hidden' in right

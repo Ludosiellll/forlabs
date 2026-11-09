@@ -219,9 +219,21 @@ def report_sha(st: LabState) -> str:
     return hashlib.sha1("\n".join(parts).encode("utf-8")).hexdigest()
 
 
-def stale(st: LabState) -> bool:
-    """Проект собран по другому отчёту: код или рисунки с тех пор меняли (в чате правок)."""
-    return bool(st.project and st.project.report_sha and st.project.report_sha != report_sha(st))
+def stale(st: LabState, plan: ProjectPlan | None = None) -> bool:
+    """Проект собран по другому отчёту: код или рисунки с тех пор меняли (в чате правок). У лабы, сделанной до
+    появления отпечатка, сверяется сам план: код листинга отчёта должен стоять в файле, на который план ссылается."""
+    if st.project is None:
+        return False
+    if st.project.report_sha:
+        return st.project.report_sha != report_sha(st)
+    if plan is None:
+        return False
+    blocks = {(n, bi): b for n, bi, b in _blocks(st)}
+    for r in plan.listings:
+        b, f = blocks.get((r.section, r.block)), plan.file(r.file)
+        if not isinstance(b, Listing) or f is None or _squash(b.code) not in _squash(f.content):
+            return True
+    return False
 
 
 def needs_project(st: LabState) -> bool:
@@ -379,6 +391,15 @@ def listing_in_file(code: str, body: str) -> str | None:
         return None
     solid = [m for m in blocks if any(len(x) > 3 for x in a[m.a:m.a + m.size])]  # не «}» и «{» где-то в стороне
     start, end = solid[0].b, solid[-1].b + solid[-1].size
+    # первую или последнюю строку листинга в файле заменили (исправление после снимка): она тоже часть листинга
+    lead = sum(1 for x in a[:solid[0].a] if x)
+    trail = sum(1 for x in a[solid[-1].a + solid[-1].size:] if x)
+    while 0 < lead <= 3 and start > 0:
+        start -= 1
+        lead -= 1 if lines[start].strip() else 0
+    while 0 < trail <= 3 and end < len(lines):
+        trail -= 1 if lines[end].strip() else 0
+        end += 1
     if HEADER.match(next((x for x in a if x), "")):  # листинг — файл целиком: и импорты, добавленные для сборки
         while start > 0 and (HEADER.match(lines[start - 1]) or not lines[start - 1].strip()):
             start -= 1
@@ -687,7 +708,9 @@ def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None) 
                 if res.ok:
                     b.image_path, b.auto_note = rel, None
                     mine.add((n, bi))
-                    kept.pop((n, bi), None)
+                    old = kept.pop((n, bi), None)
+                    if old and old != rel:  # снимок прежней программы больше не нужен
+                        (lab / old).unlink(missing_ok=True)
                     pipe._sync(st, [rel])
                 elif (n, bi) in kept:  # программа изменилась, а переснять не вышло: остаётся прежний снимок
                     b.image_path, b.auto_note = kept.pop((n, bi)), None
@@ -727,27 +750,35 @@ def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None) 
         except Exception as e:  # noqa: BLE001 — нет связи, лимит, кривой ответ: рисунок остаётся студенту с причиной
             emit(f"Исправить не получилось ({getattr(e, 'message_ru', None) or e})", "warn")
             break
-        if fixed == plan or validate(fixed):
+        # исправление проверяется до любых действий: опасным может быть и код, и ввод в сценарии (команды в консоли)
+        if fixed == plan or validate(fixed) or _blocked(pipe, fixed)[0]:
             break
-        if fixed.files != plan.files:
-            # программа меняется: сначала проверяется, что исправленная собирается и не опасна; если нет —
-            # возвращается прежняя, рабочая
-            before = (plan, result, network)
+        if fixed.files == plan.files:  # поменялся только сценарий
+            plan = fixed
+            continue
+        # программа меняется: исправленная должна собраться; если нет — возвращается прежняя, рабочая
+        try:
             cand, cand_result, cand_blocked, cand_network = build(fixed, fix_builds=False)
-            if cand_blocked or cand_result is None or not cand_result.ok:
-                emit("Исправление не собралось — оставляю прежнюю программу", "warn")
-                plan, _, network = before
+            accepted = not cand_blocked and cand_result is not None and cand_result.ok
+        except Exception as e:  # noqa: BLE001 — сборка упала не ошибкой кода (диск, инструмент): проект не теряется
+            emit(f"Исправление не собралось ({e})", "warn")
+            accepted = False
+        if not accepted:
+            emit("Исправление не собралось — оставляю прежнюю программу", "warn")
+            try:
                 plan, result, info.blocked, network = build(plan, fix_builds=False)
                 info.built = bool(result is not None and result.ok) and not info.blocked
                 settle()
-                break
-            plan, result, network = cand, cand_result, cand_network
-            for n, bi, b in _blocks(st):  # снятое в этом запуске — заново, уже с исправленной программой
-                if isinstance(b, Figure) and (n, bi) in mine and b.image_path:
-                    kept[(n, bi)] = b.image_path
-                    b.image_path = None
-        else:
-            plan = fixed
+            except Exception as e:  # noqa: BLE001
+                emit(f"Прежняя программа не пересобралась ({e}) — нажми «Пересобрать»", "warn")
+            break
+        plan, result, network = cand, cand_result, cand_network
+        auto = {(x.section, x.block) for x in plan.shots if x.mode in ("window", "console", "browser")}
+        for n, bi, b in _blocks(st):  # снятое ForLabs (и в прошлых запусках) — заново, уже с исправленной программой
+            if (isinstance(b, Figure) and b.image_path and (n, bi) in auto
+                    and ((n, bi) in mine or Path(b.image_path).name.startswith("shot_"))):
+                kept[(n, bi)] = b.image_path
+                b.image_path = None
     try:
         pipe._sync(st, ["project/plan.json"])
     except Exception:

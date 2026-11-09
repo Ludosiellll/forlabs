@@ -112,7 +112,7 @@
   var redo = document.querySelector("[data-redo]");
   if (redo) {
     redo.addEventListener("submit", function () {
-      redo.action = base + "/redo/" + redo.querySelector("[data-redo-select]").value;
+      redo.action = base + "/redo/" + document.querySelector("[data-redo-select]").value;
     });
   }
 
@@ -147,6 +147,8 @@
   });
   document.addEventListener("paste", function (e) {
     if (!slots.length) return;
+    var shotsPanel = document.querySelector('[data-panel="shots"]');
+    if (shotsPanel && shotsPanel.hidden) return;  // открыт чат или замечания: вставка не уходит в скрытый рисунок
     var t = e.target;
     if (t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT")) return;
     var items = (e.clipboardData && e.clipboardData.items) || [];
@@ -215,6 +217,36 @@
   });
 })();
 
+// вкладки правой колонки лабы: выбранная запоминается для этой лабы до закрытия окна
+(function () {
+  var bar = document.querySelector("[data-side-tabs]");
+  function show(name) {
+    var panels = document.querySelectorAll("[data-panel]"), found = false;
+    panels.forEach(function (p) { if (p.getAttribute("data-panel") === name) found = true; });
+    if (!found) return;
+    panels.forEach(function (p) { p.hidden = p.getAttribute("data-panel") !== name; });
+    document.querySelectorAll("[data-side]").forEach(function (b) {
+      b.setAttribute("aria-selected", b.getAttribute("data-side") === name ? "true" : "false");
+    });
+    var log = document.querySelector("[data-chat-log]");
+    if (name === "chat" && log) log.scrollTop = log.scrollHeight;
+  }
+  var key = bar ? "forlabs-side:" + bar.getAttribute("data-side-tabs") : null;
+  function remember(name) { try { if (key) sessionStorage.setItem(key, name); } catch (e) { /* нет хранилища */ } }
+  if (bar) {
+    var saved = null;
+    try { saved = sessionStorage.getItem(key); } catch (e) { /* нет хранилища */ }
+    if (saved) show(saved);
+    bar.addEventListener("click", function (e) {
+      var b = e.target.closest("[data-side]");
+      if (b) { show(b.getAttribute("data-side")); remember(b.getAttribute("data-side")); }
+    });
+  }
+  document.querySelectorAll("[data-side-go]").forEach(function (a) {
+    a.addEventListener("click", function (e) { e.preventDefault(); show(a.getAttribute("data-side-go")); });
+  });
+})();
+
 // чат правок: прокрутка к последнему сообщению, Ctrl+Enter — отправить
 (function () {
   var log = document.querySelector("[data-chat-log]");
@@ -223,6 +255,11 @@
   if (!form) return;
   var area = form.querySelector("textarea");
   var files = form.querySelector("[data-images-input]");
+  function grow() { area.style.height = "auto"; area.style.height = Math.min(area.scrollHeight, 160) + "px"; }
+  area.addEventListener("input", grow);  // поле растёт вместе с текстом, как в мессенджере
+  document.addEventListener("click", function (e) {  // меню «Ещё» закрывается щелчком мимо
+    document.querySelectorAll("details.more[open]").forEach(function (d) { if (!d.contains(e.target)) d.open = false; });
+  });
   area.addEventListener("keydown", function (e) {
     var hasPhotos = files && files.files && files.files.length;
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && (area.value.trim() || hasPhotos)) {
@@ -231,8 +268,10 @@
     }
   });
   form.addEventListener("submit", function () {
-    var b = form.querySelector("button[type=submit]");
+    var b = form.querySelector("[data-send]") || form.querySelector("button[type=submit]");
     if (b) { b.disabled = true; b.textContent = "Отправляю…"; }
+    var bar = document.querySelector("[data-side-tabs]");  // после отправки страница откроется на чате
+    try { if (bar) sessionStorage.setItem("forlabs-side:" + bar.getAttribute("data-side-tabs"), "chat"); } catch (e) { /* нет хранилища */ }
   });
 })();
 

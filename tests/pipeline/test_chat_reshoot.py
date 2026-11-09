@@ -87,3 +87,66 @@ def test_text_only_edit_does_not_touch_the_program(tmp_home, tmp_path):
     calls = len(fake.calls)
     st = pipe.chat(st, "первый абзац короче")
     assert len(fake.calls) == calls + 2 and len(shooter.calls) == 1  # ни нового плана, ни пересъёмки
+
+
+# --- находки ревью
+
+TWO = {**PLAN, "shots": [PLAN["shots"][0],
+                         {"section": 2, "block": 2, "mode": "console", "input": "1\n2\n", "expect": "Сумма:"}]}
+REVISE_KEEP = {"blocks": [{"keep": "b1"},
+                          {"type": "listing", "topic": "Исходный код программы", "language": "python", "code": NEW_CODE},
+                          {"keep": "b3"}]}
+PLAN2_TWO = {**PLAN2, "shots": [PLAN2["shots"][0], TWO["shots"][1]]}
+
+
+def test_code_edit_in_a_lab_made_by_an_older_version_plans_the_program_again(tmp_home, tmp_path):
+    shooter = ScriptShooter(True, True)
+    pipe, fake, st = make(tmp_home, tmp_path, [PLAN, EDIT, REVISE, PLAN2], shooter=shooter)
+    st = pipe.execute(st)
+    st.project.report_sha = ""  # лаба сделана до этой версии: отпечатка отчёта в ней нет
+    st = pipe._save(st)
+    st = pipe.chat(st, "подпиши результат словом Итог")
+    assert st.report.sections[0].blocks[1].code == NEW_CODE  # правка кода не откатилась к прежнему плану
+    assert hand_in(tmp_path) == NEW_CODE + "\n"
+
+
+def test_rebuild_in_an_older_lab_after_code_edit_plans_again(tmp_home, tmp_path):
+    shooter = ScriptShooter(True, True)
+    pipe, fake, st = make(tmp_home, tmp_path, [PLAN, EDIT, REVISE, PLAN2], shooter=shooter)
+    st = pipe.execute(st)
+    st.project.report_sha = ""
+    st = pipe._save(st)
+    pipe.projects = False
+    st = pipe.chat(st, "подпиши результат словом Итог")
+    pipe.projects = True
+    st = pipe.retry_project(st)
+    assert st.report.sections[0].blocks[1].code == NEW_CODE and hand_in(tmp_path) == NEW_CODE + "\n"
+
+
+def test_code_edit_rebuilds_program_even_when_no_picture_is_missing(tmp_home, tmp_path):
+    shooter = ScriptShooter(True, True)
+    pipe, fake, st = make(tmp_home, tmp_path, [TWO, EDIT, REVISE_KEEP, PLAN2_TWO], shooter=shooter)
+    st = pipe.execute(st)
+    assert all(f.image_path for f in figures(st))
+    st = pipe.chat(st, "подпиши результат словом Итог")
+    assert hand_in(tmp_path) == NEW_CODE + "\n" and not proj.stale(st)  # в папке сдачи — новый код
+    assert "Программу пересобрал" in st.chat[-1].text
+
+
+def test_new_plan_keeps_the_project_folder(tmp_home, tmp_path):
+    renamed = {**PLAN2, "name": "Сумма чисел"}
+    pipe, fake, st = make(tmp_home, tmp_path, [PLAN, EDIT, REVISE, renamed], shooter=ScriptShooter(True, True))
+    st = pipe.chat(pipe.execute(st), "подпиши результат словом Итог")
+    folders = sorted(p.name for p in (tmp_path / "сдача" / "ПССИП" / "ЛР7").iterdir() if p.is_dir())
+    assert folders == ["Проект Сумма"] and hand_in(tmp_path) == NEW_CODE + "\n"  # одна папка, с новым кодом
+
+
+def test_reshoot_with_nothing_to_do_leaves_the_document_alone(tmp_home, tmp_path, monkeypatch):
+    pipe, fake, st = make(tmp_home, tmp_path, [TWO, ASK_RESHOOT], shooter=ScriptShooter(True, True))
+    st = pipe.execute(st)
+    status, sha = st.status, st.docx_sha
+    renders = []
+    monkeypatch.setattr(pipe, "render", lambda s: renders.append(1) or s)
+    st = pipe.chat(st, "сними скриншоты ещё раз")
+    assert "уже на месте" in st.chat[-1].text
+    assert not renders and st.status == status and st.docx_sha == sha  # документ не трогали — сданная лаба осталась сданной

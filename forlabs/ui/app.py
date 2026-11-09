@@ -80,8 +80,7 @@ LOCAL_HOSTS = ["127.0.0.1", "localhost"]
 STATUS_RU = {"draft": "Черновик", "parsed": "Проверь разбор", "confirmed": "Готова к выполнению",
              "executing": "Выполняется", "needs_manual": "Нужны скриншоты", "rendered": "Свёрстана",
              "final": "Сдана", "failed": "Ошибка"}
-STEPS = [("parse", "Разбор методички"), ("write", "Текст отчёта"), ("check", "Проверка"), ("render", "Вёрстка"),
-         ("finalize", "Доводка и предпросмотр")]
+STEPS = [("parse", "Разбор"), ("write", "Текст"), ("check", "Проверка"), ("render", "Вёрстка"), ("finalize", "Документ")]
 
 
 EVENT_WAITERS = __import__("concurrent.futures").futures.ThreadPoolExecutor(max_workers=32,
