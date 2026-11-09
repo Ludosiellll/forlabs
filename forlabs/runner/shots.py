@@ -349,7 +349,9 @@ class WindowsShooter:
             w = winapi.wait_window({app.pid}, self.timeout,
                                    lambda x: x.cls == "ConsoleWindowClass" and min(winapi.size_of(x.hwnd)) > 40)
             if not w:
-                return ShotResult(False, reason="окно консоли не появилось")
+                err = work.parent / "console-host.err"
+                return ShotResult(False, reason="окно консоли не появилось" + (
+                    f" (песочница: {err.read_text(encoding='utf-8')[:400]})" if hosted and err.exists() else ""))
             time.sleep(1.2)
             if hosted and (err := (work.parent / "console-host.err")).exists():
                 return ShotResult(False, reason="песочница: " + err.read_text(encoding="utf-8")[:300])

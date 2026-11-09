@@ -50,13 +50,25 @@ def host_cmd() -> list[str]:
 def host_main(job_file) -> int:
     """ForLabs.exe --console-host <job.json>: окно консоли принадлежит этому процессу (не песочнице) — ввод для снимка
     в него проходит; программа лабы работает в песочнице AppContainer, в этой же консоли."""
+    from pathlib import Path
+
+    job_file = Path(job_file)
+    try:
+        return _host(job_file)
+    except Exception as e:  # noqa: BLE001 — причина — в файл рядом, ForLabs покажет её
+        import traceback
+
+        job_file.with_suffix(".err").write_text(f"{type(e).__name__}: {e}\n{traceback.format_exc()[-1500:]}",
+                                                encoding="utf-8")
+        return 3
+
+
+def _host(job_file) -> int:
     import ctypes
     import time
-    from pathlib import Path
 
     from forlabs.runner import appcontainer
 
-    job_file = Path(job_file)
     job = json.loads(job_file.read_text(encoding="utf-8"))
     k32 = ctypes.windll.kernel32
     k32.SetConsoleCP(65001)

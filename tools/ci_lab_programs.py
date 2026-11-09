@@ -391,6 +391,35 @@ def main() -> int:
         mysql_variants(tools, report)
     except Exception as e:  # noqa: BLE001
         report.setdefault("mysql_variants", {}).update(error=f"{type(e).__name__}: {e}", detail=getattr(e, "detail", ""))
+    try:  # что ломает запуск Python с уровнем Low после выдачи прав песочнице (до любых снимков)
+        from forlabs.runner import appcontainer, winapi
+
+        exp = {}
+        py = tools["python"].path
+        root = str(appcontainer.tool_root(py))
+        icacls = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "icacls.exe")
+
+        def low_run():
+            app = winapi.spawn(subprocess.list2cmdline([py, "--version"]), str(WORK), low=True, hidden=True)
+            code = app.wait(60)
+            app.close()
+            return code
+
+        exp["before"] = low_run()
+        sid = appcontainer.sid()
+        exp["grant_rc"] = subprocess.run([icacls, root, "/grant", f"*{sid}:(OI)(CI)(RX)"], capture_output=True).returncode
+        exp["after_grant"] = low_run()
+        exp["dll_rights"] = appcontainer.rights(str(Path(root) / "python312.dll"))[-600:]
+        subprocess.run([icacls, root, "/remove:g", f"*{sid}"], capture_output=True)
+        exp["after_remove"] = low_run()
+        subprocess.run([icacls, root, "/grant", "*S-1-15-2-1:(OI)(CI)(RX)"], capture_output=True)
+        exp["after_all_packages"] = low_run()
+        subprocess.run([icacls, root, "/remove:g", "*S-1-15-2-1"], capture_output=True)
+        exp["final"] = low_run()
+        report["acl_experiment"] = exp
+        print("acl_experiment:", exp, flush=True)
+    except Exception as e:  # noqa: BLE001
+        report["acl_experiment"] = {"error": f"{type(e).__name__}: {e}", "trace": traceback.format_exc()[-800:]}
     secret = Path(os.environ.get("USERPROFILE", str(Path.home()))) / "Documents" / "forlabs-secret.txt"
     secret.parent.mkdir(parents=True, exist_ok=True)
     secret.write_text("личное", encoding="utf-8")
