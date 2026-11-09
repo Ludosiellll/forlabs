@@ -342,3 +342,6 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .profile-offer { margin-top: 6px; padding: 8px 10px; border: 1px solid var(--accent-line); border-radius: var(--radius);
   background: var(--accent-soft); }
 .profile-offer ul { margin: 4px 0 8px; padding-left: 18px; }
+.admin-setup { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; margin: 12px 0 20px; }
+.help-list { margin: 0; padding-left: 18px; }
+.help-list li { margin-bottom: 4px; }

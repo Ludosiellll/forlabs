@@ -244,7 +244,9 @@ def register_admin(app: FastAPI, ctx, render, redirect) -> None:
                          "access": access_text(m), "is_me": m.user_id == me.user_id,
                          "seen": ago(m.last_seen_at)})
         active = sum(1 for m in ov.members if m.access_state in ("active", "expiring", "unlimited"))
+        shared = ctx.store.admin_shared_key()
         return render(request, "admin.html", nav="admin", me=me, rows=rows, active=active,
+                      shared_key=shared, shared_set=date_ru(shared[1]) if shared and shared[1] else "",
                       total_30=sum(ov.usage_30d.values()), labs_30=len(labs_30),
                       final_30=sum(1 for lab in labs_30 if lab.status == "final"),
                       usage_chart=stacked_bars([d.strftime("%d.%m") for d in days], series),
@@ -263,6 +265,19 @@ def register_admin(app: FastAPI, ctx, render, redirect) -> None:
             out[uid] = {"tokens": value, "state": state, "text": text,
                         "labs": labs_estimate(value) if state == "ok" else ""}
         return JSONResponse(out)
+
+    @app.post("/admin/shared-key")
+    def admin_shared_key(action: str = Form(...), api_key: str = Form("")):
+        if current_admin() is None:
+            return home()
+        if action == "clear":
+            ctx.store.admin_clear_shared_key()
+            return redirect("/admin", msg="Общий ключ убран — модель работает только у тех, кому выдан свой ключ")
+        try:
+            last4 = ctx.store.admin_set_shared_key(api_key)
+        except ValueError as e:
+            return redirect("/admin", err=str(e))
+        return redirect("/admin", msg=f"Общий ключ сохранён (••••{last4})")
 
     @app.get("/admin/u/{uid}")
     def admin_member_page(request: Request, uid: str):

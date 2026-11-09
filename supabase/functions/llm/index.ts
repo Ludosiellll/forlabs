@@ -26,6 +26,16 @@ type Member = {
   trial_labs: number | null; trial_chat: number | null;
 };
 
+// общий ключ: из админки (Vault), иначе секрет LLM_API_KEY; минута в памяти функции
+let sharedCache: { key: string; at: number } | null = null;
+async function sharedKey(): Promise<string> {
+  if (sharedCache && Date.now() - sharedCache.at < 60_000) return sharedCache.key;
+  const { data } = await admin.rpc("shared_key_value");
+  const key = typeof data === "string" && data ? data : KEY;
+  sharedCache = { key, at: Date.now() };
+  return key;
+}
+
 function json(status: number, body: unknown) {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 }
@@ -78,8 +88,9 @@ async function balances(req: Request, userId: string, member: Member): Promise<R
       errors[id] = String((e as Error).message ?? e).slice(0, 120);
     }
   }));
-  if (isAdmin && body.shared && KEY) {
-    const b = await providerBalance(KEY);
+  const shared = isAdmin && body.shared ? await sharedKey() : "";
+  if (shared) {
+    const b = await providerBalance(shared);
     result.shared = b.balance;
     if (b.error) errors.shared = b.error;
   }
@@ -115,7 +126,7 @@ Deno.serve(async (req: Request) => {
   } catch (e) {
     return err(500, String((e as Error).message ?? e));
   }
-  const picked = pickKey(own, KEY, member.allow_shared_key ?? true);
+  const picked = pickKey(own, (member.allow_shared_key ?? true) ? await sharedKey() : "", member.allow_shared_key ?? true);
   if (!picked) return err(503, "no key assigned");
 
   let body: Record<string, unknown>;

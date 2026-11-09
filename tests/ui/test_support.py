@@ -143,3 +143,21 @@ def test_signup_without_email_confirmation_logs_in_and_shows_pending(fake, tmp_h
     assert r.status_code == 303 and r.headers["location"].startswith("/?") and "подтверди" not in r.headers["location"]
     page = c.get("/").text
     assert "ждёт одобрения" in page and 'href="/support"' in page
+
+
+# быстрые переходы: данные участника не спрашиваются у облака на каждой странице
+def test_pages_reuse_member_data(fake, tmp_home):
+    c = member_client(fake, tmp_home)
+    c.get("/settings")
+    before = sum(1 for r in fake.requests if r.url.path.endswith("/members"))
+    for url in ("/settings", "/profiles", "/support", "/settings"):
+        c.get(url)
+    assert sum(1 for r in fake.requests if r.url.path.endswith("/members")) == before
+
+
+def test_pending_member_sees_approval_without_waiting(fake, tmp_home):
+    c = member_client(fake, tmp_home)
+    fake.tables["members"][0]["approved"] = False
+    c.get("/")
+    fake.tables["members"][0]["approved"] = True  # администратор одобрил
+    assert "ждёт одобрения" not in c.get("/").text

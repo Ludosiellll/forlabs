@@ -232,3 +232,32 @@ begin
   select * into r from public.usage_begin(b, 'p/s/1', null, 'm', 1000000, 300, 120, 10, 4); stale := r.ok::text;
   raise exception 'RESULT p1=% p2=% p3=% p4=% p5=% est_counts=% stale_cleaned=%', p1, p2, p3, p4, p5, est_counts, stale;
 end $$;
+
+-- Общий ключ в админке (миграция 0011): задаёт и видит хвост только администратор, расшифрованный — только функция.
+-- Ожидаемо: a_set=5678 a_info=5678 b_set=blocked b_info=blocked b_value=blocked svc_value=ok
+do $$
+declare
+  a uuid := '00000000-0000-4000-8000-0000000000aa';
+  b uuid := '00000000-0000-4000-8000-0000000000bb';
+  a_set text; a_info text; b_set text := 'ALLOWED'; b_info text := 'ALLOWED'; b_value text := 'ALLOWED'; svc text;
+begin
+  insert into auth.users (id, instance_id, aud, role, email) values
+    (a, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'sk-a@example.invalid'),
+    (b, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'sk-b@example.invalid');
+  update public.members set approved = true, role = 'admin' where user_id = a;
+  update public.members set approved = true, role = 'member' where user_id = b;
+  perform set_config('request.jwt.claims', json_build_object('sub', a, 'role', 'authenticated')::text, true);
+  execute 'set local role authenticated';
+  a_set := public.admin_set_shared_key('sk-check-12345678');
+  select last4 into a_info from public.admin_shared_key_info();
+  execute 'reset role';
+  perform set_config('request.jwt.claims', json_build_object('sub', b, 'role', 'authenticated')::text, true);
+  execute 'set local role authenticated';
+  begin perform public.admin_set_shared_key('sk-evil-12345678'); exception when others then b_set := 'blocked'; end;
+  begin perform public.admin_shared_key_info(); exception when others then b_info := 'blocked'; end;
+  begin perform public.shared_key_value(); exception when others then b_value := 'blocked'; end;
+  execute 'reset role';
+  perform set_config('request.jwt.claims', json_build_object('role', 'service_role')::text, true);
+  svc := case when public.shared_key_value() = 'sk-check-12345678' then 'ok' else 'wrong' end;
+  raise exception 'RESULT a_set=% a_info=% b_set=% b_info=% b_value=% svc_value=%', a_set, a_info, b_set, b_info, b_value, svc;
+end $$;

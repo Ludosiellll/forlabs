@@ -477,12 +477,21 @@ class CloudStore:
             shutil.rmtree(d, ignore_errors=True)
 
     # участники (для администратора)
+    MEMBER_TTL = 30.0  # секунд: переходы по страницам не ждут облако; изменения администратора — в течение 30 с
+
     def member(self) -> Member | None:
-        """Нужен каждой странице (шапка, подписка): без связи — последнее известное значение, без пауз повторов."""
+        """Нужен каждой странице (шапка, подписка): кэш на 30 с (ещё не одобренный — всегда свежий, чтобы одобрение
+        было видно сразу); без связи — последнее известное значение, без пауз повторов."""
+        cached = getattr(self, "_member_cache", None)
+        at = getattr(self, "_member_at", (None, 0.0))
+        if (cached is not None and cached.approved and at[0] == self.auth.user_id
+                and time.monotonic() - at[1] < self.MEMBER_TTL):
+            return cached
         rows = self._read("members", {"select": "*", "user_id": f"eq.{self.auth.user_id}"})
         if rows is None:
-            return getattr(self, "_member_cache", None)
+            return cached
         self._member_cache = Member.model_validate(rows[0]) if rows else None
+        self._member_at = (self.auth.user_id, time.monotonic())
         return self._member_cache
 
     def list_members(self) -> list[Member]:
@@ -585,7 +594,7 @@ class CloudStore:
     def admin_full_access(self, uid: str) -> None:
         self.admin_update_member(uid, trial_labs=None, trial_chat=None)
 
-    TRIAL_TTL = 20.0  # секунд: шапка не спрашивает расход на каждой странице
+    TRIAL_TTL = 30.0  # секунд: шапка не спрашивает расход на каждой странице
 
     def trial_usage(self, member: "Member") -> TrialUsage | None:
         """Расход пробного периода участника (свой — для шапки, чужой — администратору). Одна попытка без пауз
@@ -612,6 +621,25 @@ class CloudStore:
 
     def admin_revoke(self, uid: str) -> None:
         self.admin_update_member(uid, access_until=now_utc().isoformat())
+
+    def admin_shared_key(self) -> tuple[str, str] | None:
+        """Общий ключ модели из админки: (последние 4 символа, когда задан) или None."""
+        try:
+            rows = self._rpc("admin_shared_key_info") or []
+        except CloudError as e:
+            if e.offline:
+                raise
+            return None  # сервер ещё без миграции 0011
+        return (rows[0]["last4"], rows[0].get("set_at") or "") if rows else None
+
+    def admin_set_shared_key(self, api_key: str) -> str:
+        key = (api_key or "").strip()
+        if len(key) < 8 or any(c.isspace() for c in key):
+            raise ValueError("Ключ должен быть одной строкой без пробелов, не короче 8 символов.")
+        return str(self._rpc("admin_set_shared_key", {"api_key": key}))
+
+    def admin_clear_shared_key(self) -> None:
+        self._rpc("admin_clear_shared_key")
 
     def admin_set_key(self, uid: str, api_key: str) -> str:
         key = (api_key or "").strip()

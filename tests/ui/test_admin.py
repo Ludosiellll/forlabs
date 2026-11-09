@@ -157,6 +157,7 @@ def test_member_sees_subscription_in_header(fake, tmp_home):
     page = client.get("/settings").text
     assert "Подписка до" in page and "sub-expiring" in page
     me["access_until"] = "2026-01-01T00:00:00+00:00"
+    client.app.state.ctx.store._member_at = (None, 0.0)  # прошло 30 с кэша данных участника
     page = client.get("/settings").text
     assert "Подписка закончилась 01.01.2026" in page
 

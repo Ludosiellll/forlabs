@@ -55,6 +55,7 @@ class FakeSupabase:
         self.support_bound = False  # владелец привязал Telegram
         self.support_secrets = True  # секреты бота заданы в Supabase
         self.no_support = False  # сервер без миграции 0006 и функции support
+        self.shared_key = None  # (last4, set_at) общего ключа в админке
         self.autoconfirm = False  # в Supabase выключено «Confirm email»: регистрация сразу даёт вход
         self.support_objects = {}  # бакет support: путь → байты
 
@@ -108,6 +109,18 @@ class FakeSupabase:
                 return httpx.Response(200, json=self.daily)
             if fn == "admin_usage_by_lab":
                 return httpx.Response(200, json=self.by_lab)
+            if fn == "admin_set_shared_key":
+                k = args["api_key"].strip()
+                if len(k) < 8:
+                    return httpx.Response(400, json={"code": "22023", "message": "key too short"})
+                self.shared_key = (k[-4:], "2026-11-09T10:00:00+00:00")
+                return httpx.Response(200, json=k[-4:])
+            if fn == "admin_clear_shared_key":
+                self.shared_key = None
+                return httpx.Response(204)
+            if fn == "admin_shared_key_info":
+                return httpx.Response(200, json=[{"last4": self.shared_key[0], "set_at": self.shared_key[1]}]
+                                      if self.shared_key else [])
             if fn == "support_mark_read":
                 for r in self.tables.get("support_messages", []):
                     if r["user_id"] == UID and r["from_admin"]:
