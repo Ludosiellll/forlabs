@@ -179,6 +179,18 @@ def child_texts(hwnd: int) -> list[str]:
     return out
 
 
+def size_of(hwnd: int) -> tuple[int, int]:
+    r = wintypes.RECT()
+    user32.GetWindowRect(wintypes.HWND(hwnd), ctypes.byref(r))
+    return r.right - r.left, r.bottom - r.top
+
+
+def describe(pids: set[int]) -> str:
+    """Для причины сбоя: какие окна были у программы."""
+    wins = windows_of(process_tree(pids), owned=True)
+    return "; ".join(f"{w.cls} «{w.title[:40]}» {size_of(w.hwnd)[0]}×{size_of(w.hwnd)[1]}" for w in wins) or "окон нет"
+
+
 def window_rect(hwnd: int) -> tuple[int, int, int, int]:
     """Видимая рамка окна без невидимых полей для растягивания (Windows 10/11)."""
     r = wintypes.RECT()
@@ -194,10 +206,15 @@ def capture(hwnd: int):
 
     dpi_aware()
     full = wintypes.RECT()
-    user32.GetWindowRect(wintypes.HWND(hwnd), ctypes.byref(full))
-    w, h = full.right - full.left, full.bottom - full.top
-    if w <= 0 or h <= 0:
-        raise OSError("у окна нет размера (свёрнуто?)")
+    for _ in range(10):  # свёрнутое или ещё не показанное окно — развернуть и подождать
+        user32.GetWindowRect(wintypes.HWND(hwnd), ctypes.byref(full))
+        w, h = full.right - full.left, full.bottom - full.top
+        if w > 40 and h > 40:
+            break
+        user32.ShowWindow(wintypes.HWND(hwnd), 9)  # SW_RESTORE
+        time.sleep(0.3)
+    if w <= 40 or h <= 40:
+        raise OSError(f"у окна нет размера ({w}×{h})")
     hwnd_dc = user32.GetWindowDC(wintypes.HWND(hwnd))
     mem_dc = gdi32.CreateCompatibleDC(hwnd_dc)
     bmp = gdi32.CreateCompatibleBitmap(hwnd_dc, w, h)

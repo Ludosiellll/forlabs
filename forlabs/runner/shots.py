@@ -145,7 +145,8 @@ class WindowsShooter:
         cmd = self._remap(target, work)
         app = winapi.spawn(console.console_command(cmd), str(work), low=self.low, env=target.env or None)
         try:
-            w = winapi.wait_window({app.pid}, self.timeout, lambda x: x.cls == "ConsoleWindowClass")
+            w = winapi.wait_window({app.pid}, self.timeout,
+                                   lambda x: x.cls == "ConsoleWindowClass" and min(winapi.size_of(x.hwnd)) > 40)
             if not w:
                 return ShotResult(False, reason="окно консоли не появилось")
             time.sleep(1.2)
@@ -170,7 +171,11 @@ class WindowsShooter:
             pid = [p for p in sorted(winapi.process_tree({app.pid})) if p != app.pid] or [app.pid]
             read = console.act(pid, read=True)
             seen = read.get("screen", "")
-            img = winapi.capture(w.hwnd)
+            try:
+                img = winapi.capture(w.hwnd)
+            except OSError as e:
+                return ShotResult(False, reason=f"окно консоли не снялось ({e}; окна: {winapi.describe({app.pid})})",
+                                  seen=seen)
             expect = _get(shot, "expect") or ""
             if expect and expect not in seen:
                 img.save(out.with_name(out.stem + ".fail.png"))  # для разбора: что было на экране
