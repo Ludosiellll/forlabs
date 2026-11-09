@@ -85,6 +85,32 @@ def dpi_aware() -> None:
         pass
 
 
+def process_names(pids: set[int] | None = None) -> dict[int, str]:
+    """pid → имя exe (в нижнем регистре)."""
+    snap = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    out: dict[int, str] = {}
+    try:
+        e = PROCESSENTRY32W()
+        e.dwSize = ctypes.sizeof(e)
+        ok = kernel32.Process32FirstW(snap, ctypes.byref(e))
+        while ok:
+            if pids is None or e.th32ProcessID in pids:
+                out[e.th32ProcessID] = e.szExeFile.lower()
+            ok = kernel32.Process32NextW(snap, ctypes.byref(e))
+    finally:
+        kernel32.CloseHandle(snap)
+    return out
+
+
+HOSTS = {"conhost.exe", "cmd.exe", "openconsole.exe", "timeout.exe", "chcp.com"}
+
+
+def program_alive(root: int) -> bool:
+    """В окне консоли ещё работает сама программа (а не только cmd, который держит окно)."""
+    names = process_names(process_tree({root}))
+    return any(n not in HOSTS for p, n in names.items() if p != root)
+
+
 def process_tree(roots: set[int]) -> set[int]:
     """Процессы и все их потомки (программа могла запустить conhost, браузер — свои процессы)."""
     snap = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)

@@ -152,6 +152,11 @@ class WindowsShooter:
             time.sleep(1.2)
             pid = [p for p in sorted(winapi.process_tree({app.pid})) if p != app.pid] or [app.pid]
             title = target.title or (cmd[0] if cmd else None)
+            if not winapi.program_alive(app.pid):  # программа уже завершилась (ошибка запуска, нет подключения…)
+                early = console.act(pid, read=True).get("screen", "").strip()
+                if _get(shot, "input") or any(_get(s, "action") in ("type", "key") for s in _get(shot, "steps", []) or []):
+                    last = " ".join(early.splitlines()[-3:])[:300] or "окно пустое"
+                    return ShotResult(False, reason=f"программа завершилась сразу после запуска: {last}", seen=early)
             text = _get(shot, "input") or ""
             for step in _get(shot, "steps", None) or []:  # ввод по шагам: type/key/wait
                 action, value = _get(step, "action"), _get(step, "value") or ""

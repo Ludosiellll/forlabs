@@ -22,9 +22,10 @@ def quote(arg: str) -> str:
 
 def console_command(cmd: list[str]) -> str:
     """conhost (а не Windows Terminal: окно должно принадлежать процессу программы) → cmd с UTF-8 → программа;
-    `pause>nul` держит окно после выхода программы, ничего не печатая."""
+    после выхода программы окно держит `timeout /nobreak`: ничего не печатает и не съедает нажатия клавиш
+    (`pause` съел бы набранный ввод, если программа завершилась раньше, и окно закрылось бы)."""
     line = " ".join(quote(a) for a in cmd)
-    return f'"{CONHOST}" cmd.exe /d /s /c "chcp 65001>nul & {line} & pause>nul"'
+    return f'"{CONHOST}" cmd.exe /d /s /c "chcp 65001>nul & {line} & timeout /t 86400 /nobreak >nul"'
 
 
 def helper_cmd() -> list[str]:
