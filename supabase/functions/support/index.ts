@@ -141,9 +141,17 @@ async function setup(req: Request): Promise<Response> {
   const bytes = crypto.getRandomValues(new Uint8Array(12));
   const code = Array.from(bytes, (b) => "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"[b % 56]).join("");
   const cfg = await config();
-  await admin.rpc("support_config_set", { owner: cfg.owner_chat_id, bot: username, code,
-    expires: new Date(Date.now() + 30 * 60_000).toISOString() });
+  const saved = await saveConfig(cfg.owner_chat_id, username, code, new Date(Date.now() + 30 * 60_000).toISOString());
+  // ссылка без сохранённого кода бесполезна: бот ответит «Ссылка устарела» — лучше сразу сказать, что не так
+  if (saved || (await config()).bind_code !== code) return err(500, `link not saved: ${saved ?? "code missing after save"}`);
   return json(200, { bot: username, link: `https://t.me/${username}?start=${code}`, bound: cfg.owner_chat_id !== null });
+}
+
+/** Запись настроек бота. Возвращает текст ошибки базы или null. */
+async function saveConfig(owner: number | null, bot: string | null, code: string | null, expires: string | null) {
+  const { error } = await admin.rpc("support_config_set", { owner, bot, code, expires });
+  if (error) console.error("support_config_set:", error.message);
+  return error ? error.message.slice(0, 200) : null;
 }
 
 const HOW_TO_BIND = "Это бот поддержки ForLabs. Чтобы сообщения студентов приходили сюда: в ForLabs открой Админ → Поддержка, " +
@@ -180,8 +188,10 @@ async function telegram(req: Request): Promise<Response> {
   if (action.kind === "bind") {
     const fresh = cfg.bind_code && action.code === cfg.bind_code && cfg.bind_expires && new Date(cfg.bind_expires) > new Date();
     if (fresh) {
-      await admin.rpc("support_config_set", { owner: action.chatId, bot: cfg.bot_username, code: null, expires: null });
-      await tg("sendMessage", { chat_id: action.chatId, text: "Готово: сюда будут приходить сообщения поддержки ForLabs. Отвечай на них реплаем." });
+      const failed = await saveConfig(action.chatId, cfg.bot_username, null, null);
+      await tg("sendMessage", { chat_id: action.chatId, text: failed
+        ? "Не получилось сохранить подключение (ошибка базы). В ForLabs нажми «Подключить Telegram» ещё раз."
+        : "Готово: сюда будут приходить сообщения поддержки ForLabs. Отвечай на них реплаем." });
     } else if (action.chatId !== cfg.owner_chat_id) {  // старая или чужая ссылка
       await tg("sendMessage", { chat_id: action.chatId, text: "Ссылка устарела. " + HOW_TO_BIND });
     }

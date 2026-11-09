@@ -237,5 +237,9 @@ class Support:
         if r.status_code == 502:
             raise CloudError("Telegram не принял настройку бота — проверь секреты в Supabase: TELEGRAM_BOT_TOKEN (токен от "
                              "@BotFather) и TELEGRAM_WEBHOOK_SECRET (только латиница, цифры, _ и -).", r.text[:200])
+        if r.status_code == 500 and "link not saved" in r.text:
+            raise CloudError("Сервер не сохранил ссылку для Telegram, поэтому бот её не узнает. В Supabase открой "
+                             "SQL Editor и выполни файл supabase/migrations/0012_support_link_saved.sql, потом нажми "
+                             "«Подключить Telegram» ещё раз.", r.text[:300])
         self.s._check(r)
         return r.json()
