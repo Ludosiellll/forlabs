@@ -75,6 +75,18 @@ jobs:
             if ($bad) { Write-Output ("::error title=программы лаб::" + ($bad -join "%0A")) }
           }
           exit $code
+      - name: Окна программ (списки, вторая форма, починка сценария после неудачного снимка)
+        if: always()
+        shell: pwsh
+        run: |
+          python tools/ci_window_probe.py
+          $code = $LASTEXITCODE
+          if (Test-Path build/probe/windows.json) {
+            $r = Get-Content build/probe/windows.json -Raw -Encoding utf8 | ConvertFrom-Json
+            $bad = $r.cases.PSObject.Properties | Where-Object { -not $_.Value.ok } | ForEach-Object { "$($_.Name): $($_.Value.reason)$($_.Value.error)" }
+            if ($bad) { Write-Output ("::error title=окна программ::" + ($bad -join "%0A")) }
+          }
+          exit $code
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -220,6 +220,7 @@ class ProjectInfo(BaseModel):
     kind: str
     built: bool = False
     fixes: int = 0  # кругов исправления ошибок сборки
+    shot_fixes: int = 0  # кругов исправления после снимка, который не получился (программа или сценарий)
     missing: list[str] = Field(default_factory=list)  # нет программ на компьютере (ключи: dotnet, python…)
     blocked: list[str] = Field(default_factory=list)  # почему не запускается сам (опасный код)
     note: str = ""  # итог для студента

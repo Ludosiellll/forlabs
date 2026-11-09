@@ -31,6 +31,7 @@ from forlabs.runner.plan import (  # noqa: F401 (validate — для конве�
     ListingRef,
     ProjectFile,
     ProjectPlan,
+    ShotPlan,
     validate,
 )
 
@@ -38,14 +39,16 @@ MAX_FIXES = 3
 CODE_LANGS = {"python", "py", "csharp", "cs", "c#", "cpp", "c++", "c", "java", "js", "javascript", "html", "css",
               "php", "go", "sql", "mysql"}
 
-PROJECT_SYSTEM = """Ты собираешь из отчёта по лабораторной работе настоящий проект: студент откроет его в своей среде,
+PROJECT_HEAD = """Ты собираешь из отчёта по лабораторной работе настоящий проект: студент откроет его в своей среде,
 соберёт и запустит, а ForLabs сам сделает снимки окон программы для отчёта. Ответ — только JSON.
 
 Код и файлы:
 1. Все файлы исходного кода целиком, чтобы проект собирался и работал (со всеми using, import, #include). Код из
    листингов отчёта уже согласован: он входит в файлы дословно, ничего в нём не меняй — ни ради снимков (фокус,
    имена элементов, клавиши), ни «для надёжности». Чего не хватает (другие классы, файл Designer формы, App.xaml,
-   разметка, главный файл), допиши сам в том же стиле.
+   разметка, главный файл), допиши сам в том же стиле. В дописанном должно быть всё, на что опирается код листингов:
+   у каждого элемента формы — имя (Name), у кнопок — привязанные обработчики (Click += …), у списков — пункты,
+   с которыми код сравнивает выбранное значение (Items.AddRange(…)). Программа должна работать сразу после сборки.
 2. listings — по записи на КАЖДЫЙ листинг отчёта (все номера [N.M], и фрагменты, и файлы данных): из какого файла
    он взят. Если код листинга в итоговом файле всё же другой (задание продолжает прежнее и меняет его код,
    например в main добавлены строки), верни в code текст этого листинга так, как он стоит в файле; иначе code не
@@ -59,11 +62,9 @@ PROJECT_SYSTEM = """Ты собираешь из отчёта по лабора�
    только если этого требует задание (запрос к сайту, API, загрузка страницы): ForLabs запустит её в песочнице.
 6. name — короткое название по-русски, 1–4 слова (это имя папки проекта): без двоеточий, кавычек, слэшей и
    названия языка. language — один из: csharp, cpp, python, java, javascript, web, php, go, mysql; kind — console,
-   winforms, wpf, web, script, sql или gui (окно Swing/tkinter); entry — главный файл (у сайта на PHP — файл .php).
+   winforms, wpf, web, script, sql или gui (окно Swing/tkinter); entry — главный файл (у сайта на PHP — файл .php)."""
 
-Снимки — по одному на каждый рисунок-скриншот (section и block — номера из квадратных скобок). ForLabs запускает
-программу в Windows студента, проходит сценарий и проверяет, что на экране есть expect:
-- mode "console": input — что набрать на клавиатуре, каждая строка с \\n, ровно столько строк, сколько программа
+SHOT_RULES = """- mode "console": input — что набрать на клавиатуре, каждая строка с \\n, ровно столько строк, сколько программа
   прочитает (лишний Enter закроет окно консоли; программа ничего не читает — input пустой), в том формате, как
   читает код: «12 5\\n» — если два числа читаются из одной строки, «12\\n5\\n» — если по одному. expect — короткий кусок строки, которую печатает сама программа:
   подпись результата («Общая стоимость:»). Сам ничего не считай: число, которое вычисляет программа, добавляй к
@@ -73,8 +74,10 @@ PROJECT_SYSTEM = """Ты собираешь из отчёта по лабора�
 - mode "window", WinForms и WPF: steps — {"action":"set","target":"имя поля","value":"12"},
   {"action":"select","target":"имя списка","value":"пункт"}, {"action":"click","target":"имя кнопки"},
   {"action":"check","target":"имя флажка"}, {"action":"wait","value":"1"}; target — Name элемента (WinForms) или
-  x:Name (WPF), это имя должно быть задано в коде. expect — текст, который появится в окне; если после нажатия
-  открывается окно сообщения, снимок будет его.
+  x:Name (WPF), это имя должно быть задано в коде. select выбирает только пункт, который есть в списке: список
+  заполняется в коде. Сценарий начинается в окне, которое открывается при запуске; другую форму открой шагом —
+  click по кнопке или пункту меню, который её открывает: следующие шаги пойдут в новом окне, и снимок будет его.
+  expect — текст, который появится в окне; если после нажатия открывается окно сообщения, снимок будет его.
 - mode "window", Swing и tkinter: только клавиатура — {"action":"type","value":"12"},
   {"action":"key","value":"tab|enter|space|esc"}, {"action":"wait","value":"1"}. Tab переходит по полям и кнопкам в
   порядке их создания, надписи пропускает. Swing: при запуске курсор уже в первом поле. tkinter: при запуске курсора
@@ -97,7 +100,18 @@ PROJECT_SYSTEM = """Ты собираешь из отчёта по лабора�
   goal — что сделать (например «открыть Program.cs в редакторе, чтобы был виден метод Main»); open — файлы
   проекта, которые открыть при запуске (для Visual Studio — файл .csproj или .sln и нужный .cs); expect — что
   должно быть видно на снимке.
-- mode "manual" + reason — только если снять может лишь студент: phpMyAdmin и сайты со входом, телефон, фото.
+- mode "manual" + reason — только если снять может лишь студент: phpMyAdmin и сайты со входом, телефон, фото."""
+
+_AGENT_APPS = __import__("forlabs.agent.apps", fromlist=["APPS"]).APPS
+SHOT_RULES = SHOT_RULES.replace("{apps}", ", ".join(
+    k for k, a in _AGENT_APPS.items() if a.kind in ("ide", "db", "editor")))
+SCENARIO_RULES = SHOT_RULES[:SHOT_RULES.index('- mode "app"')].rstrip()  # то, что ForLabs проходит по шагам сам
+
+PROJECT_SYSTEM = (PROJECT_HEAD + """
+
+Снимки — по одному на каждый рисунок-скриншот (section и block — номера из квадратных скобок). ForLabs запускает
+программу в Windows студента, проходит сценарий и проверяет, что на экране есть expect:
+""" + SHOT_RULES + """
 
 Формат:
 {"language": "csharp", "kind": "winforms", "name": "Калькулятор", "entry": "Program.cs",
@@ -105,10 +119,7 @@ PROJECT_SYSTEM = """Ты собираешь из отчёта по лабора�
  "listings": [{"section": 1, "block": 2, "file": "Form1.cs"}],
  "shots": [{"section": 1, "block": 3, "mode": "window", "steps": […], "expect": "Результат:"},
            {"section": 2, "block": 2, "mode": "app", "app": "visualstudio", "goal": "открыть Form1.cs в конструкторе",
-            "open": ["Form1.cs"], "expect": "конструктор формы Form1 с кнопкой «Вычислить»"}]}"""
-_AGENT_APPS = __import__("forlabs.agent.apps", fromlist=["APPS"]).APPS
-PROJECT_SYSTEM = PROJECT_SYSTEM.replace("{apps}", ", ".join(
-    k for k, a in _AGENT_APPS.items() if a.kind in ("ide", "db", "editor")))
+            "open": ["Form1.cs"], "expect": "конструктор формы Form1 с кнопкой «Вычислить»"}]}""")
 
 PARTS_NOTE = """Прошлый ответ не поместился целиком: проект большой. Сейчас верни план без текста файлов — у каждого
 файла в files только path (content не пиши); listings и shots — полностью, как обычно. Тексты файлов я попрошу
@@ -128,6 +139,29 @@ FIX_SYSTEM = """Ты исправляешь проект лабораторно�
 те же: русские надписи, без служебных пометок, без работы с файлами вне папки программы и процессами; в интернет —
 только если этого требует задание."""
 
+SHOT_FIX_SYSTEM = """Ты чинишь проект лабораторной работы. ForLabs собрал программу, запустил её в Windows и
+прошёл сценарий снимка, но снимок не получился. Ниже по каждому рисунку — сценарий, что именно не вышло и что на
+самом деле было в окне программы (элементы с именами и текстом, пункты списков) или на экране консоли. Найди причину
+и исправь её:
+- ошибка в программе: список без пунктов, к кнопке не привязан обработчик, элементу не задано имя (Name), вторая
+  форма ниоткуда не открывается, программа падает или считает не то — исправь файлы;
+- ошибка в сценарии: не то имя элемента или пункта, не открыта вторая форма, лишний или недостающий ввод, expect не
+  совпадает с тем, что программа на самом деле выводит, — исправь снимок.
+Меняй как можно меньше и тем же стилем. Код из листингов отчёта трогай, только если ошибка в нём самом, и тогда
+верни этот листинг в listings — так, как он теперь стоит в файле. Вид окна и надписи, которых ошибка не касается, не
+меняй. expect не подгоняй под неверный результат: если программа считает неправильно, чини программу.
+Ответ — только JSON: {"files": [{"path": "…", "content": "файл целиком"}], "listings": [{"section": 1, "block": 2,
+"file": "…", "code": "…"}], "shots": [{"section": 1, "block": 3, "mode": "window", "steps": […], "expect": "…"}]} —
+только изменённые файлы и только исправленные снимки (снимок — целиком, со всеми шагами). Файлы сборки (csproj,
+go.mod, pom.xml, package.json, CMakeLists.txt) делает ForLabs — не пиши их. Правила те же: русские надписи, без
+служебных пометок, без работы с файлами вне папки программы и процессами; в интернет — только если этого требует
+задание.
+
+Как ForLabs проходит сценарий:
+""" + SCENARIO_RULES
+
+MAX_SHOT_FIXES = 2  # кругов «снимок не вышел → модель чинит программу или сценарий → снимаю заново»
+SEEN_LIMIT = 2500  # экран консоли или окно программы в запросе на исправление
 PLAN_MAX_TOKENS = 8000
 FILE_MAX_TOKENS = 8000  # один файл большого проекта (план по частям)
 MAX_PART_FILES = 12  # большой проект по частям: не больше стольких файлов (по запросу на файл)
@@ -146,6 +180,23 @@ NAME_BAD = re.compile(r'[\\/:<>"|?*«»\x00-\x1f]+')
 class FixOut(BaseModel):
     files: list[ProjectFile] = Field(default_factory=list)
     listings: list[ListingRef] = Field(default_factory=list)
+
+
+class ShotFixOut(FixOut):
+    shots: list[ShotPlan] = Field(default_factory=list)
+
+
+@dataclasses.dataclass
+class ShotFailure:
+    """Рисунок, который ForLabs не снял из-за сценария: что делал, что не вышло, что было на экране."""
+    section: int
+    block: int
+    topic: str
+    slot: str
+    shot: ShotPlan
+    reason: str
+    seen: str = ""
+    ui: str = ""
 
 
 def _blocks(st: LabState):
@@ -435,8 +486,45 @@ def start_mysql(client: str):
     return server
 
 
+def fix_shots(plan: ProjectPlan, failures: list[ShotFailure], llm, st: LabState | None = None) -> ProjectPlan:
+    """Снимки не получились из-за сценария: модель видит, что было в окне, и возвращает исправленные файлы и шаги."""
+    def one(f: ShotFailure) -> str:
+        shot = f.shot.model_dump_json(exclude={"section", "block", "reason", "app", "goal", "open"},
+                                      exclude_defaults=True)
+        parts = [f"[{f.section}.{f.block}] {f.topic}. Что в кадре: {f.slot or '—'}", f"Сценарий: {shot}",
+                 f"Не вышло: {f.reason}"]
+        if f.ui.strip():
+            parts.append(f"В окнах программы было:\n<<<\n{f.ui.strip()[:SEEN_LIMIT]}\n>>>")
+        elif f.seen.strip():
+            parts.append(f"На экране было:\n<<<\n{f.seen.strip()[-SEEN_LIMIT:]}\n>>>")
+        return "\n".join(parts)
+
+    files = "\n\n".join(f"Файл {f.path}:\n<<<\n{f.content}\n>>>" for f in plan.files
+                        if Path(f.path).suffix.lower() not in DATA_EXT)
+    refs = "; ".join(f"[{r.section}.{r.block}] из {r.file}" for r in plan.listings) or "нет"
+    user = (f"Язык: {plan.language}, вид: {plan.kind}, главный файл: {plan.entry}.\n\n"
+            "Рисунки, которые не получилось снять:\n\n" + "\n\n".join(one(f) for f in failures)
+            + f"\n\nЛистинги отчёта: {refs}.\n\nФайлы проекта:\n{files}")
+    out = llm.json([{"role": "system", "content": SHOT_FIX_SYSTEM}, {"role": "user", "content": user}], ShotFixOut,
+                   max_tokens=PLAN_MAX_TOKENS)
+    by_path = {f.path: f for f in plan.files}
+    for f in out.files:
+        if plan_rules._build_file_problem(f) is None:  # go.mod, csproj и т.п. всё равно пишет ForLabs
+            by_path[f.path] = f
+    refs = {(r.section, r.block): r for r in plan.listings}
+    for r in out.listings:
+        refs[(r.section, r.block)] = r
+    # сценарий меняется только у рисунков, которые ForLabs снимает сам, и остаётся таким: «сними сам» — не починка
+    new = {(s.section, s.block): s for s in out.shots if s.mode in ("window", "console", "browser")}
+    shots = [new.get((s.section, s.block), s) if s.mode in ("window", "console", "browser") else s
+             for s in plan.shots]
+    fixed = plan.model_copy(update={"files": list(by_path.values()), "listings": list(refs.values()), "shots": shots})
+    return _quiet_console(_trusted_expects(_tidy(fixed), st)) if st is not None else fixed
+
+
 def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None) -> LabState:
-    """Сборка (с исправлениями, если есть модель) → листинги → копия в папку сдачи → снимки. Меняет st."""
+    """Сборка (с исправлениями, если есть модель) → листинги → копия в папку сдачи → снимки. Снимок не прошёл из-за
+    сценария — модель чинит программу или шаги, и всё повторяется (до MAX_SHOT_FIXES кругов). Меняет st."""
 
     emit = emit or (lambda text, kind="info": None)
     lab = pipe.lab_dir(st)
@@ -447,140 +535,200 @@ def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None) 
     tools = languages.detect()
     info.missing = languages.missing(plan, tools)
     work = pdir / "src"
-    result = None
-    shutil.rmtree(work, ignore_errors=True)
-    languages.materialize(plan, work, tools)
-    # опасный код не собирается вовсе: сборка и проверка синтаксиса — тоже запуск чужих инструментов над ним.
-    # Сеть — не опасность, если программа работает в песочнице: файлы пользователя ей закрыты, отправить нечего
-    info.blocked, network = _blocked(pipe, plan)
-    if not info.missing and not info.blocked:
-        emit("Собираю программу")
-        result = languages.build(work, plan, tools)
-        while not result.ok and llm is not None and info.fixes < MAX_FIXES:
-            info.fixes += 1
-            emit(f"Исправляю ошибки сборки ({info.fixes} из {MAX_FIXES})")
-            fixed = _with_materials(fix_project(plan, result.log, llm), st)
-            if validate(fixed):
-                break
-            plan = fixed
-            shutil.rmtree(work, ignore_errors=True)
-            languages.materialize(plan, work, tools)
-            info.blocked, network = _blocked(pipe, plan)  # исправление тоже проверяется до сборки
-            if info.blocked:
-                break
-            result = languages.build(work, plan, tools)
-        info.built = bool(result.ok) and not info.blocked
-        if not result.ok:
-            info.note = "Программу не собрал: ошибки остались. Проект в папке сдачи, снимки сделай сам."
-    if info.blocked:
-        info.note = f"Сам не собирал и не запускал: {info.blocked[0]}"
-    (pdir / "plan.json").write_text(plan.model_dump_json(indent=1), encoding="utf-8")
-
-    # листинги отчёта — как в коде проекта
-    refs = {(r.section, r.block): r for r in plan.listings}
-    for n, bi, b in _blocks(st):
-        r = refs.get((n, bi))
-        if not isinstance(b, Listing) or r is None:
-            continue
-        code = r.code.rstrip() if r.code.strip() else b.code
-        f = plan.file(r.file)
-        got = listing_in_file(code, f.content) if f is not None else None
-        # задание дополнило код или для сборки добавлены импорты, а модель листинг не вернула — берём из файла
-        if got and (_squash(code) not in _squash(f.content) or
-                    (_squash(got) != _squash(code) and _squash(got).endswith(_squash(code)))):
-            code = got
-        b.code = code
-
-    # копия проекта в папку сдачи — до снимков: на снимках пути из неё, как при запуске самим студентом
-    hand_in = work
-    try:
-        hand_in, locked = _copy_to_hand_in(pipe, st, plan, work)
-        info.folder = str(hand_in)
-        if locked:
-            emit("Не обновил файлы проекта, открытые в другой программе: " + ", ".join(locked[:5])
-                 + ". Закрой их и нажми «Пересобрать».", "warn")
-    except OSError as e:
-        emit(f"Проект не скопировался в папку сдачи ({e})", "warn")
-
-    # снимки
-    shots = {(s.section, s.block): s for s in plan.shots}
     shooter = pipe.shooter
     if shooter is None and sys.platform == "win32":
         from forlabs.runner.shots import WindowsShooter
 
         shooter = WindowsShooter()
-    spec = None
-    db, db_error = None, None  # свой сервер MySQL: поднимается к первому снимку, гасится после последнего
-    try:
-        for n, bi, b in list(_blocks(st)):
-            if not isinstance(b, Figure) or b.image_path:
-                continue
-            b.need_tool = None
-            shot = shots.get((n, bi))
-            if shot is not None and shot.mode == "app":  # окно среды разработки и т.п. — агент, по кнопке
-                from forlabs.agent import apps as agent_apps
-                from forlabs.core.models import AppTask
-                from forlabs.pipeline import appshots
 
-                project = hand_in.name if hand_in != work else ""
-                files = list(shot.open)
-                if shot.app == "visualstudio":  # файл проекта создаёт ForLabs — модель его не знает
-                    files = [f.name for f in sorted(hand_in.glob("*")) if f.suffix in (".sln", ".slnx", ".csproj",
-                                                                                       ".vcxproj")][:1] + files
-                opens = [f"{project}/{f}" if project else f for f in files]
-                b.app_task = AppTask(app=shot.app, goal=shot.goal, shot=shot.expect, open=opens)
-                b.auto_note = appshots.note_for(b, agent_apps.installed(getattr(pipe, "app_paths", {}))
-                                                if sys.platform == "win32" else {})
+    def build(candidate: ProjectPlan, fix_builds: bool):
+        """Проект в папку work и сборка. → (план после исправлений сборки, итог сборки, почему нельзя запускать,
+        нужна ли сеть). Опасный код не собирается вовсе: сборка и проверка синтаксиса — тоже запуск чужих
+        инструментов над ним. Сеть — не опасность, если программа работает в песочнице."""
+        shutil.rmtree(work, ignore_errors=True)
+        languages.materialize(candidate, work, tools)
+        blocked, net = _blocked(pipe, candidate)
+        res = None
+        if not info.missing and not blocked:
+            emit("Собираю программу")
+            res = languages.build(work, candidate, tools)
+            while not res.ok and fix_builds and llm is not None and info.fixes < MAX_FIXES:
+                info.fixes += 1
+                emit(f"Исправляю ошибки сборки ({info.fixes} из {MAX_FIXES})")
+                fixed = _with_materials(fix_project(candidate, res.log, llm), st)
+                if validate(fixed):
+                    break
+                candidate = fixed
+                shutil.rmtree(work, ignore_errors=True)
+                languages.materialize(candidate, work, tools)
+                blocked, net = _blocked(pipe, candidate)  # исправление тоже проверяется до сборки
+                if blocked:
+                    break
+                res = languages.build(work, candidate, tools)
+        return candidate, res, blocked, net
+
+    def settle() -> Path:
+        """Листинги отчёта — как в коде проекта; копия проекта в папку сдачи (до снимков: на снимках пути из неё,
+        как при запуске самим студентом)."""
+        (pdir / "plan.json").write_text(plan.model_dump_json(indent=1), encoding="utf-8")
+        refs = {(r.section, r.block): r for r in plan.listings}
+        for n, bi, b in _blocks(st):
+            r = refs.get((n, bi))
+            if not isinstance(b, Listing) or r is None:
                 continue
-            if shot is None or shot.mode == "manual":
-                b.auto_note = f"Этот снимок делаешь ты: {shot.reason}." if shot and shot.reason else None
-                continue
-            if info.missing:
-                b.need_tool = info.missing[0]
-                b.auto_note = (f"Для снимка нужна программа {_tool_title(info.missing[0])}: установи её и нажми "
-                               "«Повторить».")
-                continue
-            if info.blocked:
-                b.auto_note = f"Сам не запускал: {info.blocked[0]}"
-                continue
-            if not info.built:
-                b.auto_note = "Программа не собралась, снимок сделай сам."
-                continue
-            if shooter is None:
-                b.auto_note = "Снимки окон ForLabs делает только в Windows."
-                continue
-            if spec is None:
-                spec = languages.run_spec(plan, result.artifact if result else None, work, tools)
-            if plan.language == "mysql":
-                if db is None and db_error is None:
-                    emit("Запускаю отдельный сервер MySQL для снимков")
-                    try:
-                        db = start_mysql(tools["mysql"].path)
-                        spec = dataclasses.replace(spec, cmd=db.client())
-                    except Exception as e:  # noqa: BLE001 — сервер не поднялся: снимки студенту, отчёт собирается
-                        db_error = str(e).rstrip(".") or "сервер MySQL не запустился"
-                if db_error:
-                    b.auto_note = f"Сам не снял: {db_error}."
+            code = r.code.rstrip() if r.code.strip() else b.code
+            f = plan.file(r.file)
+            got = listing_in_file(code, f.content) if f is not None else None
+            # задание дополнило код или для сборки добавлены импорты, а модель листинг не вернула — берём из файла
+            if got and (_squash(code) not in _squash(f.content) or
+                        (_squash(got) != _squash(code) and _squash(got).endswith(_squash(code)))):
+                code = got
+            b.code = code
+        folder = work
+        try:
+            folder, locked = _copy_to_hand_in(pipe, st, plan, work)
+            info.folder = str(folder)
+            if locked:
+                emit("Не обновил файлы проекта, открытые в другой программе: " + ", ".join(locked[:5])
+                     + ". Закрой их и нажми «Пересобрать».", "warn")
+        except OSError as e:
+            emit(f"Проект не скопировался в папку сдачи ({e})", "warn")
+        return folder
+
+    mine: set[tuple[int, int]] = set()  # рисунки, снятые в этом запуске (после правки программы снимаются заново)
+    kept: dict[tuple[int, int], str] = {}  # их прежние снимки: вернутся, если пересъёмка не выйдет
+
+    def shoot_all(hand_in: Path) -> list[ShotFailure]:
+        shots = {(s.section, s.block): s for s in plan.shots}
+        failures: list[ShotFailure] = []
+        spec = None
+        db, db_error = None, None  # свой сервер MySQL: поднимается к первому снимку, гасится после последнего
+        try:
+            for n, bi, b in list(_blocks(st)):
+                if not isinstance(b, Figure) or b.image_path:
                     continue
-            static = plan.language == "web"  # страница без сервера — из папки сдачи (адресная строка как у студента)
-            try:
-                target, shot = _target_and_shot(plan, spec, shot, work, hand_in, static)
-                target.network = network
-                target.loopback = plan.language == "mysql"  # консоль mysql идёт на свой сервер по localhost
-            except ValueError as e:
-                b.auto_note = f"Сам не снял: {e}."
-                continue
-            emit(f"Снимаю рисунок: {b.topic}")
-            rel = f"assets/shot_{n}_{bi}_{uuid.uuid4().hex[:6]}.png"
-            res = shooter.shoot(target, shot, lab / rel)
-            if res.ok:
-                b.image_path, b.auto_note = rel, None
-                pipe._sync(st, [rel])
-            else:
-                b.auto_note = f"Сам не снял: {res.reason}."
-    finally:
-        if db is not None:
-            db.stop()
+                b.need_tool = None
+                shot = shots.get((n, bi))
+                if shot is not None and shot.mode == "app":  # окно среды разработки и т.п. — агент, по кнопке
+                    from forlabs.agent import apps as agent_apps
+                    from forlabs.core.models import AppTask
+                    from forlabs.pipeline import appshots
+
+                    project = hand_in.name if hand_in != work else ""
+                    files = list(shot.open)
+                    if shot.app == "visualstudio":  # файл проекта создаёт ForLabs — модель его не знает
+                        files = [f.name for f in sorted(hand_in.glob("*"))
+                                 if f.suffix in (".sln", ".slnx", ".csproj", ".vcxproj")][:1] + files
+                    opens = [f"{project}/{f}" if project else f for f in files]
+                    b.app_task = AppTask(app=shot.app, goal=shot.goal, shot=shot.expect, open=opens)
+                    b.auto_note = appshots.note_for(b, agent_apps.installed(getattr(pipe, "app_paths", {}))
+                                                    if sys.platform == "win32" else {})
+                    continue
+                if shot is None or shot.mode == "manual":
+                    b.auto_note = f"Этот снимок делаешь ты: {shot.reason}." if shot and shot.reason else None
+                    continue
+                if info.missing:
+                    b.need_tool = info.missing[0]
+                    b.auto_note = (f"Для снимка нужна программа {_tool_title(info.missing[0])}: установи её и нажми "
+                                   "«Повторить».")
+                    continue
+                if info.blocked:
+                    b.auto_note = f"Сам не запускал: {info.blocked[0]}"
+                    continue
+                if not info.built:
+                    b.auto_note = "Программа не собралась, снимок сделай сам."
+                    continue
+                if shooter is None:
+                    b.auto_note = "Снимки окон ForLabs делает только в Windows."
+                    continue
+                if spec is None:
+                    spec = languages.run_spec(plan, result.artifact if result else None, work, tools)
+                if plan.language == "mysql":
+                    if db is None and db_error is None:
+                        emit("Запускаю отдельный сервер MySQL для снимков")
+                        try:
+                            db = start_mysql(tools["mysql"].path)
+                            spec = dataclasses.replace(spec, cmd=db.client())
+                        except Exception as e:  # noqa: BLE001 — сервер не поднялся: снимки студенту, отчёт собирается
+                            db_error = str(e).rstrip(".") or "сервер MySQL не запустился"
+                    if db_error:
+                        b.auto_note = f"Сам не снял: {db_error}."
+                        continue
+                static = plan.language == "web"  # страница без сервера — из папки сдачи (адрес как у студента)
+                try:
+                    target, shot = _target_and_shot(plan, spec, shot, work, hand_in, static)
+                    target.network = network
+                    target.loopback = plan.language == "mysql"  # консоль mysql идёт на свой сервер по localhost
+                except ValueError as e:
+                    b.auto_note = f"Сам не снял: {e}."
+                    continue
+                emit(f"Снимаю рисунок: {b.topic}")
+                rel = f"assets/shot_{n}_{bi}_{uuid.uuid4().hex[:6]}.png"
+                res = shooter.shoot(target, shot, lab / rel)
+                if res.ok:
+                    b.image_path, b.auto_note = rel, None
+                    mine.add((n, bi))
+                    kept.pop((n, bi), None)
+                    pipe._sync(st, [rel])
+                elif (n, bi) in kept:  # программа изменилась, а переснять не вышло: остаётся прежний снимок
+                    b.image_path, b.auto_note = kept.pop((n, bi)), None
+                else:
+                    b.auto_note = f"Сам не снял: {res.reason.rstrip('.')}."
+                    if getattr(res, "kind", ""):
+                        failures.append(ShotFailure(n, bi, b.topic, b.slot or "", shots[(n, bi)], res.reason,
+                                                    res.seen, getattr(res, "ui", "")))
+        finally:
+            if db is not None:
+                db.stop()
+        return failures
+
+    def restore_kept() -> None:
+        for n, bi, b in _blocks(st):
+            if isinstance(b, Figure) and not b.image_path and (n, bi) in kept:
+                b.image_path, b.auto_note = kept.pop((n, bi)), None
+
+    plan, result, info.blocked, network = build(plan, fix_builds=True)
+    while True:
+        info.built = bool(result is not None and result.ok) and not info.blocked
+        if result is not None and not result.ok:
+            info.note = "Программу не собрал: ошибки остались. Проект в папке сдачи, снимки сделай сам."
+        if info.blocked:
+            info.note = f"Сам не собирал и не запускал: {info.blocked[0]}"
+        try:
+            failures = shoot_all(settle())
+        finally:
+            restore_kept()
+        if not failures or llm is None or info.shot_fixes >= MAX_SHOT_FIXES:
+            break
+        info.shot_fixes += 1
+        emit(f"Снимок не получился ({failures[0].reason.rstrip('.')}) — исправляю ({info.shot_fixes} из "
+             f"{MAX_SHOT_FIXES})")
+        try:
+            fixed = _with_materials(fix_shots(plan, failures, llm, st), st)
+        except Exception as e:  # noqa: BLE001 — нет связи, лимит, кривой ответ: рисунок остаётся студенту с причиной
+            emit(f"Исправить не получилось ({getattr(e, 'message_ru', None) or e})", "warn")
+            break
+        if fixed == plan or validate(fixed):
+            break
+        if fixed.files != plan.files:
+            # программа меняется: сначала проверяется, что исправленная собирается и не опасна; если нет —
+            # возвращается прежняя, рабочая
+            before = (plan, result, network)
+            cand, cand_result, cand_blocked, cand_network = build(fixed, fix_builds=False)
+            if cand_blocked or cand_result is None or not cand_result.ok:
+                emit("Исправление не собралось — оставляю прежнюю программу", "warn")
+                plan, _, network = before
+                plan, result, info.blocked, network = build(plan, fix_builds=False)
+                info.built = bool(result is not None and result.ok) and not info.blocked
+                settle()
+                break
+            plan, result, network = cand, cand_result, cand_network
+            for n, bi, b in _blocks(st):  # снятое в этом запуске — заново, уже с исправленной программой
+                if isinstance(b, Figure) and (n, bi) in mine and b.image_path:
+                    kept[(n, bi)] = b.image_path
+                    b.image_path = None
+        else:
+            plan = fixed
     try:
         pipe._sync(st, ["project/plan.json"])
     except Exception:

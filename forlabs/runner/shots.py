@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Protocol
 
 from forlabs.core.fs import remove_tree
+from forlabs.runner.uia import UiaError
 
 EDGE_PATHS = [r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
               r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"]
@@ -46,6 +47,9 @@ class ShotResult:
     reason: str = ""  # почему снимка нет — студент увидит это в «Нужно от тебя»
     seen: str = ""  # текст, который был на экране (для проверки и отладки)
     sandbox: str = ""  # как работала программа: container (AppContainer), low (уровень Low), "" — без песочницы
+    kind: str = ""  # сбой сценария, который может исправить модель: ui — в окне нет элемента или пункта списка,
+    #                 expect — программа показала не то; "" — запуск, песочница, пустой снимок
+    ui: str = ""  # что было в окнах программы в момент сбоя: элементы с именами и текстом, пункты списков
 
 
 class Shooter(Protocol):
@@ -205,6 +209,24 @@ def _texts_with_timeout(hwnd: int, timeout: float = 8.0) -> str:
     return " | ".join(out)
 
 
+def _outline_with_timeout(hwnds: list[int], timeout: float = 10.0) -> str:
+    """Что в окнах программы (для модели, которая чинит сценарий), но не дольше timeout."""
+    from forlabs.runner import uia
+
+    out: list[str] = []
+
+    def go():
+        try:
+            out.append(uia.outline(hwnds))
+        except Exception:  # noqa: BLE001
+            pass
+
+    t = threading.Thread(target=go, daemon=True)
+    t.start()
+    t.join(timeout)
+    return out[0] if out else ""
+
+
 LAUNCH_PROBLEMS = ("окно программы не появилось", "окно консоли не появилось", "программа завершилась сразу",
                    "песочница:", "не получилось снять окно программы", "не получилось ввести данные в консоль")
 
@@ -253,11 +275,13 @@ class WindowsShooter:
                 self._in_container = True
                 try:
                     res = run(target, self._stage(target), shot, out)
+                except UiaError as e:
+                    res = ShotResult(False, reason=str(e), kind="ui")
                 except Exception as e:  # noqa: BLE001 — песочница не создалась: как раньше, уровень Low
                     res = ShotResult(False, reason=f"песочница: {type(e).__name__}: {e}")
                 finally:
                     self._in_container = False
-                if res.ok:
+                if res.ok or res.kind == "ui":  # в окне нет элемента или пункта: без песочницы окно то же самое
                     res.sandbox = "container"
                     return res
                 if target.network:  # без песочницы сетевая программа могла бы отправить файлы пользователя
@@ -272,6 +296,8 @@ class WindowsShooter:
             res = run(target, self._stage(target), shot, out)
             res.sandbox = "low" if self.low else ""
             return res
+        except UiaError as e:  # в окне нет элемента или пункта списка — причина обычными словами
+            return ShotResult(False, reason=str(e), kind="ui", sandbox="low" if self.low else "")
         except Exception as e:  # любой сбой — причиной для студента, а не падением этапа
             return ShotResult(False, reason=f"не получилось снять окно программы ({type(e).__name__}: {e})")
 
@@ -401,7 +427,7 @@ class WindowsShooter:
                 img.save(out.with_name(out.stem + ".fail.png"))  # для разбора: что было на экране
                 why = read.get("error") or (seen.strip().splitlines() or ["пусто"])[-1][:120]
                 return ShotResult(False, reason=f"программа вывела не то, что ожидалось («{expect}»; на экране: {why})",
-                                  seen=seen)
+                                  seen=seen, kind="expect")
             if winapi.blank(img):
                 return ShotResult(False, reason="снимок окна консоли получился пустым", seen=seen)
             out.parent.mkdir(parents=True, exist_ok=True)
@@ -425,32 +451,49 @@ class WindowsShooter:
                 return ShotResult(False, reason="окно программы не появилось" +
                                   (f" (программа завершилась с кодом {code})" if code is not None else ""))
             time.sleep(1.0)
-            before = {x.hwnd for x in winapi.windows_of(winapi.process_tree({app.pid}), owned=True)}
+            order: list[int] = []  # окна программы в порядке появления
+
+            def wins() -> list[int]:
+                """Окна программы, новые — первыми: шаг после «открыть вторую форму» идёт уже в неё."""
+                now = [x.hwnd for x in winapi.windows_of(winapi.process_tree({app.pid}), owned=True)]
+                order.extend(h for h in now if h not in order)
+                return [h for h in reversed(order) if h in now] or [w.hwnd]
+
+            before = set(wins())
             ui_steps = []
-            for step in _get(shot, "steps", None) or []:
-                action = _get(step, "action")
-                target_name, value = _get(step, "target") or "", _get(step, "value") or ""
-                if action in ("set", "select", "click", "check", "uncheck", "wait"):
-                    ui_steps.append({"action": action, "target": target_name, "value": value})
-                    continue
+            try:
+                for step in _get(shot, "steps", None) or []:
+                    action = _get(step, "action")
+                    target_name, value = _get(step, "target") or "", _get(step, "value") or ""
+                    if action in ("set", "select", "click", "check", "uncheck", "wait"):
+                        ui_steps.append({"action": action, "target": target_name, "value": value})
+                        continue
+                    if ui_steps:
+                        uia.perform(wins, ui_steps)
+                        ui_steps = []
+                    if action == "type":
+                        winapi.type_text(wins()[0], value)
+                    elif action == "key":
+                        winapi.press(wins()[0], value)
                 if ui_steps:
-                    uia.perform(w.hwnd, ui_steps)
-                    ui_steps = []
-                if action == "type":
-                    winapi.type_text(w.hwnd, value)
-                elif action == "key":
-                    winapi.press(w.hwnd, value)
-            if ui_steps:
-                uia.perform(w.hwnd, ui_steps)
+                    uia.perform(wins, ui_steps)
+            except uia.UiaError as e:  # в окне нет элемента или пункта: модели — причина и то, что в окне есть
+                return ShotResult(False, reason=str(e), kind="ui", ui=_outline_with_timeout(wins()))
             time.sleep(0.8)
-            wins = winapi.windows_of(winapi.process_tree({app.pid}), owned=True)
-            fresh = [x for x in wins if x.hwnd not in before]  # MessageBox или новое окно после нажатия
+            fresh = [h for h in wins() if h not in before]  # MessageBox или новое окно после нажатия, новые — первыми
             capture = _get(shot, "capture") or ("last" if fresh else "main")
-            hwnd = fresh[-1].hwnd if capture == "last" and fresh else w.hwnd
-            seen = " | ".join(winapi.child_texts(hwnd)) if fresh and hwnd != w.hwnd else _texts_with_timeout(hwnd)
+            hwnd = fresh[0] if capture == "last" and fresh else w.hwnd
             expect = _get(shot, "expect") or ""
-            if expect and seen and not shown(expect, seen, typed_text(shot)):
-                return ShotResult(False, reason=f"в окне нет ожидаемого «{expect}»", seen=seen)
+            typed = typed_text(shot)
+            if fresh and hwnd != w.hwnd:
+                seen = " | ".join(winapi.child_texts(hwnd))  # окно сообщения: быстро и без UIA
+                if expect and not shown(expect, seen, typed):  # вторая форма (WPF — без дочерних окон): через UIA
+                    seen = " | ".join(x for x in (seen, _texts_with_timeout(hwnd)) if x)
+            else:
+                seen = _texts_with_timeout(hwnd)
+            if expect and seen and not shown(expect, seen, typed):
+                return ShotResult(False, reason=f"в окне нет ожидаемого «{expect}»", seen=seen, kind="expect",
+                                  ui=_outline_with_timeout(wins()))
             img = winapi.capture(hwnd)
             if winapi.blank(img):
                 return ShotResult(False, reason="снимок окна получился пустым", seen=seen)
@@ -514,7 +557,8 @@ class WindowsShooter:
             seen = _texts_with_timeout(w.hwnd) if (steps or _get(shot, "expect")) else w.title
             expect = _get(shot, "expect") or ""
             if expect and seen and not shown(expect, seen, typed_text(shot)):
-                return ShotResult(False, reason=f"на странице нет ожидаемого «{expect}»", seen=seen)
+                return ShotResult(False, reason=f"на странице нет ожидаемого «{expect}»", seen=seen[-4000:],
+                                  kind="expect")
             img = winapi.capture(w.hwnd)
             if winapi.blank(img):
                 return ShotResult(False, reason="снимок окна браузера получился пустым")
