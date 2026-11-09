@@ -5,18 +5,25 @@ from pathlib import Path
 from forlabs.runner import appcontainer as ac
 
 
-def test_tool_root_is_install_folder():
-    assert ac.tool_root("/opt/jdk-21/bin/javac") == Path("/opt/jdk-21")
-    assert ac.tool_root("/home/u/Python312/python.exe") == Path("/home/u/Python312")
+def test_tool_root_is_install_folder(tmp_path):
+    jdk = tmp_path / "jdk-21"
+    (jdk / "bin").mkdir(parents=True)
+    py = tmp_path / "Python312"
+    py.mkdir()
+    assert ac.tool_root(jdk / "bin" / "javac.exe") == jdk.resolve()
+    assert ac.tool_root(py / "python.exe") == py.resolve()
 
 
-def test_program_files_and_windows_are_already_open_to_containers(monkeypatch):
-    monkeypatch.setenv("ProgramFiles", "/pf")
-    monkeypatch.setenv("SystemRoot", "/win")
-    assert ac.open_to_all_containers("/pf/nodejs")
-    assert ac.open_to_all_containers("/win/System32")
-    assert not ac.open_to_all_containers("/home/u/AppData/Local/Programs/Python")
-    assert not ac.open_to_all_containers("/pfx/evil")  # не «/pf» в начале имени
+def test_program_files_and_windows_are_already_open_to_containers(tmp_path, monkeypatch):
+    pf, win = tmp_path / "pf", tmp_path / "win"
+    monkeypatch.setenv("ProgramFiles", str(pf))
+    monkeypatch.setenv("SystemRoot", str(win))
+    monkeypatch.delenv("ProgramFiles(x86)", raising=False)
+    monkeypatch.delenv("ProgramW6432", raising=False)
+    assert ac.open_to_all_containers(pf / "nodejs")
+    assert ac.open_to_all_containers(win / "System32")
+    assert not ac.open_to_all_containers(tmp_path / "AppData" / "Local" / "Programs" / "Python")
+    assert not ac.open_to_all_containers(tmp_path / "pfx" / "evil")  # не «pf» в начале имени
 
 
 def test_tool_dirs_skip_project_copy_and_add_tools(tmp_path, monkeypatch):
