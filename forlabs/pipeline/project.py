@@ -148,14 +148,16 @@ SPLIT_RULES = """Если в одном проекте оказалось нес
 definition of main, main redeclared, duplicate class) или приложению нужна отдельная библиотека классов, раздели
 проект на программы: верни "programs" — все программы плана, например [{"name": "ClassLibrary1", "kind": "library"},
 {"name": "CalculatorApp", "kind": "console", "entry": "CalculatorApp/Program.cs", "uses": ["ClassLibrary1"]}]. Файлы
-каждой программы лежат в папке с её именем: перенесённый файл верни в files с новым путём, а старый путь назови в
-"remove". В "shots" скажи, какую программу запускает каждый снимок: [{"section": 1, "block": 3,
-"program": "CalculatorApp"}]. Код листингов при переносе не меняй. library и uses — только C#: файлы .csproj со
-ссылками и общий .sln ForLabs напишет сам."""
+каждой программы лежат в папке с её именем: каждый файл перенеси в папку своей программы через "move":
+[{"from": "Calculator.cs", "to": "ClassLibrary1/Calculator.cs"}] — текст файла при этом повторять не нужно (если он
+ещё и меняется, верни его в files уже с новым путём). Перенести нужно все файлы проекта: вне папок программ файлов
+не остаётся. В "shots" скажи, какую программу запускает каждый снимок: [{"section": 1, "block": 3,
+"program": "CalculatorApp"}] — сценарий снимка при этом не повторяй. Код листингов при переносе не меняй. library и
+uses — только C#: файлы .csproj со ссылками и общий .sln ForLabs напишет сам."""
 
 FIX_SYSTEM = """Ты исправляешь проект лабораторной работы: сборка не прошла. Верни только JSON с изменёнными файлами
 целиком: {"files": [{"path": "…", "content": "…"}], "listings": [{"section": 1, "block": 2, "file": "…",
-"code": "новый текст листинга"}], "remove": [], "programs": [], "shots": []}. Исправляй причину ошибки, меняй как можно
+"code": "новый текст листинга"}], "remove": [], "move": [], "programs": [], "shots": []}. Исправляй причину ошибки, меняй как можно
 меньше, тем же стилем. Если изменился код, который входит в листинг отчёта (список ниже), верни этот листинг в
 listings — так, как он теперь стоит в файле. Файлы сборки (csproj, sln, go.mod, pom.xml, package.json, CMakeLists.txt)
 делает ForLabs — не пиши и не меняй их; "remove" — пути файлов проекта, которые нужно убрать. Правила те же: русские
@@ -191,7 +193,7 @@ REPAIR_SYSTEM = """Ты чинишь проект лабораторной ра�
 меньше и тем же стилем, то, о чём не просили, не трогай. Если изменился код, который входит в листинг отчёта (список
 ниже), верни этот листинг в listings — так, как он теперь стоит в файле. Ответ — только JSON: {"files": [{"path": "…",
 "content": "файл целиком"}], "listings": [{"section": 1, "block": 2, "file": "…", "code": "…"}], "remove": [],
-"programs": [], "shots": []} — только изменённые файлы. Файлы сборки (csproj, sln, go.mod, pom.xml, package.json,
+"move": [], "programs": [], "shots": []} — только изменённые файлы. Файлы сборки (csproj, sln, go.mod, pom.xml, package.json,
 CMakeLists.txt) делает ForLabs — не пиши их; "remove" — пути файлов проекта, которые нужно убрать. Правила те же:
 русские надписи, без служебных пометок, без работы с файлами вне папки программы и процессами; в интернет — только
 если этого требует задание.
@@ -217,18 +219,36 @@ NUMBER = re.compile(r"-?\d+(?:[.,]\d+)?")
 NAME_BAD = re.compile(r'[\\/:<>"|?*«»\x00-\x1f]+')
 
 
+class FileMove(BaseModel):
+    """Перенос файла проекта в папку программы: текст остаётся прежним."""
+    model_config = {"populate_by_name": True}
+    src: str = Field(alias="from")
+    to: str
+
+    @field_validator("src", "to", mode="before")
+    @classmethod
+    def _path(cls, v):
+        return plan_rules.norm_path(v)
+
+
 class FixOut(BaseModel):
     files: list[ProjectFile] = Field(default_factory=list)
     listings: list[ListingRef] = Field(default_factory=list)
-    remove: list[str] = Field(default_factory=list)  # пути файлов, которых в проекте больше нет (перенос, слияние)
+    remove: list[str] = Field(default_factory=list)  # пути файлов, которых в проекте больше нет
+    move: list[FileMove] = Field(default_factory=list)  # переносы файлов без изменения текста
     programs: list[ProgramPlan] = Field(default_factory=list)  # проект разделён на программы: все программы плана
     entry: str = ""  # новый главный файл (если прежний переименован)
     shots: list[ShotPlan] = Field(default_factory=list)
 
-    @field_validator("files", "listings", "remove", "programs", "shots", mode="before")
+    @field_validator("files", "listings", "remove", "move", "programs", "shots", mode="before")
     @classmethod
     def _lists(cls, v):
         return v if isinstance(v, list) else []
+
+    @field_validator("move", mode="before")
+    @classmethod
+    def _moves(cls, v):
+        return [x for x in v if isinstance(x, dict) and x.get("from") and x.get("to")]
 
     @field_validator("entry", mode="before")
     @classmethod
@@ -467,28 +487,66 @@ AUTO_MODES = ("window", "console", "browser")  # снимки, которые Fo
 
 
 def _apply_fix(plan: ProjectPlan, out: FixOut, scenarios: bool) -> ProjectPlan:
-    """Ответ модели на исправление — в план: изменённые и убранные файлы, листинги, деление на программы и то, какую
-    программу запускает снимок. scenarios — можно менять и сами сценарии снимков (исправление после снимка)."""
+    """Ответ модели на исправление — в план: изменённые, перенесённые и убранные файлы, листинги, деление на
+    программы и то, какую программу запускает снимок. scenarios — можно менять и сами сценарии снимков (исправление
+    после снимка). Модель экономит слова, поэтому перенос понимается и без повторной отправки текста файла."""
     by_path = {f.path: f for f in plan.files}
-    gone = {plan_rules.norm_path(x).lower() for x in out.remove}
-    moved: dict[str, list[str]] = {}  # имя убранного файла → куда он переехал
+    where: dict[str, str] = {}  # прежний путь (в нижнем регистре) → новый: по нему переезжают листинги
+
+    def find(path: str) -> str | None:
+        return next((x for x in by_path if x.lower() == path.lower()), None)
+
+    def move(src: str, dst: str) -> None:
+        cur = find(src)
+        ok = (cur is not None and plan_rules._path_problem(dst) is None and find(dst) is None
+              and plan_rules._build_file_problem(ProjectFile(path=dst)) is None
+              and Path(dst).suffix.lower() == Path(cur).suffix.lower())
+        if ok:
+            by_path[dst] = ProjectFile(path=dst, content=by_path.pop(cur).content)
+            where[cur.lower()] = dst
+
+    for m in out.move:
+        move(m.src, m.to)
+    fresh: dict[str, list[str]] = {}  # имя файла → новые пути из ответа
     for f in out.files:
         if plan_rules._build_file_problem(f) is None:  # go.mod, csproj и т.п. всё равно пишет ForLabs
+            old = find(f.path)
+            if old is not None and old != f.path:
+                del by_path[old]
             by_path[f.path] = f
-            moved.setdefault(Path(f.path).name.lower(), []).append(f.path)
-    new_paths = {f.path.lower() for f in out.files}
-    for path in [x for x in by_path if x.lower() in gone and x.lower() not in new_paths]:
+            fresh.setdefault(Path(f.path).name.lower(), []).append(f.path)
+    new_paths = {f.path.lower() for f in out.files} | {v.lower() for v in where.values()}
+    for path in [x for x in by_path if x.lower() in {plan_rules.norm_path(r).lower() for r in out.remove}
+                 and x.lower() not in new_paths]:
         del by_path[path]
+        if len(fresh.get(Path(path).name.lower(), [])) == 1:  # убран и прислан заново в другом месте — тоже перенос
+            where[path.lower()] = fresh[Path(path).name.lower()][0]
+    programs = out.programs or plan.programs
+    folders = {p.name.lower(): p.name for p in programs}
+
+    def outside(path: str) -> bool:
+        return path.partition("/")[0].lower() not in folders or "/" not in path
+
     refs = {(r.section, r.block): r for r in plan.listings}
     for r in out.listings:
         refs[(r.section, r.block)] = r
+    if programs:
+        for r in refs.values():  # листинг назван по новому месту, а сам файл остался на старом: переносим файл
+            if find(r.file) is None and (src := find(Path(r.file).name)) is not None and outside(src):
+                move(src, r.file)
+        if plan.language == "csharp":  # файл остался вне программ: его место — программа с именем его namespace
+            for path in [x for x in by_path if outside(x) and x.lower().endswith(".cs")]:
+                m = re.search(r"^\s*namespace\s+([\w.]+)", by_path[path].content, re.M)
+                home = folders.get((m[1].split(".")[0] if m else "").lower())
+                if home:
+                    move(path, f"{home}/{Path(path).name}")
     listings = []
     for r in refs.values():
-        if r.file not in by_path:  # файл листинга переехал в папку программы: листинг — по новому пути
-            new = moved.get(Path(r.file).name.lower(), [])
-            if len(new) != 1:
+        if find(r.file) is None:  # файл листинга переехал: листинг — по новому пути
+            new = where.get(r.file.lower()) or next(iter(fresh.get(Path(r.file).name.lower(), [])[:1]), None)
+            if new is None or len(fresh.get(Path(r.file).name.lower(), [new])) > 1:
                 continue
-            r = r.model_copy(update={"file": new[0]})
+            r = r.model_copy(update={"file": new})
         listings.append(r)
     given = {(x.section, x.block): x for x in out.shots}
     shots = []
@@ -496,7 +554,9 @@ def _apply_fix(plan: ProjectPlan, out: FixOut, scenarios: bool) -> ProjectPlan:
         new = given.get((x.section, x.block))
         if new is None or x.mode not in AUTO_MODES:
             shots.append(x)
-        elif scenarios and new.mode in AUTO_MODES:  # сценарий целиком; «сними сам» — не починка
+            continue
+        whole = bool(new.steps or new.input or new.expect.strip() or new.url.strip())  # сценарий, а не одно имя
+        if scenarios and whole and new.mode in AUTO_MODES:  # «сними сам» — не починка
             shots.append(new if new.program.strip() else new.model_copy(update={"program": x.program}))
         else:
             shots.append(x.model_copy(update={"program": new.program}) if new.program.strip() else x)
@@ -507,6 +567,8 @@ def _apply_fix(plan: ProjectPlan, out: FixOut, scenarios: bool) -> ProjectPlan:
         data["programs"] = [x.model_dump() for x in out.programs]
     if out.entry and not data.get("programs"):
         data["entry"] = out.entry
+    elif not data.get("programs") and plan.entry.lower() in where:
+        data["entry"] = where[plan.entry.lower()]
     try:
         return _assign_programs(ProjectPlan.model_validate(data))
     except ValueError:
@@ -777,19 +839,7 @@ def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None, 
         """Листинги отчёта — как в коде проекта; копия проекта в папку сдачи (до снимков: на снимках пути из неё,
         как при запуске самим студентом)."""
         (pdir / "plan.json").write_text(plan.model_dump_json(indent=1), encoding="utf-8")
-        refs = {(r.section, r.block): r for r in plan.listings}
-        for n, bi, b in _blocks(st):
-            r = refs.get((n, bi))
-            if not isinstance(b, Listing) or r is None:
-                continue
-            code = r.code.rstrip() if r.code.strip() else b.code
-            f = plan.file(r.file)
-            got = listing_in_file(code, f.content) if f is not None else None
-            # задание дополнило код или для сборки добавлены импорты, а модель листинг не вернула — берём из файла
-            if got and (_squash(code) not in _squash(f.content) or
-                        (_squash(got) != _squash(code) and _squash(got).endswith(_squash(code)))):
-                code = got
-            b.code = code
+        sync_listings(st, plan)
         folder = work
         try:
             folder, locked = _copy_to_hand_in(pipe, st, plan, work)
@@ -990,7 +1040,9 @@ def _copy_to_hand_in(pipe, st: LabState, plan: ProjectPlan, work: Path) -> tuple
         before = json.loads(manifest.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         before = {}
-    old = set(before.get("files", [])) if before.get("folder") == str(out) else set()
+    same = before.get("folder") == str(out)
+    old = set(before.get("files", [])) if same else set()
+    sha = dict(before.get("sha") or {}) if same else {}  # что ForLabs записал: по нему видно правки студента
     out.mkdir(parents=True, exist_ok=True)
     locked: list[str] = []
     for rel in files:
@@ -1000,9 +1052,11 @@ def _copy_to_hand_in(pipe, st: LabState, plan: ProjectPlan, work: Path) -> tuple
         try:
             shutil.copy2(work / rel, tmp)
             os.replace(tmp, dst)
+            sha[rel] = text_sha((work / rel).read_bytes())
         except OSError:
             tmp.unlink(missing_ok=True)
             locked.append(rel)
+    sha = {rel: v for rel, v in sha.items() if rel in files}
     for rel in sorted(old - set(files)):  # свои прошлые файлы, которых в проекте больше нет
         try:
             (out / rel).unlink(missing_ok=True)
@@ -1012,8 +1066,86 @@ def _copy_to_hand_in(pipe, st: LabState, plan: ProjectPlan, work: Path) -> tuple
                 parent = parent.parent
         except OSError:
             locked.append(rel)
-    manifest.write_text(json.dumps({"folder": str(out), "files": files}, ensure_ascii=False), encoding="utf-8")
+    manifest.write_text(json.dumps({"folder": str(out), "files": files, "sha": sha}, ensure_ascii=False),
+                        encoding="utf-8")
     return out, locked
+
+
+def _plain(raw: bytes) -> str:
+    """Текст файла без метки кодировки и с одинаковыми концами строк: редактор пересохраняет файл по-своему."""
+    return raw.decode("utf-8-sig", "replace").replace("\r\n", "\n").replace("\r", "\n")
+
+
+def text_sha(raw: bytes) -> str:
+    import hashlib
+
+    return hashlib.sha1(_plain(raw).encode("utf-8")).hexdigest()
+
+
+def sync_listings(st: LabState, plan: ProjectPlan) -> None:
+    """Листинги отчёта — как в коде проекта: задание дополнило код, для сборки добавлены импорты, студент поправил
+    файл — листинг берётся из файла."""
+    refs = {(r.section, r.block): r for r in plan.listings}
+    for n, bi, b in _blocks(st):
+        r = refs.get((n, bi))
+        if not isinstance(b, Listing) or r is None:
+            continue
+        code = r.code.rstrip() if r.code.strip() else b.code
+        f = plan.file(r.file)
+        got = listing_in_file(code, f.content) if f is not None else None
+        if got and (_squash(code) not in _squash(f.content) or
+                    (_squash(got) != _squash(code) and _squash(got).endswith(_squash(code)))):
+            code = got
+        b.code = code
+
+
+def import_student_edits(pipe, st: LabState, emit=None) -> list[str]:
+    """Студент поправил файлы проекта у себя в папке (в Visual Studio, в редакторе): его текст становится текстом
+    проекта и листингов отчёта — пересборка его не затрёт, а чат правит уже его код. Правкой считается только то,
+    что отличается от записанного ForLabs в прошлый раз; новые файлы студента не берутся. → какие файлы взяты."""
+    pdir = pipe.lab_dir(st) / "project"
+    plan = load_plan(pipe, st)
+    try:
+        before = json.loads((pdir / "hand_in.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    sha, root = dict(before.get("sha") or {}), Path(before.get("folder") or "-")
+    if plan is None or not sha or not root.is_dir():
+        return []
+    mine: dict[str, str] = {}
+    for f in plan.files:
+        was = sha.get(f.path)
+        disk = root.joinpath(*f.path.split("/"))
+        try:
+            if not was or disk.is_symlink() or not disk.is_file() or disk.stat().st_size > plan_rules.MAX_FILE:
+                continue
+            raw = disk.read_bytes()
+        except OSError:
+            continue
+        if text_sha(raw) != was and _plain(raw) != _plain(f.content.encode("utf-8")):
+            mine[f.path] = _plain(raw)
+    if not mine:
+        return []
+    files = [ProjectFile(path=f.path, content=mine.get(f.path, f.content)) for f in plan.files]
+    # листинг, который модель когда-то вернула своим текстом, больше не указ: теперь он берётся из файла студента
+    listings = [r.model_copy(update={"code": ""}) if r.file in mine and _squash(r.code) not in _squash(mine[r.file])
+                else r for r in plan.listings]
+    new = plan.model_copy(update={"files": files, "listings": listings})
+    if validate(new):
+        return []
+    try:
+        (pdir / "plan.json").write_text(new.model_dump_json(indent=1), encoding="utf-8")
+        sha.update({path: text_sha(text.encode("utf-8")) for path, text in mine.items()})
+        (pdir / "hand_in.json").write_text(json.dumps(before | {"sha": sha}, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        return []
+    sync_listings(st, new)
+    if st.project is not None:
+        st.project.report_sha = report_sha(st)  # проект по-прежнему от этого отчёта: заново его составлять не нужно
+    st.docx_sha = None
+    if emit is not None:
+        emit("Взял твои правки из папки проекта: " + ", ".join(list(mine)[:6]))
+    return list(mine)
 
 
 def load_plan(pipe, st: LabState) -> ProjectPlan | None:

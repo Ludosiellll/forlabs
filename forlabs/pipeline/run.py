@@ -806,8 +806,13 @@ class Pipeline:
         try:
             if plan is not None and fix:
                 emit("Исправляю программу")
-                fixed = proj.repair_project(plan, fix, st.project.build_log if st.project else "", llm, st)
-                if problems := proj.validate(fixed):
+                log = st.project.build_log if st.project else ""
+                fixed = proj.repair_project(plan, fix, log, llm, st)
+                if problems := proj.validate(fixed):  # не сложилось в план: модель узнаёт почему и пробует ещё раз
+                    again = f"{fix}\nПрошлое исправление не принято: " + "; ".join(problems[:5])
+                    fixed = proj.repair_project(plan, again, log, llm, st)
+                    problems = proj.validate(fixed)
+                if problems:
                     emit("Исправление не принято: " + "; ".join(problems[:3]), "warn")
                 else:
                     plan = fixed
@@ -870,6 +875,8 @@ class Pipeline:
                 raise PipelineError("Проекта ещё нет — выполни лабу.")
             projects, self.projects = self.projects, True
             try:
+                # студент мог поправить код у себя в папке проекта: пересборка берёт его текст, а не затирает его
+                proj.import_student_edits(self, st, lambda t, kind="info": self._emit(st, t, kind, step="check"))
                 st = self._reproject(st, self._llm(st), retake=True)
             finally:
                 self.projects = projects
@@ -1068,6 +1075,14 @@ class Pipeline:
                                    images=rels)
             st.chat.append(user_msg)
             self._save(st)
+            from forlabs.pipeline import project as proj
+            from forlabs.pipeline.lookup import ProjectView
+
+            # правки студента в папке проекта — уже часть лабы: чат видит и правит его код, а не прежний
+            mine = (proj.import_student_edits(self, st, lambda t, kind="info": self._emit(st, t, kind, step="write"))
+                    if self.projects else [])
+            if mine:
+                self._save(st)
             backup_spec, backup_report = st.spec.model_copy(deep=True), st.report.model_copy(deep=True)
             vid = None
             try:
@@ -1081,9 +1096,6 @@ class Pipeline:
                     message = f"{message}\n\nНа приложенных фото:\n{user_msg.image_text}".strip()
                 self._emit(st, "Разбираю правку", step="write")
                 enrollment = self._enrollment(profile, st.subject_id)
-                from forlabs.pipeline import project as proj
-                from forlabs.pipeline.lookup import ProjectView
-
                 view = ProjectView(plan=proj.load_plan(self, st), st=st,
                                    folder=st.project.folder if st.project is not None else None)
                 plan = plan_edit(st, message, profile, subject, llm, self.rules, self._teacher_text(st), enrollment,
@@ -1119,6 +1131,9 @@ class Pipeline:
                             shots += "\nЛаба уже была сдана. Сдай заново, чтобы в папке сдачи был новый файл."
                     if vid is not None and not touched:
                         st.versions, vid = [v for v in st.versions if v.id != vid], None
+                    if mine:  # листинги отчёта теперь из его файлов: документ собирается заново
+                        touched = True
+                        shots += "\nВзял твои правки из папки проекта: " + ", ".join(mine[:6]) + "."
                     note = remember_rule()
                     reply = ChatMessage(id=uuid.uuid4().hex[:8], role="assistant",
                                         text=(plan.reply + shots + note).strip(), at=_now(), kind=plan.kind,

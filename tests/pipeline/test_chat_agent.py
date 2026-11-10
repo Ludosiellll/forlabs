@@ -51,7 +51,7 @@ def test_chat_is_told_it_can_look_and_fix(tmp_home, tmp_path):
     pipe, fake, st = broken_lab(tmp_home, tmp_path, [ANSWER])
     pipe.chat(st, "почему не собирается")
     system = fake.calls[-1][0]["content"]
-    assert '"look"' in system and '"project"' in system and "не объясняй" in system
+    assert '"look"' in system and '"project"' in system and "не объясняй" in system.lower()
 
 
 def test_chat_reads_a_project_file_before_answering(tmp_home, tmp_path):
@@ -181,3 +181,12 @@ def test_view_falls_back_to_the_plan_when_there_is_no_folder(tmp_path):
     plan = ProjectPlan.model_validate(PLAN)
     v = ProjectView(plan=plan, folder=tmp_path / "нет такой папки")
     assert 'float(input("Введите a: "))' in v.read("main.py") and v.files() == {"main.py": len(GOOD.encode())}
+
+
+def test_fix_that_does_not_fit_the_rules_is_asked_again_with_the_reason(tmp_home, tmp_path):
+    wrong = {"files": [{"path": "../main.py", "content": GOOD}]}  # путь вне проекта: такой план не годится
+    pipe, fake, st = broken_lab(tmp_home, tmp_path, [FIX_IT, wrong, REPAIRED], shooter=ScriptShooter(True))
+    st = pipe.chat(st, "исправь")
+    assert st.project.built and "Программу исправил" in st.chat[-1].text
+    again = said(fake.calls[-1])
+    assert "Прошлое исправление не принято" in again and "выводит за папку проекта" in again
