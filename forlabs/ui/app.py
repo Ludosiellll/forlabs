@@ -1191,6 +1191,18 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
                       word=word_com.available(), soffice=libreoffice.find_soffice(ctx.settings.soffice_path),
                       nav="settings", model_choices=MODEL_CHOICES)
 
+    @app.post("/fetch-dropped")
+    def fetch_dropped(url: str = Form("")):
+        """Картинку перетащили из браузера: вместо файла пришла ссылка. Скачиваем её сами (только из интернета)."""
+        from forlabs.pipeline import weblink
+
+        try:
+            data, mime = weblink.fetch_image(url.strip()[:2000])
+        except weblink.LinkError as e:
+            text = str(e)
+            return JSONResponse({"error": text[:1].upper() + text[1:] + "."}, status_code=400)
+        return Response(content=data, media_type=mime)
+
     @app.post("/pick")
     def pick_path(kind: str = Form("folder"), initial: str = Form("")):
         """«Выбрать…» у поля с путём: системное окно выбора папки или файла. Путь выбирает сам человек в окне."""

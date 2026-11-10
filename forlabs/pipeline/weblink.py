@@ -13,6 +13,10 @@ from pathlib import Path
 from urllib.parse import urljoin, urlsplit
 
 MAX_BYTES = 4 * 1024 * 1024
+MAX_IMAGE_BYTES = 15 * 1024 * 1024  # картинка, перетащенная из браузера
+IMAGE_MIME = {"PNG": "image/png", "JPEG": "image/jpeg", "GIF": "image/gif", "WEBP": "image/webp", "BMP": "image/bmp"}
+COPY_INSTEAD = ("нажми на картинке правой кнопкой → «Копировать изображение» и вставь её сюда через Ctrl+V, "
+                "или сохрани файл и перетащи его из папки")
 TIMEOUT = 25.0
 USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 "
               "Safari/537.36")
@@ -116,6 +120,63 @@ def html_text(html: str, base: str = "") -> tuple[str, str]:
     text = re.sub(r"\n(?: ?\| ?)+", "\n| ", text)
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
     return title, text
+
+
+def _public_host(host: str) -> bool:
+    """Имя сайта ведёт в интернет, а не на этот компьютер или в локальную сеть (проверка по адресам DNS)."""
+    import socket
+
+    try:
+        found = {info[4][0] for info in socket.getaddrinfo(host, None)}
+    except OSError:
+        return True  # имя не нашлось: запрос всё равно не уйдёт, причину скажет сама загрузка
+    return all(ipaddress.ip_address(a.split("%")[0]).is_global for a in found)
+
+
+def fetch_image(url: str, http=None) -> tuple[bytes, str]:
+    """Картинка по ссылке (её перетащили из браузера): (байты, тип). Только http/https из интернета, только
+    настоящая картинка и не больше MAX_IMAGE_BYTES. Ошибки — LinkError с причиной и тем, что сделать вместо."""
+    import io
+
+    import httpx
+
+    if not re.match(r"https?://", url.strip(), re.I):
+        raise LinkError("эту картинку сайт при перетаскивании не отдаёт: " + COPY_INSTEAD)
+    url = check_url(url)
+    if http is None and not _public_host(urlsplit(url).hostname or ""):
+        raise LinkError("ссылки на этот компьютер и локальную сеть ForLabs не скачивает")
+    client = http or httpx.Client(follow_redirects=True, timeout=httpx.Timeout(TIMEOUT, connect=10),
+                                  headers={"User-Agent": USER_AGENT, "Accept": "image/*,*/*;q=0.5"})
+    try:
+        with client.stream("GET", url) as r:
+            check_url(str(r.url))  # переадресация на локальный адрес — так же нельзя
+            if r.status_code >= 400:
+                raise LinkError(f"сайт не отдал картинку программе (код {r.status_code}): " + COPY_INSTEAD)
+            data = b""
+            for chunk in r.iter_bytes():
+                data += chunk
+                if len(data) > MAX_IMAGE_BYTES:
+                    raise LinkError(f"картинка слишком большая (больше {MAX_IMAGE_BYTES // (1024 * 1024)} МБ)")
+    except LinkError:
+        raise
+    except httpx.TimeoutException:
+        raise LinkError("сайт не ответил вовремя: " + COPY_INSTEAD) from None
+    except httpx.HTTPError:
+        raise LinkError("не удалось скачать картинку: " + COPY_INSTEAD) from None
+    finally:
+        if http is None:
+            client.close()
+    try:
+        from PIL import Image
+
+        with Image.open(io.BytesIO(data)) as img:
+            kind = img.format or ""
+            img.verify()
+    except Exception:  # noqa: BLE001 — страница, файл не того вида, битые данные
+        kind = ""
+    if kind not in IMAGE_MIME:
+        raise LinkError("по этой ссылке не картинка: " + COPY_INSTEAD)
+    return data, IMAGE_MIME[kind]
 
 
 def fetch(url: str, http=None, tesseract: str | None = None) -> tuple[str, str]:

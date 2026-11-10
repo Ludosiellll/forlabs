@@ -33,7 +33,7 @@ def test_settings_lists_tools_found_and_missing(web, make_mgr, tmp_home):
     mgr = make_mgr(web, detect=lambda tools_dir: {"python": TC(r"C:\Python313\python.exe", "Python 3.13.1")})
     page = local_client(mgr).get("/settings").text
     assert "Программы для лаб" in page and 'data-tools' in page
-    for name in (".NET SDK 8", "g++ (MinGW-w64)", "Python 3", "JDK 21 (Temurin)", "Node.js LTS", "Go", "PHP",
+    for name in (".NET SDK", "g++ (MinGW-w64)", "Python 3", "JDK 21 (Temurin)", "Node.js LTS", "Go", "PHP",
                  "MySQL Server 8.4", "Visual C++ (MSVC)", "Microsoft Edge"):
         assert name in page, name
     assert "Скачать и установить (≈80 МБ)" in page and "У меня есть ссылка" in page

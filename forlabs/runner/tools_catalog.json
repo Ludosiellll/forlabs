@@ -9,7 +9,7 @@
   "tools": [
     {
       "key": "dotnet",
-      "name": ".NET SDK 8",
+      "name": ".NET SDK",
       "for": "C#: консоль, WinForms, WPF",
       "kind": "portable",
       "size_mb": 290,

@@ -1,4 +1,67 @@
 // ForLabs: загрузка файлов, вставка скриншотов, живой журнал выполнения.
+
+// Что перетащили в окно. Из Проводника и из Telegram на компьютере приходят файлы. Из браузера (Telegram Web, любой
+// сайт) часто приходит не файл, а ссылка на картинку — тогда ForLabs скачивает её сам. done(файлы, почему не вышло).
+var ForLabsDrop = (function () {
+  var COPY = "Сайт не отдаёт эту картинку при перетаскивании. Нажми на ней правой кнопкой → «Копировать " +
+    "изображение» и вставь сюда через Ctrl+V. Или сохрани файл и перетащи его из папки.";
+  var EMPTY = "Здесь нечего взять: перетащи файл из папки или картинку.";
+  function named(type) {
+    var ext = ((type || "image/png").split("/")[1] || "png").replace("jpeg", "jpg").replace(/[^a-z0-9]/g, "");
+    return "картинка-" + Date.now() + "." + (ext || "png");
+  }
+  function has(dt, kind) { return !!dt && Array.prototype.indexOf.call(dt.types || [], kind) >= 0; }
+  // есть ли в перетащенном картинка или файл (а не просто выделенный текст)
+  function useful(dt) {
+    if (!dt) return false;
+    if ((dt.files && dt.files.length) || has(dt, "Files")) return true;
+    var html = "";
+    try { html = dt.getData("text/html") || ""; } catch (err) { html = ""; }
+    return /<img[\s>]/i.test(html);
+  }
+  // пока файл ещё несут над окном, содержимое прочитать нельзя — видно только, какого оно вида
+  function maybe(dt) { return has(dt, "Files") || has(dt, "text/html") || has(dt, "text/uri-list"); }
+  function take(dt, done) {
+    if (!dt) { done([], EMPTY); return; }
+    var files = Array.prototype.slice.call(dt.files || []);
+    if (files.length) { done(files, ""); return; }
+    var html = "", uri = "";
+    try {  // данные доступны только пока идёт само событие — читаем сразу
+      html = dt.getData("text/html") || "";
+      uri = dt.getData("text/uri-list") || dt.getData("text/plain") || "";
+    } catch (err) { html = ""; uri = ""; }
+    var m = /<img[^>]+src\s*=\s*["']?([^"'\s>]+)/i.exec(html);
+    var src = m ? m[1].replace(/&amp;/g, "&") : "";
+    if (!src) {
+      src = (uri.split(/\r?\n/).filter(function (l) { return l && l.charAt(0) !== "#"; })[0] || "").trim();
+    }
+    if (!src) { done([], EMPTY); return; }
+    if (/^data:image\//i.test(src)) {
+      fetch(src).then(function (r) { return r.blob(); })
+        .then(function (b) { done([new File([b], named(b.type), { type: b.type })], ""); })
+        .catch(function () { done([], COPY); });
+      return;
+    }
+    if (!/^https?:\/\//i.test(src)) { done([], COPY); return; }  // blob: и прочее чужому окну не прочитать
+    var body = new URLSearchParams();
+    body.append("url", src);
+    fetch("/fetch-dropped", { method: "POST", body: body }).then(function (r) {
+      if (!r.ok) return r.json().then(function (j) { done([], j.error || COPY); }, function () { done([], COPY); });
+      return r.blob().then(function (b) { done([new File([b], named(b.type), { type: b.type })], ""); });
+    }).catch(function () { done([], COPY); });
+  }
+  // промах мимо поля: без этого окно ушло бы со страницы на перетащенный файл. Текст в поле ввода бросать можно
+  function guard(e) {
+    var t = e.target;
+    var typing = t && t.closest && t.closest("input:not([type=file]), textarea, [contenteditable]");
+    var ours = e.type === "drop" ? useful(e.dataTransfer) : has(e.dataTransfer, "Files");
+    if (!typing || ours) e.preventDefault();
+  }
+  window.addEventListener("dragover", guard);
+  window.addEventListener("drop", guard);
+  return { take: take, useful: useful, maybe: maybe, COPY: COPY, EMPTY: EMPTY };
+})();
+
 (function () {
   // выбор файлов методички: список с крестиком у каждого файла и «Убрать все». Файлы из окна выбора и перетащенные
   // добавляются к уже выбранным; в поле формы список собирается заново через DataTransfer — уходит ровно то, что видно
@@ -96,10 +159,16 @@
     zone.addEventListener("dragover", function (e) { e.preventDefault(); zone.classList.add("over"); });
     zone.addEventListener("dragleave", function () { zone.classList.remove("over"); });
     zone.addEventListener("drop", function (e) {
-      e.preventDefault(); zone.classList.remove("over");
-      if (!e.dataTransfer || !e.dataTransfer.files.length) return;
-      if (editable) { add(e.dataTransfer.files); return; }
-      input.files = e.dataTransfer.files; files = slice(input.files); render();
+      e.preventDefault(); e.stopPropagation(); zone.classList.remove("over");
+      if (!editable) {  // старый движок: список файлов поля можно только подменить целиком
+        if (!e.dataTransfer || !e.dataTransfer.files.length) return;
+        input.files = e.dataTransfer.files; files = slice(input.files); render();
+        return;
+      }
+      ForLabsDrop.take(e.dataTransfer, function (got, why) {
+        if (got.length) { add(got); return; }
+        note.textContent = why; note.hidden = !why;  // не молчим: почему перетащенное не взялось
+      });
     });
     render();
   });
@@ -133,17 +202,33 @@
       })
       .catch(function () { info.textContent = "Нет связи с приложением"; slot.classList.remove("busy"); });
   }
+  function dropShot(slot, dt) {
+    var info = slot.querySelector(".i");
+    ForLabsDrop.take(dt, function (got, why) {
+      var f = got.filter(function (x) { return /^image\//.test(x.type) || /\.(png|jpe?g|webp|bmp|gif)$/i.test(x.name); })[0];
+      if (f) { upload(slot, f); return; }
+      if (info) info.textContent = got.length ? "Сюда нужна картинка: PNG или JPG. Этот файл не подошёл." : why;
+    });
+  }
   slots.forEach(function (slot) {
     slot.addEventListener("click", function (e) { if (e.target.tagName !== "INPUT") choose(slot); });
     slot.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); choose(slot); } });
     slot.addEventListener("dragover", function (e) { e.preventDefault(); choose(slot); });
     slot.addEventListener("drop", function (e) {
-      e.preventDefault();
-      var f = e.dataTransfer && e.dataTransfer.files[0];
-      if (f && /^image\//.test(f.type)) upload(slot, f);
+      e.preventDefault(); e.stopPropagation();
+      dropShot(slot, e.dataTransfer);
     });
     var input = slot.querySelector("[data-slot-file]");
     if (input) input.addEventListener("change", function () { if (input.files[0]) upload(slot, input.files[0]); });
+  });
+  // картинку бросили мимо поля: открыты «Скриншоты» — она идёт в выбранный рисунок, открыт чат — в сообщение
+  document.addEventListener("drop", function (e) {
+    if (e.defaultPrevented && e.target && e.target.closest && e.target.closest("[data-dropzone], [data-slot]")) return;
+    if (!ForLabsDrop.useful(e.dataTransfer)) return;
+    var shotsPanel = document.querySelector('[data-panel="shots"]');
+    var chatInput = document.getElementById("chat-images");
+    if (slots.length && shotsPanel && !shotsPanel.hidden) { e.preventDefault(); dropShot(active(), e.dataTransfer); return; }
+    if (chatInput && window.ForLabsPhotos) { e.preventDefault(); window.ForLabsPhotos.drop(chatInput, e.dataTransfer); }
   });
   document.addEventListener("paste", function (e) {
     if (!slots.length) return;
@@ -318,6 +403,28 @@
       if (input.form.requestSubmit) input.form.requestSubmit(); else input.form.submit();
     });
   });
+  function say(input, text) {
+    var out = document.querySelector('[data-images-picked="' + input.id + '"]');
+    if (out) out.textContent = text;
+  }
+  function attach(input, images) {  // добавить картинки к уже выбранным
+    var dt = new DataTransfer();
+    Array.prototype.forEach.call(input.files || [], function (f) { dt.items.add(f); });
+    images.forEach(function (f, i) {
+      dt.items.add(new File([f], "фото-" + Date.now() + "-" + i + ".png", { type: f.type }));
+    });
+    input.files = dt.files;
+    picked(input);
+  }
+  function dropPhotos(input, dt) {
+    if (input.disabled) return;
+    ForLabsDrop.take(dt, function (got, why) {
+      var images = got.filter(function (f) { return /^image\//.test(f.type); });
+      if (images.length) { attach(input, images); return; }
+      say(input, got.length ? "Сюда можно приложить только картинки. Другие файлы добавь в «Файлы к лабе»." : why);
+    });
+  }
+  window.ForLabsPhotos = { drop: dropPhotos };
   document.querySelectorAll("[data-paste-images]").forEach(function (area) {
     var input = document.getElementById(area.getAttribute("data-paste-images"));
     if (!input || typeof DataTransfer === "undefined") return;
@@ -326,13 +433,15 @@
       var images = Array.prototype.filter.call(items, function (f) { return /^image\//.test(f.type); });
       if (!images.length) return;
       e.preventDefault();
-      var dt = new DataTransfer();
-      Array.prototype.forEach.call(input.files || [], function (f) { dt.items.add(f); });
-      images.forEach(function (f, i) {
-        dt.items.add(new File([f], "фото-" + Date.now() + "-" + i + ".png", { type: f.type }));
-      });
-      input.files = dt.files;
-      picked(input);
+      attach(input, images);
+    });
+    // картинку можно и перетащить: на поле сообщения или на всю форму вокруг него
+    var zone = area.form || area;
+    zone.addEventListener("dragover", function (e) { if (ForLabsDrop.maybe(e.dataTransfer)) e.preventDefault(); });
+    zone.addEventListener("drop", function (e) {
+      if (!ForLabsDrop.useful(e.dataTransfer)) return;  // выделенный текст в поле — как обычно
+      e.preventDefault(); e.stopPropagation();
+      dropPhotos(input, e.dataTransfer);
     });
   });
 })();

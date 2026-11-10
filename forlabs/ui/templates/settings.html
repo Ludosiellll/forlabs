@@ -11,7 +11,7 @@
     <p class="small muted" data-my-balance="/settings/balance">Остаток на ключе: узнаю…</p>
   </section>
   {% endif %}
-  <form method="post" action="/settings">
+  <form id="settings-form" method="post" action="/settings">
     {% if show_mode %}
     <fieldset><legend>Режим работы</legend>
       <label class="radio"><input type="radio" name="mode" value="cloud" {{ 'checked' if s.mode == 'cloud' }}> Облако — вход по e-mail, ключ модели выдаёт администратор</label><br>
@@ -41,6 +41,7 @@
     </fieldset>
     {% endif %}
     {% if show_mode or show_model %}<div class="row"><button class="btn primary" type="submit">Сохранить</button></div>{% endif %}
+  </form>
 
   {% if lab_tools %}{% from "_tools.html" import tool_box %}
   {% set found = lab_tools|selectattr('found')|list|length %}
@@ -57,19 +58,18 @@
     <p class="small">Word: <b>{{ 'найден' if word else 'не найден' }}</b>{% if not word %} — номера страниц посчитает LibreOffice, а «Продолжение листинга» появится после пересборки на ПК с Word{% endif %}.
       LibreOffice: <b>{{ 'найден' if soffice else 'не найден' }}</b>.</p>
     <div class="field"><label for="soffice_path">Путь к LibreOffice, если ForLabs не нашёл его сам</label>
-      <div class="with-pick"><input id="soffice_path" name="soffice_path" type="text" value="{{ s.soffice_path or '' }}" placeholder="{{ soffice or 'C:\\Program Files\\LibreOffice\\program\\soffice.exe' }}">
+      <div class="with-pick"><input id="soffice_path" name="soffice_path" form="settings-form" type="text" value="{{ s.soffice_path or '' }}" placeholder="{{ soffice or 'C:\\Program Files\\LibreOffice\\program\\soffice.exe' }}">
         {% if ctx.pick %}<button type="button" class="btn small" data-pick="file" data-pick-for="soffice_path">Выбрать…</button>{% endif %}</div></div>
     <div class="field"><label for="tesseract_path">Путь к Tesseract (читает методички-фото)</label>
-      <div class="with-pick"><input id="tesseract_path" name="tesseract_path" type="text" value="{{ s.tesseract_path or '' }}" placeholder="C:\Program Files\Tesseract-OCR\tesseract.exe">
+      <div class="with-pick"><input id="tesseract_path" name="tesseract_path" form="settings-form" type="text" value="{{ s.tesseract_path or '' }}" placeholder="C:\Program Files\Tesseract-OCR\tesseract.exe">
         {% if ctx.pick %}<button type="button" class="btn small" data-pick="file" data-pick-for="tesseract_path">Выбрать…</button>{% endif %}</div></div>
     <div class="row wrap">
-      <button class="btn small primary" type="submit">Сохранить пути</button>
+      <button class="btn small primary" type="submit" form="settings-form">Сохранить пути</button>
       <button class="btn small" type="submit" form="check-form">Проверить связь с моделью</button>
       <button class="btn small" type="submit" form="tour-form">Пройти обучение заново</button>
       {% if ctx.cloud and user_email %}<button class="btn small link danger-link" type="submit" form="wipe-form" title="Для чужого компьютера: в облаке всё останется">Выйти и стереть копию с этого ПК</button>{% endif %}
     </div>
   </details>
-  </form>
   <form id="check-form" method="post" action="/settings/check" hidden></form>
   <form id="tour-form" method="post" action="/tour/restart" hidden></form>
   {% if ctx.cloud and user_email %}<form id="wipe-form" method="post" action="/logout" hidden onsubmit="return confirm('Выйти и стереть с этого компьютера копию своих лаб и профилей? В облаке всё останется.')"><input type="hidden" name="wipe" value="1"></form>{% endif %}
