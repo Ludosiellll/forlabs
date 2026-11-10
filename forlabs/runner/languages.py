@@ -192,12 +192,18 @@ def _candidates(key: str, env: Mapping[str, str], tdir: Path) -> list[tuple[str,
     return good
 
 
-def _probe(cmd: list[str], env: Mapping[str, str], timeout: float = 30) -> str | None:
-    """Вывод команды, если она отработала с кодом 0, иначе None."""
+PROBE_TIMEOUT = 30.0  # с на ответ инструмента о своей версии
+
+
+def _probe(cmd: list[str], env: Mapping[str, str]) -> str | None:
+    """Вывод команды, если она отработала с кодом 0, иначе None. Не ответила вовремя — TimeoutExpired: это не
+    «инструмента нет», а «машина занята», решает вызывающий."""
     full = {**os.environ, **env, **DOTNET_ENV}
     try:
-        r = subprocess.run(cmd, capture_output=True, stdin=subprocess.DEVNULL, timeout=timeout, env=full,
+        r = subprocess.run(cmd, capture_output=True, stdin=subprocess.DEVNULL, timeout=PROBE_TIMEOUT, env=full,
                            creationflags=NO_WINDOW if WINDOWS else 0)
+    except subprocess.TimeoutExpired:
+        raise
     except (OSError, subprocess.SubprocessError):
         return None
     return (r.stdout + r.stderr).decode("utf-8", "replace") if r.returncode == 0 else None
@@ -218,9 +224,16 @@ def _version(key: str, path: str, args: list[str], env: Mapping[str, str]) -> st
     return m[1] if m else ""
 
 
-def _find(key: str, env: Mapping[str, str], tdir: Path) -> Toolchain | None:
+def _find(key: str, env: Mapping[str, str], tdir: Path, slow: list[str] | None = None) -> Toolchain | None:
+    """Первый работающий инструмент. Кто не успел ответить, попадает в slow: его спросят ещё раз."""
     for path, args in _candidates(key, env, tdir):
-        if (ver := _version(key, path, args, env)) is not None:
+        try:
+            ver = _version(key, path, args, env)
+        except subprocess.TimeoutExpired:
+            if slow is not None:
+                slow.append(key)
+            continue
+        if ver is not None:
             return Toolchain(key, path, ver, args)
     return None
 
@@ -230,8 +243,11 @@ def _msvc(env: Mapping[str, str]) -> Toolchain | None:
     vswhere = windows_locations(env)["vswhere"][0]
     if not os.path.isfile(vswhere):
         return None
-    out = _probe([vswhere, "-utf8", "-latest", "-products", "*", "-requires",
-                  "Microsoft.VisualStudio.Component.VC.Tools.x86.x64", "-property", "installationPath"], env) or ""
+    try:
+        out = _probe([vswhere, "-utf8", "-latest", "-products", "*", "-requires",
+                      "Microsoft.VisualStudio.Component.VC.Tools.x86.x64", "-property", "installationPath"], env) or ""
+    except subprocess.TimeoutExpired:
+        return None
     inst = out.strip().splitlines()[0].strip() if out.strip() else ""
     if not inst:
         return None
@@ -248,8 +264,12 @@ def detect(env: Mapping[str, str] | None = None, tools_dir: Path | str | None = 
     mysql, edge. Свой Python ForLabs (собранная программа) не берётся никогда."""
     env = dict(os.environ if env is None else env)
     tdir = Path(tools_dir) if tools_dir is not None else default_tools_dir()
+    slow: list[str] = []
     with ThreadPoolExecutor(max_workers=len(PROBES)) as pool:
-        found = dict(zip(PROBES, pool.map(lambda k: _find(k, env, tdir), PROBES), strict=True))
+        found = dict(zip(PROBES, pool.map(lambda k: _find(k, env, tdir, slow), PROBES), strict=True))
+    for key in PROBES:  # все проверки стартуют разом; на холодном диске или под антивирусом часть не успевает
+        if found[key] is None and key in slow:
+            found[key] = _find(key, env, tdir)  # второй раз — по одному, файлы уже прочитаны с диска
     if WINDOWS:
         found["msvc"] = _msvc(env)
         edge = next((p for p in windows_locations(env)["edge"] if os.path.isfile(p)), None)
