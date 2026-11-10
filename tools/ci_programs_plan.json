@@ -1,0 +1,121 @@
+{
+ "language": "csharp",
+ "kind": "winforms",
+ "name": "Библиотека динамической компоновки",
+ "entry": "CalculatorApp/Program.cs",
+ "programs": [
+  {
+   "name": "ClassLibrary1",
+   "kind": "library",
+   "entry": "",
+   "uses": []
+  },
+  {
+   "name": "CalculatorApp",
+   "kind": "winforms",
+   "entry": "CalculatorApp/Program.cs",
+   "uses": [
+    "ClassLibrary1"
+   ]
+  },
+  {
+   "name": "LibraryTestApp",
+   "kind": "console",
+   "entry": "LibraryTestApp/Program.cs",
+   "uses": [
+    "ClassLibrary1"
+   ]
+  }
+ ],
+ "files": [
+  {
+   "path": "ClassLibrary1/Calculator.cs",
+   "content": "using System;\n\nnamespace ClassLibrary1\n{\n    public class Calculator\n    {\n        public event EventHandler<CalculationEventArgs> CalculationPerformed;\n\n        public static int Summ(int firstNumber, int secondNumber)\n        {\n            return firstNumber + secondNumber;\n        }\n\n        public static int Sub(int firstNumber, int secondNumber)\n        {\n            return firstNumber - secondNumber;\n        }\n\n        public static long Multiply(long x, long y)\n        {\n            return x * y;\n        }\n\n        public static double Div(double x, double y)\n        {\n            if (y == 0)\n            {\n                throw new DivideByZeroException(\"Деление на ноль\");\n            }\n            return x / y;\n        }\n\n        public void Report(string operation, double result)\n        {\n            CalculationPerformed?.Invoke(this, new CalculationEventArgs(operation, result));\n        }\n    }\n\n    public class CalculationEventArgs : EventArgs\n    {\n        public string Operation { get; }\n        public double Result { get; }\n\n        public CalculationEventArgs(string operation, double result)\n        {\n            Operation = operation;\n            Result = result;\n        }\n    }\n}\n"
+  },
+  {
+   "path": "ClassLibrary1/Condenser.cs",
+   "content": "using System;\n\nnamespace ClassLibrary1\n{\n    public class Condenser\n    {\n        public const double Epsilon0 = 8.85e-12;\n\n        public static double Capacity(double epsilon, double area, double distance)\n        {\n            if (distance <= 0)\n            {\n                throw new ArgumentException(\"Расстояние должно быть больше нуля\");\n            }\n            return epsilon * Epsilon0 * area / distance;\n        }\n    }\n}\n"
+  },
+  {
+   "path": "CalculatorApp/Program.cs",
+   "content": "using System;\nusing System.Windows.Forms;\n\nnamespace CalculatorApp\n{\n    internal static class Program\n    {\n        [STAThread]\n        static void Main()\n        {\n            Application.EnableVisualStyles();\n            Application.SetCompatibleTextRenderingDefault(false);\n            Application.Run(new Form1());\n        }\n    }\n}\n"
+  },
+  {
+   "path": "CalculatorApp/Form1.cs",
+   "content": "using System;\nusing System.Windows.Forms;\nusing ClassLibrary1;\n\nnamespace CalculatorApp\n{\n    public partial class Form1 : Form\n    {\n        private Calculator calculator = new Calculator();\n\n        public Form1()\n        {\n            InitializeComponent();\n            cmbOperation.Items.AddRange(new object[] { \"Сложение\", \"Вычитание\", \"Умножение\", \"Деление\" });\n            cmbOperation.SelectedIndex = 0;\n            calculator.CalculationPerformed += Calculator_CalculationPerformed;\n        }\n\n        private void Calculator_CalculationPerformed(object sender, CalculationEventArgs e)\n        {\n            lblStatus.Text = e.Operation + \": \" + e.Result;\n        }\n\n        private void btnCalc_Click(object sender, EventArgs e)\n        {\n            int a = int.Parse(txtFirst.Text);\n            int b = int.Parse(txtSecond.Text);\n            double result = 0;\n            switch (cmbOperation.SelectedItem.ToString())\n            {\n                case \"Сложение\":\n                    result = Calculator.Summ(a, b);\n                    break;\n                case \"Вычитание\":\n                    result = Calculator.Sub(a, b);\n                    break;\n                case \"Умножение\":\n                    result = Calculator.Multiply(a, b);\n                    break;\n                case \"Деление\":\n                    result = Calculator.Div(a, b);\n                    break;\n            }\n            lblResult.Text = \"Результат: \" + result;\n            calculator.Report(cmbOperation.SelectedItem.ToString(), result);\n        }\n    }\n}\n"
+  },
+  {
+   "path": "CalculatorApp/Form1.Designer.cs",
+   "content": "namespace CalculatorApp\n{\n    partial class Form1\n    {\n        private System.ComponentModel.IContainer components = null;\n        private System.Windows.Forms.Label lblFirst;\n        private System.Windows.Forms.TextBox txtFirst;\n        private System.Windows.Forms.Label lblSecond;\n        private System.Windows.Forms.TextBox txtSecond;\n        private System.Windows.Forms.Label lblOperation;\n        private System.Windows.Forms.ComboBox cmbOperation;\n        private System.Windows.Forms.Button btnCalc;\n        private System.Windows.Forms.Label lblResult;\n        private System.Windows.Forms.Label lblStatus;\n\n        protected override void Dispose(bool disposing)\n        {\n            if (disposing && (components != null))\n            {\n                components.Dispose();\n            }\n            base.Dispose(disposing);\n        }\n\n        private void InitializeComponent()\n        {\n            this.lblFirst = new System.Windows.Forms.Label();\n            this.txtFirst = new System.Windows.Forms.TextBox();\n            this.lblSecond = new System.Windows.Forms.Label();\n            this.txtSecond = new System.Windows.Forms.TextBox();\n            this.lblOperation = new System.Windows.Forms.Label();\n            this.cmbOperation = new System.Windows.Forms.ComboBox();\n            this.btnCalc = new System.Windows.Forms.Button();\n            this.lblResult = new System.Windows.Forms.Label();\n            this.lblStatus = new System.Windows.Forms.Label();\n            this.SuspendLayout();\n            // lblFirst\n            this.lblFirst.AutoSize = true;\n            this.lblFirst.Location = new System.Drawing.Point(20, 20);\n            this.lblFirst.Name = \"lblFirst\";\n            this.lblFirst.Text = \"Первое число:\";\n            // txtFirst\n            this.txtFirst.Location = new System.Drawing.Point(160, 17);\n            this.txtFirst.Name = \"txtFirst\";\n            this.txtFirst.Size = new System.Drawing.Size(120, 20);\n            // lblSecond\n            this.lblSecond.AutoSize = true;\n            this.lblSecond.Location = new System.Drawing.Point(20, 55);\n            this.lblSecond.Name = \"lblSecond\";\n            this.lblSecond.Text = \"Второе число:\";\n            // txtSecond\n            this.txtSecond.Location = new System.Drawing.Point(160, 52);\n            this.txtSecond.Name = \"txtSecond\";\n            this.txtSecond.Size = new System.Drawing.Size(120, 20);\n            // lblOperation\n            this.lblOperation.AutoSize = true;\n            this.lblOperation.Location = new System.Drawing.Point(20, 90);\n            this.lblOperation.Name = \"lblOperation\";\n            this.lblOperation.Text = \"Операция:\";\n            // cmbOperation\n            this.cmbOperation.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList;\n            this.cmbOperation.Location = new System.Drawing.Point(160, 87);\n            this.cmbOperation.Name = \"cmbOperation\";\n            this.cmbOperation.Size = new System.Drawing.Size(120, 21);\n            // btnCalc\n            this.btnCalc.Location = new System.Drawing.Point(160, 125);\n            this.btnCalc.Name = \"btnCalc\";\n            this.btnCalc.Size = new System.Drawing.Size(120, 30);\n            this.btnCalc.Text = \"Вычислить\";\n            this.btnCalc.UseVisualStyleBackColor = true;\n            this.btnCalc.Click += new System.EventHandler(this.btnCalc_Click);\n            // lblResult\n            this.lblResult.AutoSize = true;\n            this.lblResult.Location = new System.Drawing.Point(20, 175);\n            this.lblResult.Name = \"lblResult\";\n            this.lblResult.Text = \"Результат:\";\n            // lblStatus\n            this.lblStatus.AutoSize = true;\n            this.lblStatus.Location = new System.Drawing.Point(20, 205);\n            this.lblStatus.Name = \"lblStatus\";\n            this.lblStatus.Text = \"\";\n            // Form1\n            this.ClientSize = new System.Drawing.Size(320, 250);\n            this.Controls.Add(this.lblFirst);\n            this.Controls.Add(this.txtFirst);\n            this.Controls.Add(this.lblSecond);\n            this.Controls.Add(this.txtSecond);\n            this.Controls.Add(this.lblOperation);\n            this.Controls.Add(this.cmbOperation);\n            this.Controls.Add(this.btnCalc);\n            this.Controls.Add(this.lblResult);\n            this.Controls.Add(this.lblStatus);\n            this.Name = \"Form1\";\n            this.Text = \"Калькулятор\";\n            this.ResumeLayout(false);\n            this.PerformLayout();\n        }\n    }\n}\n"
+  },
+  {
+   "path": "LibraryTestApp/Program.cs",
+   "content": "using System;\nusing ClassLibrary1;\n\nnamespace LibraryTestApp\n{\n    internal class Program\n    {\n        static void Main(string[] args)\n        {\n            Console.Write(\"Диэлектрическая проницаемость: \");\n            double epsilon = double.Parse(Console.ReadLine());\n            Console.Write(\"Площадь пластин, м2: \");\n            double area = double.Parse(Console.ReadLine());\n            Console.Write(\"Расстояние между пластинами, м: \");\n            double distance = double.Parse(Console.ReadLine());\n            double c = Condenser.Capacity(epsilon, area, distance);\n            Console.WriteLine(\"Ёмкость конденсатора: \" + c.ToString(\"E3\") + \" Ф\");\n            Console.ReadKey();\n        }\n    }\n}\n"
+  }
+ ],
+ "listings": [
+  {
+   "section": 1,
+   "block": 3,
+   "file": "ClassLibrary1/Calculator.cs",
+   "code": ""
+  },
+  {
+   "section": 1,
+   "block": 5,
+   "file": "CalculatorApp/Form1.cs",
+   "code": ""
+  },
+  {
+   "section": 2,
+   "block": 2,
+   "file": "ClassLibrary1/Condenser.cs",
+   "code": ""
+  },
+  {
+   "section": 2,
+   "block": 4,
+   "file": "LibraryTestApp/Program.cs",
+   "code": ""
+  }
+ ],
+ "shots": [
+  {
+   "section": 1,
+   "block": 6,
+   "mode": "window",
+   "steps": [
+    {
+     "action": "set",
+     "target": "txtFirst",
+     "value": "12"
+    },
+    {
+     "action": "set",
+     "target": "txtSecond",
+     "value": "5"
+    },
+    {
+     "action": "select",
+     "target": "cmbOperation",
+     "value": "Сложение"
+    },
+    {
+     "action": "click",
+     "target": "btnCalc",
+     "value": ""
+    }
+   ],
+   "expect": "Результат:",
+   "program": "CalculatorApp"
+  },
+  {
+   "section": 2,
+   "block": 5,
+   "mode": "console",
+   "input": "2\n1\n1\n",
+   "expect": "Ёмкость конденсатора:",
+   "program": "LibraryTestApp"
+  }
+ ]
+}

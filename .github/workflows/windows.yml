@@ -87,6 +87,18 @@ jobs:
             if ($bad) { Write-Output ("::error title=окна программ::" + ($bad -join "%0A")) }
           }
           exit $code
+      - name: Несколько программ в лабе (библиотека, приложение с формой, консоль — один .sln, снимки каждой)
+        if: always()
+        shell: pwsh
+        run: |
+          python tools/ci_programs_probe.py
+          $code = $LASTEXITCODE
+          if (Test-Path build/probe/programs.json) {
+            $r = Get-Content build/probe/programs.json -Raw -Encoding utf8 | ConvertFrom-Json
+            $bad = $r.cases.PSObject.Properties | Where-Object { -not $_.Value.ok } | ForEach-Object { "$($_.Name): $($_.Value.error)" }
+            if ($bad) { Write-Output ("::error title=несколько программ::" + ($bad -join "%0A")) }
+          }
+          exit $code
       - name: Снимки окон при масштабе экрана 125 %, как на ноутбуках
         if: always()
         shell: pwsh
