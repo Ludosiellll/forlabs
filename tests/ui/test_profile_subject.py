@@ -93,3 +93,24 @@ def test_own_subject_without_a_name_is_not_silently_dropped(client):
                                             new_subject_teacher="С.С. Сидоров"), follow_redirects=True)
     assert "Впиши название своего предмета" in r.text
     assert set(all_subjects()) == before
+
+
+# ---------- список лаб: видно, что по лабе идёт работа ----------
+
+def test_lab_list_shows_work_in_progress_and_refreshes_itself(client, tmp_path):
+    from pathlib import Path
+
+    c, ctx = client
+    fixture = Path(__file__).parents[1] / "fixtures" / "methodology_psip_lr7.txt"
+    r = c.post("/labs/new", data={"profile_id": PID, "subject_id": "psip", "number": "", "text": ""},
+               files={"files": (fixture.name, fixture.read_bytes(), "text/plain")}, follow_redirects=False)
+    assert r.status_code == 303
+    quiet = c.get("/").text
+    assert "data-live-list" not in quiet  # работа закончена: страница не обновляет себя зря
+    lab = ctx.store.list_lab_summaries(PID, "psip")[0]
+    ctx.running.add(f"{PID}/psip/{lab.number}")
+    try:
+        page = c.get("/").text
+        assert "В работе" in page and "data-live-list" in page
+    finally:
+        ctx.running.discard(f"{PID}/psip/{lab.number}")

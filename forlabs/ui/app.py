@@ -378,8 +378,9 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
                 counts[sid] = len(ctx.store.list_lab_summaries(current.id, sid)) if sid != subject_id else len(labs)
             except Exception:
                 counts[sid] = 0
+        working = {l.number for l in labs if busy_lab(l.profile_id, l.subject_id, l.number)}
         return render(request, "home.html", profiles=profiles, current=current, subject_id=subject_id,
-                      enrolled=enrolled, labs=labs, counts=counts, nav="home")
+                      enrolled=enrolled, labs=labs, counts=counts, nav="home", working=working)
 
     # профили
     @app.get("/profiles", response_class=HTMLResponse)
