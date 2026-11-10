@@ -250,6 +250,41 @@ rl.question("Введите два числа: ", (line) => {
 </html>
 ''', "style.css": "body { font-family: Segoe UI, sans-serif; background: #f4efe6; margin: 40px; }\nh1 { color: #6b3e26; }\n"},
                      {"mode": "browser", "url": "index.html"}),
+    # наведение и прокрутка: шаги идут через порт отладки Edge; «Десерты» видны только при наведении,
+    # «Латте с корицей» — только после прокрутки (текст за экраном увиденным не считается)
+    "web_hover": plan("web", "web", "Меню", "index.html", {"index.html": '''<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Кофейня: меню</title>
+  <style>
+    body { font-family: Segoe UI, sans-serif; margin: 40px; }
+    nav li.drop ul { display: none; }
+    nav li.drop:hover ul { display: block; }
+    .spacer { height: 2400px; }
+  </style>
+</head>
+<body>
+  <nav><ul><li class="drop"><a href="#">Меню</a><ul><li>Десерты</li><li>Напитки</li></ul></li></ul></nav>
+  <h1>Кофейня «Зерно»</h1>
+  <div class="spacer"></div>
+  <section id="slider"><h2>Латте с корицей</h2></section>
+</body>
+</html>
+'''}, {"mode": "browser", "url": "index.html", "expect": "Десерты",
+       "steps": [{"action": "hover", "target": "Меню"}]}),
+    "web_scroll": plan("web", "web", "Слайдер", "index.html", {"index.html": '''<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="UTF-8"><title>Кофейня: слайдер</title>
+<style>body { font-family: Segoe UI, sans-serif; margin: 40px; } .spacer { height: 2400px; }</style></head>
+<body>
+  <h1>Кофейня «Зерно»</h1>
+  <div class="spacer"></div>
+  <section id="slider"><h2>Латте с корицей</h2><p>Слайд 1 из 3</p></section>
+</body>
+</html>
+'''}, {"mode": "browser", "url": "index.html", "expect": "Слайд 1 из 3",
+       "steps": [{"action": "scroll", "target": "id:slider"}]}),
     "php_console": plan("php", "console", "Сумма", "main.php", {"main.php": '''<?php
 echo "Введите два числа: ";
 [$a, $b] = array_map("intval", explode(" ", trim(fgets(STDIN))));

@@ -10,9 +10,10 @@ from pydantic import BaseModel, Field
 
 from forlabs.antiai.code import java_class_mismatch, scan_code
 from forlabs.antiai.similarity import scan_similarity
-from forlabs.antiai.text_ru import scan_paragraph_openings, scan_text
+from forlabs.antiai.text_ru import scan_paragraph_openings, scan_report_voice, scan_text
 from forlabs.core.models import (
     DashList,
+    Figure,
     Finding,
     LabSpec,
     Listing,
@@ -27,7 +28,7 @@ from forlabs.report.standard import check_standard
 
 # замечания, которые модель исправить не может (их делает код или пользователь)
 STRUCTURAL = {"header.missing", "header.date_format", "task.sequence", "task.title_mismatch", "qa.not_in_spec",
-              "conclusion.formula", "qa.missing", "qa.empty"}
+              "conclusion.formula", "qa.missing", "qa.empty", "text.check_screen"}
 _LOC = re.compile(r"Задание (\d+), блок (\d+)")
 
 
@@ -45,20 +46,40 @@ def report_text(doc: ReportDoc) -> str:
     return "\n".join(parts)
 
 
+# Методичка или преподаватель сами требуют комментарии в коде — тогда «слишком много комментариев» не ошибка
+_WANTS_COMMENTS = re.compile(r"прокомментир\w+|с\s+(?:подробными\s+)?комментариями|комментари\w+\s+(?:к\s+)?(?:кажд|все)\w*|"
+                             r"(?:сопровод|снабд|добав|укаж|напиш)\w+[^.\n]{0,60}комментари\w+|"
+                             r"кажд\w+\s+(?:строк\w+|запрос\w*|команд\w+|функци\w+|метод\w*)[^.\n]{0,40}комментари\w+",
+                             re.IGNORECASE)
+
+
+def wants_comments(spec: LabSpec) -> bool:
+    text = " ".join([spec.source_text or "", spec.wishes or "", spec.assignment or "", *(t.text for t in spec.tasks)])
+    return bool(_WANTS_COMMENTS.search(text))
+
+
 def check_all(doc: ReportDoc, spec: LabSpec, profile: Profile, others: dict[str, str]) -> list[Finding]:
     out = check_standard(doc, spec, profile.gender)
+    keep_comments = wants_comments(spec)
     paragraphs = []
     for s in doc.sections:
         for bi, b in enumerate(s.blocks, start=1):
             loc = f"Задание {s.n}, блок {bi}"
             if isinstance(b, Paragraph):
-                out += scan_text(b.text, loc)
+                out += scan_text(b.text, loc) + scan_report_voice(b.text, loc)
                 paragraphs.append((loc, b.text))
             elif isinstance(b, (DashList, NumberedList)):
                 for item in b.items:
-                    out += scan_text(item, loc)
+                    out += scan_text(item, loc) + scan_report_voice(item.lstrip("-–— ").lstrip("0123456789.) "), loc)
+            elif isinstance(b, Figure) and not b.image_path and (b.slot or "").lower().startswith("сверь перечень"):
+                out.append(Finding(
+                    stage="antiai", rule_id="text.check_screen", severity="warn", location=f"Задание {s.n}", text=b.topic,
+                    message="Перечень в тексте (пункты меню, кнопки, состав окна) составлен по памяти модели — "
+                            f"сверь его со своим экраном, когда будешь делать снимок «{b.topic}», и поправь текст "
+                            "в «Правках», если что-то не так"))
             elif isinstance(b, Listing):
-                out += scan_code(b.code, b.language, loc)
+                out += [f for f in scan_code(b.code, b.language, loc)
+                        if not (keep_comments and f.rule_id == "code.comment_density")]
                 if (b.language or "").lower() == "java":
                     words = " ".join(getattr(x, "text", "") or getattr(x, "instruction", "") or ""
                                      for x in s.blocks)

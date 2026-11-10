@@ -49,3 +49,47 @@ def test_own_subject_created_and_enrolled_on_save(client):
     # тот же предмет второй раз — не дубль, а отметка существующего
     c.post("/profiles/save", data=_form(new_subject_name="технология разработки программного обеспечения"))
     assert sum(1 for s in all_subjects().values() if s.name.lower().startswith("технология разработки")) == 1
+
+
+# ---------- второй студент с тем же ФИО не затирает первого ----------
+
+def test_new_profile_with_the_same_name_does_not_overwrite_the_first(client):
+    c, ctx = client
+    first = ctx.store.get_profile(PID)
+    assert first is not None and first.group
+    new = {"id": "", "full_name": "Иванов Иван Петрович", "title_name": "И.П. Иванов", "gender": "m",
+           "group": "ПО11-24", "enr_psip_on": "on", "enr_psip_variant": "3"}
+    r = c.post("/profiles/save", data=new, follow_redirects=False)
+    assert r.status_code == 303
+    profiles = ctx.store.list_profiles()
+    assert len(profiles) == 2
+    kept = ctx.store.get_profile(PID)
+    assert kept.group == first.group and kept.enrollment("psip").variant == first.enrollment("psip").variant
+    other = next(p for p in profiles if p.id != PID)
+    assert other.id.startswith(PID) and other.group == "ПО11-24" and other.enrollment("psip").variant == 3
+
+
+def test_saving_an_existing_profile_still_updates_it(client):
+    c, ctx = client
+    c.post("/profiles/save", data=_form(group="РС03-23"))
+    assert len(ctx.store.list_profiles()) == 1 and ctx.store.get_profile(PID).group == "РС03-23"
+
+
+# ---------- страницы, которой нет ----------
+
+def test_unknown_page_is_answered_in_russian(client):
+    c, _ = client
+    r = c.get("/no/such/page")
+    assert r.status_code == 404
+    assert "Такой страницы нет" in r.text and "Not Found" not in r.text
+    api = c.get("/no/such/page", headers={"accept": "application/json"})
+    assert api.status_code == 404 and "Not Found" not in api.text
+
+
+def test_own_subject_without_a_name_is_not_silently_dropped(client):
+    c, ctx = client
+    before = set(all_subjects())
+    r = c.post("/profiles/save", data=_form(new_subject_name="  ", new_subject_short="ТРПО",
+                                            new_subject_teacher="С.С. Сидоров"), follow_redirects=True)
+    assert "Впиши название своего предмета" in r.text
+    assert set(all_subjects()) == before

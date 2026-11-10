@@ -175,3 +175,21 @@ def test_pictures_the_student_attached_are_never_retaken(tmp_home, tmp_path):
     st = pipe.chat(st, "переснимай скриншоты")
     assert figures(st)[0].image_path == mine and len(shooter.calls) == 3  # переснят только второй
 
+
+
+def test_new_plan_after_a_code_edit_is_made_from_the_previous_project(tmp_home, tmp_path):
+    # раньше проект составлялся с нуля: имена файлов и сценарии «плыли», и прежние снимки расходились с кодом
+    pipe, fake, st = make(tmp_home, tmp_path, [PLAN, EDIT, REVISE, PLAN2])
+    st = pipe.execute(st)
+    st = pipe.chat(st, "подпись результата должна быть «Итог:»")
+    asked = "\n".join(m["content"] for m in fake.calls[-1] if isinstance(m["content"], str))
+    assert "Прежний проект" in asked and "main.py" in asked
+    assert "Сумма:" in asked  # прежний код файла — чтобы менять только то, чего коснулась правка
+    assert '"input": "12\\n5\\n"' in asked or "12\\n5\\n" in asked  # и прежние сценарии снимков
+
+
+def test_first_plan_has_no_previous_project(tmp_home, tmp_path):
+    pipe, fake, st = make(tmp_home, tmp_path, [PLAN])
+    st = pipe.execute(st)
+    asked = "\n".join(m["content"] for m in fake.calls[4] if isinstance(m["content"], str))
+    assert "Прежний проект" not in asked

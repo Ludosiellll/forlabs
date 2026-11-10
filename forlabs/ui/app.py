@@ -291,6 +291,21 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         response.status_code = 500
         return response
 
+    from starlette.exceptions import HTTPException as StarletteHTTPException
+
+    @app.exception_handler(StarletteHTTPException)
+    async def http_error(request: Request, exc: StarletteHTTPException):
+        """Страницы нет или способ обращения не тот: по-русски, а не «Not Found»."""
+        message = {404: "Такой страницы нет. Вернись на главную и открой нужное оттуда.",
+                   405: "Так эту страницу открыть нельзя. Вернись на главную и попробуй ещё раз."}.get(
+            exc.status_code, "Запрос не выполнен.")
+        if "text/html" not in request.headers.get("accept", "text/html") and "*/*" not in request.headers.get(
+                "accept", "*/*"):
+            return JSONResponse({"error": message}, status_code=exc.status_code)
+        response = render(request, "error.html", message=message, detail="")
+        response.status_code = exc.status_code
+        return response
+
     @app.exception_handler(CloudError)
     async def cloud_error(request: Request, exc: CloudError):
         if exc.message_ru.startswith("Нужно войти") or "войди" in exc.message_ru:
@@ -402,7 +417,11 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         full_name = (f.get("full_name") or "").strip()
         if not full_name:
             return redirect("/profiles/new", err="Впиши ФИО полностью")
-        pid = (f.get("id") or "").strip() or slug(full_name)
+        pid = (f.get("id") or "").strip()
+        if not pid:  # новый профиль: тёзка (то же ФИО) получает свой идентификатор, а не затирает прежнего
+            base = slug(full_name)
+            taken = {p.id for p in ctx.store.list_profiles()}
+            pid = next(x for x in (base, *(f"{base}_{i}" for i in range(2, 1000))) if x not in taken)
         enrollments = []
         for sid, subj in all_subjects().items():
             if f.get(f"enr_{sid}_on"):
@@ -416,6 +435,10 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
                     workplace=int(w) if w.isdigit() else None,
                     header_style="short" if f.get(f"enr_{sid}_style") == "short" else "long"))
         new_name = (f.get("new_subject_name") or "").strip()
+        if not new_name and ((f.get("new_subject_short") or "").strip() or (f.get("new_subject_teacher") or "").strip()):
+            # начали заполнять свой предмет, а названия нет: молча его не теряем
+            back = f"/profiles/{pid}" if (f.get("id") or "").strip() else "/profiles/new"
+            return redirect(back, err="Впиши название своего предмета — без него предмет не добавится")
         if new_name:  # нужного предмета нет в списке — свой, сразу отмеченный у этого студента
             v = (f.get("new_subject_variant") or "").strip()
             style = "short" if f.get("new_subject_style") == "short" else "long"

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from forlabs.core.models import Figure, LabSpec, Listing, ReportDoc, Table
-from forlabs.report.morph import agree_short_participle
+from forlabs.report.morph import agree_short_participle, ends_with_participle_clause
 
 Kind = Literal["figure", "listing", "table"]
 _CAPTION_WORD = {"figure": "Рисунок", "listing": "Листинг", "table": "Таблица"}
@@ -56,19 +56,27 @@ def lower_first(s: str) -> str:
     return s[:1].lower() + s[1:]
 
 
+NBSP = "\u00a0"  # номер не уезжает на следующую строку отдельно от «рисунке», «листинге», «таблице»
+
+
+def _closed(t: str) -> str:
+    """Запятая после причастного оборота в конце темы: «…чисел, делящихся на 5, представлен…»."""
+    return t + "," if ends_with_participle_clause(t) and not t.endswith(",") else t
+
+
 def figure_intro(topic: str, n: int) -> str:
     t = upper_first(clean_topic(topic))
-    return f"{t} {agree_short_participle('представлен', t)} на рисунке {n}"
+    return f"{_closed(t)} {agree_short_participle('представлен', t)} на рисунке{NBSP}{n}"
 
 
 def listing_intro(topic: str, n: int) -> str:
     t = upper_first(clean_topic(topic))
-    return f"{t} {agree_short_participle('представлен', t)} в листинге {n}"
+    return f"{_closed(t)} {agree_short_participle('представлен', t)} в листинге{NBSP}{n}"
 
 
 def table_intro(topic: str, n: int) -> str:
     t = lower_first(clean_topic(topic))
-    return f"В таблице {n} {agree_short_participle('представлен', t)} {t}"
+    return f"В таблице{NBSP}{n} {agree_short_participle('представлен', t)} {t}"
 
 
 def caption(kind: Kind, n: int, topic: str) -> str:

@@ -29,6 +29,7 @@ from forlabs.core.models import (
 from forlabs.core.rules import RuleBook
 from forlabs.core.store import safe_file_name, safe_name
 from forlabs.core.subjects import get_subject
+from forlabs.core.text import plural
 from forlabs.ingest.extract import SourceText, extract_many, extract_text
 from forlabs.pipeline.chat import plan_edit, revise_answers, revise_section
 from forlabs.pipeline.events import EventBus
@@ -430,7 +431,8 @@ class Pipeline:
                 for ev in self.bus.history(old_key):
                     self.bus.publish(self.key(st), ev.text, ev.kind, ev.step)
                 self.bus.publish(old_key, st.number, "moved")
-            self._emit(st, f"Разбор готов: {len(spec.tasks)} заданий, {len(spec.questions)} вопросов", "done",
+            self._emit(st, "Разбор готов: " + plural(len(spec.tasks), "задание", "задания", "заданий") + ", "
+                           + plural(len(spec.questions), "вопрос", "вопроса", "вопросов"), "done",
                        step="parse")
             return self._save(st)
         except Exception as e:  # любая ошибка — в статус лабы, а не в никуда
@@ -854,9 +856,10 @@ class Pipeline:
             return None
         return str(int(f) - 1) if f == int(f) and f >= 2 else None
 
-    def _project(self, st: LabState, llm, plan=None, retake: bool = False, fix: str = "") -> LabState:
+    def _project(self, st: LabState, llm, plan=None, retake: bool = False, fix: str = "", previous=None) -> LabState:
         """Этап «Проект»: программа лабы собирается и запускается, снимки окон — сам ForLabs. Сбой — не ошибка лабы.
-        fix — просьба из чата исправить программу: модель чинит файлы прежнего плана, затем обычная сборка."""
+        fix — просьба из чата исправить программу: модель чинит файлы прежнего плана, затем обычная сборка.
+        previous — прежний план, по которому составляется новый после правки отчёта (имена и сценарии не «плывут»)."""
         from forlabs.pipeline import project as proj
 
         if self.projects and st.report and plan is None and (engine := proj.engine_of(st)):
@@ -889,7 +892,7 @@ class Pipeline:
                     before, plan, outcome = plan, fixed, "applied"
             if plan is None:
                 emit("Составляю проект программы")
-                plan = proj.plan_project(st, llm, self._memory_text(st), wish=fix)
+                plan = proj.plan_project(st, llm, self._memory_text(st), wish=fix, previous=previous)
                 outcome = "applied" if fix else ""
                 if st.project is not None and st.project.name:  # план составлен заново: проект остаётся в своей папке
                     plan = plan.model_copy(update={"name": st.project.name})
@@ -903,7 +906,7 @@ class Pipeline:
                 if problems:  # модель узнаёт, что не так, и составляет план ещё раз
                     emit("План проекта не прошёл проверку — составляю заново", "warn")
                     plan = proj.plan_project(st, llm, self._memory_text(st), wish=fix,
-                                             rejected="; ".join(problems[:5]))
+                                             rejected="; ".join(problems[:5]), previous=previous)
                     if st.project is not None and st.project.name:
                         plan = plan.model_copy(update={"name": st.project.name})
                     plan, problems = checked(plan)
@@ -916,15 +919,16 @@ class Pipeline:
                 st = proj.build_and_shoot(self, st, before, None, emit, retake=retake)
                 outcome = "broke"
             left = [f for f in self.slots(st)]
+            sql = st.project.language == "mysql"
             if st.project.built:
-                head = f"Программа собрана. Снял сам: {self._auto_shots(st)}"
+                head = ("Скрипты SQL проверены" if sql else "Программа собрана") + f". Снял сам: {self._auto_shots(st)}"
             elif st.project.missing:
                 head = "Программу не собирал: не хватает " + ", ".join(
                     proj._tool_title(k) for k in st.project.missing)
             elif st.project.blocked:
                 head = "Программу не собирал и не запускал: " + st.project.blocked[0].rstrip(".")
             else:
-                head = "Программа не собралась: ошибки остались"
+                head = "Скрипты SQL выполняются с ошибкой" if sql else "Программа не собралась: ошибки остались"
             emit(head + (f", нужно от тебя: {len(left)}" if left else ""), "done" if st.project.built else "warn")
         except Exception as e:  # проект — помощь, а не условие: лаба собирается и без него
             logging.getLogger("forlabs").warning("Этап «Проект»: %s", e, exc_info=True)
@@ -989,10 +993,11 @@ class Pipeline:
         только что меняли) план составляется снова."""
         from forlabs.pipeline import project as proj
 
-        plan = None if fresh else proj.load_plan(self, st)
+        old = proj.load_plan(self, st)
+        plan = None if fresh else old
         if plan is not None and proj.stale(st, plan):
             plan = None
-        return self._project(st, llm, plan=plan, retake=retake, fix=fix)
+        return self._project(st, llm, plan=plan, retake=retake, fix=fix, previous=old if plan is None else None)
 
     def _chat_reshoot(self, st: LabState, llm, code_changed: bool = False,
                       force: bool = True, fix: str = "") -> tuple[LabState, str, bool]:

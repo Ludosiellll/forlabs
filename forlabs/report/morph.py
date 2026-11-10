@@ -112,6 +112,19 @@ def goal_to_conclusion(goal: str, gender: Gender) -> ConclusionResult:
     return ConclusionResult(text=out)
 
 
+def ends_with_participle_clause(topic: str) -> bool:
+    """Тема кончается причастным или придаточным оборотом после запятой («…чисел, делящихся на 5»): перед
+    сказуемым оборот закрывается запятой. Перечисление («кнопками, полями и надписями») оборотом не считается."""
+    head, sep, tail = topic.rpartition(",")
+    words = _WORD.findall(tail)
+    if not sep or not words:
+        return False
+    first = words[0].lower()
+    if first.startswith("котор"):
+        return True
+    return any(p.tag.POS == "PRTF" for p in _morph().parse(first)[:2])
+
+
 def agree_short_participle(base: str, topic: str) -> str:
     """Согласует «представлен/приведен/показан» с главным словом темы."""
     gender_number = None

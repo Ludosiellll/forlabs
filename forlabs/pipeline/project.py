@@ -107,11 +107,13 @@ SHOT_RULES = """- mode "console": input — что набрать на клав�
   него на снимке будет обычный вид. target — id:имя, CSS-селектор (".btn-fill", "nav li:nth-child(2)") или
   текст элемента. Один снимок — одно состояние: два наведения сразу снять нельзя. Анимация, которая идёт сама
   (animation, @keyframes), наведения не требует. Щелчок по ссылке на страницу, которой нет, не делай.
-- MySQL: ForLabs запускает консольный клиент mysql в папке проекта, сервер чистый: баз лабы на нём нет. Результат
-  запросов — mode "console", input — source каждого скрипта проекта по порядку: создание и заполнение, затем запрос
-  («source shop.sql\\nsource select.sql\\n»), или сами запросы; expect — значение из результата. Скрипты должны
-  выполняться повторно без ошибок: перед CREATE DATABASE — DROP DATABASE IF EXISTS той же базы, перед
-  CREATE USER — DROP USER IF EXISTS того же пользователя.
+- MySQL: ForLabs запускает консольный клиент mysql в папке проекта на своём отдельном сервере. Перед каждым
+  снимком сервер чистый: баз лабы на нём нет. Результат запросов — mode "console"; input — сначала source скриптов,
+  которые создают и заполняют базу («source shop.sql\\n»), затем сам запрос рисунка текстом, как его набирает
+  студент («USE shop;\\nSELECT name FROM users LIMIT 5;\\n»): запрос должен быть виден на снимке вместе с
+  результатом; expect — значение из результата. Все скрипты ForLabs заранее выполняет по порядку на чистом
+  сервере — они должны проходить без ошибок. Не начинай скрипты с DROP DATABASE и DROP USER: у студента на
+  сервере может быть своя база с таким именем; пиши CREATE DATABASE IF NOT EXISTS и сразу USE.
 - mode "app" + app + goal (+ open) — окно другой программы, которое ForLabs снимет сам, работая в ней: среда
   разработки с кодом или обозревателем решений, конструктор формы, SSMS, Workbench, Блокнот. app — ключ: {apps};
   goal — что сделать (например «открыть Program.cs в редакторе, чтобы был виден метод Main»); open — файлы
@@ -692,8 +694,27 @@ def _quiet_console(plan: ProjectPlan) -> ProjectPlan:
     return plan.model_copy(update={"shots": shots})
 
 
-def plan_project(st: LabState, llm, memory: str = "", wish: str = "", rejected: str = "") -> ProjectPlan:
+PREVIOUS_LIMIT = 14000  # знаков прежнего проекта в запросе на новый план
+
+
+def previous_text(previous: ProjectPlan) -> str:
+    """Прежний проект лабы для нового плана: после правки отчёта меняется только то, чего коснулась правка, а не
+    имена файлов, структура таблиц и сценарии снимков (иначе прежние снимки расходятся с новым кодом)."""
+    shots = [x.model_dump(exclude={"reason", "app", "goal", "open"}, exclude_defaults=True)
+             for x in previous.shots if x.mode in AUTO_MODES]
+    head = (f"Прежний проект этой лабы (отчёт с тех пор правили). Сохрани всё, чего правка не коснулась: название "
+            f"«{previous.name}», язык и вид ({previous.language}, {previous.kind}), имена файлов и программ, текст "
+            "нетронутых файлов, режимы и шаги снимков. Меняй только то, что изменилось в листингах и рисунках "
+            f"отчёта выше.\n{programs_text(previous)}\nСценарии снимков: "
+            f"{json.dumps(shots, ensure_ascii=False)}\nФайлы:\n")
+    return head + _files_text(previous.files)[:PREVIOUS_LIMIT]
+
+
+def plan_project(st: LabState, llm, memory: str = "", wish: str = "", rejected: str = "",
+                 previous: ProjectPlan | None = None) -> ProjectPlan:
     user = lab_text(st) + (f"\n\nПамять предмета и требования:\n{memory[:6000]}" if memory.strip() else "")
+    if previous is not None:
+        user += "\n\n" + previous_text(previous)
     if wish.strip():  # просьба из чата правок: что в прежнем проекте было не так
         user += f"\n\nСтудент просит о программе: {wish.strip()}"
     if rejected.strip():  # прошлый план не прошёл проверку: модель узнаёт почему
@@ -1024,6 +1045,23 @@ def _tool_title(key: str) -> str:
     return getattr(languages, "TOOL_TITLES", {}).get(key, key)
 
 
+_SOURCE = re.compile(r"^\s*(?:source|\\\.)\s+([^\s;]+)", re.IGNORECASE | re.MULTILINE)
+
+
+def sql_order(plan: ProjectPlan) -> list[str]:
+    """В каком порядке выполнять скрипты лабы при проверке: как их подключают снимки (source create.sql, затем
+    fill.sql…), остальные — как в плане, главный первым."""
+    have = {f.path.lower(): f.path for f in plan.files if Path(f.path).suffix.lower() == ".sql"}
+    out: list[str] = []
+    for sh in sorted(plan.shots, key=lambda x: (x.section, x.block)):
+        for m in _SOURCE.finditer(sh.input or ""):
+            path = have.get(m.group(1).strip("'\"").replace("\\", "/").removeprefix("./").lower())
+            if path and path not in out:
+                out.append(path)
+    rest = [p for p in have.values() if p not in out]
+    return out + sorted(rest, key=lambda p: p != plan.entry)
+
+
 def start_mysql(client: str):
     """Свой сервер MySQL на время снимков лабы: чистая папка данных, только 127.0.0.1, свободный порт. В Windows —
     в папке запуска с меткой Low и с пониженными правами. Сервер студента и его базы не трогаются."""
@@ -1080,6 +1118,18 @@ def fix_shots(plan: ProjectPlan, failures: list[ShotFailure], llm, st: LabState 
 def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None, retake: bool = False) -> LabState:
     """Сборка (с исправлениями, если есть модель) → листинги → копия в папку сдачи → снимки. Снимок не прошёл из-за
     сценария — модель чинит программу или шаги, и всё повторяется (до MAX_SHOT_FIXES кругов). Меняет st."""
+    servers: list = []  # свой сервер MySQL лабы: гасится, чем бы этап ни кончился
+    try:
+        return _build_and_shoot(pipe, st, plan, llm, emit, retake, servers)
+    finally:
+        for srv in servers:
+            try:
+                srv.stop()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def _build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm, emit, retake: bool, servers: list) -> LabState:
 
     emit = emit or (lambda text, kind="info": None)
     lab = pipe.lab_dir(st)
@@ -1104,6 +1154,36 @@ def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None, 
 
         shooter = WindowsShooter()
 
+    mysql: dict = {"srv": None, "error": None}  # свой сервер MySQL лабы: один на проверку скриптов и снимки
+
+    def mysql_server():
+        if mysql["srv"] is None and mysql["error"] is None:
+            emit("Запускаю отдельный сервер MySQL: на нём проверяю скрипты и делаю снимки")
+            try:
+                mysql["srv"] = start_mysql(tools["mysql"].path)
+                servers.append(mysql["srv"])
+            except Exception as e:  # noqa: BLE001 — сервер не поднялся: снимки студенту, отчёт собирается
+                mysql["error"] = str(e).rstrip(".") or "сервер MySQL не запустился"
+        return mysql["srv"]
+
+    def checked_sql(candidate: ProjectPlan, res):
+        """Скрипты SQL выполняются на чистом сервере: ошибка в запросе — та же ошибка сборки (её чинит модель,
+        а студент видит в «Ошибках сборки»). Раньше скрипты не запускались вовсе, пока не дойдёт до снимка."""
+        if candidate.language != "mysql" or res is None or not res.ok or "mysql" not in tools:
+            return res
+        srv = mysql_server()
+        if srv is None or not hasattr(srv, "run_file"):
+            return res
+        from forlabs.runner import mysqlrun
+
+        emit("Проверяю скрипты SQL на отдельном сервере")
+        try:
+            log = mysqlrun.check_scripts(srv, work, sql_order(candidate))
+        except Exception as e:  # noqa: BLE001 — сервер упал посреди проверки: скрипты остаются непроверенными
+            emit(f"Скрипты SQL проверить не получилось ({e})", "warn")
+            return res
+        return res if not log else dataclasses.replace(res, ok=False, log=log)
+
     def build(candidate: ProjectPlan, fix_builds: bool):
         """Проект в папку work и сборка. → (план после исправлений сборки, итог сборки, почему нельзя запускать,
         нужна ли сеть). Опасный код не собирается вовсе: сборка и проверка синтаксиса — тоже запуск чужих
@@ -1114,11 +1194,13 @@ def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None, 
         blocked, net = _blocked(pipe, candidate)
         res = None
         if not info.missing and not blocked:
-            emit("Собираю программу")
-            res = languages.build(work, candidate, tools)
+            sql = candidate.language == "mysql"
+            if not sql:
+                emit("Собираю программу")
+            res = checked_sql(candidate, languages.build(work, candidate, tools))
             while not res.ok and fix_builds and llm is not None and info.fixes < MAX_FIXES:
                 info.fixes += 1
-                emit(f"Исправляю ошибки сборки ({info.fixes} из {MAX_FIXES})")
+                emit(f"Исправляю ошибки {'в скриптах SQL' if sql else 'сборки'} ({info.fixes} из {MAX_FIXES})")
                 fixed = _with_materials(fix_project(candidate, res.log, llm), st)
                 if problems := validate(fixed):  # исправление не годится: в следующем круге модель узнает почему
                     res = dataclasses.replace(res, log=res.log.split(REJECTED)[0].rstrip() + REJECTED
@@ -1131,7 +1213,7 @@ def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None, 
                 blocked, net = _blocked(pipe, candidate)  # исправление тоже проверяется до сборки
                 if blocked:
                     break
-                res = languages.build(work, candidate, tools)
+                res = checked_sql(candidate, languages.build(work, candidate, tools))
         return candidate, res, blocked, net
 
     told: list[bool] = []  # про заглушки сказано
@@ -1167,100 +1249,98 @@ def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None, 
         shots = {(s.section, s.block): s for s in plan.shots}
         failures: list[ShotFailure] = []
         specs: dict[str, object] = {}  # чем запускать каждую программу плана
-        db, db_error = None, None  # свой сервер MySQL: поднимается к первому снимку, гасится после последнего
-        try:
-            for n, bi, b in list(_blocks(st)):
-                if not isinstance(b, Figure) or b.image_path:
-                    continue
-                b.need_tool = None
-                shot = shots.get((n, bi))
-                if shot is not None and shot.mode == "app" and (other := foreign_app(shot, b)):
-                    b.app_task = None
-                    b.auto_note = (f"Этот снимок делаешь ты: в программе {other} ForLabs работать не умеет.")
-                    continue
-                if shot is not None and shot.mode == "app":  # окно среды разработки и т.п. — агент, по кнопке
-                    from forlabs.agent import apps as agent_apps
-                    from forlabs.core.models import AppTask
-                    from forlabs.pipeline import appshots
+        for n, bi, b in list(_blocks(st)):
+            if not isinstance(b, Figure) or b.image_path:
+                continue
+            b.need_tool = None
+            shot = shots.get((n, bi))
+            if shot is not None and shot.mode == "app" and (other := foreign_app(shot, b)):
+                b.app_task = None
+                b.auto_note = (f"Этот снимок делаешь ты: в программе {other} ForLabs работать не умеет.")
+                continue
+            if shot is not None and shot.mode == "app":  # окно среды разработки и т.п. — агент, по кнопке
+                from forlabs.agent import apps as agent_apps
+                from forlabs.core.models import AppTask
+                from forlabs.pipeline import appshots
 
-                    project = hand_in.name if hand_in != work else ""
-                    files = list(shot.open)
-                    if shot.app == "visualstudio":  # файл проекта создаёт ForLabs — модель его не знает
-                        files = [f.name for f in sorted(hand_in.glob("*"))
-                                 if f.suffix in (".sln", ".slnx", ".csproj", ".vcxproj")][:1] + files
-                    opens = [f"{project}/{f}" if project else f for f in files]
-                    b.app_task = AppTask(app=shot.app, goal=shot.goal, shot=shot.expect, open=opens)
-                    b.auto_note = appshots.note_for(b, agent_apps.installed(getattr(pipe, "app_paths", {}))
-                                                    if sys.platform == "win32" else {})
+                project = hand_in.name if hand_in != work else ""
+                files = list(shot.open)
+                if shot.app == "visualstudio":  # файл проекта создаёт ForLabs — модель его не знает
+                    files = [f.name for f in sorted(hand_in.glob("*"))
+                             if f.suffix in (".sln", ".slnx", ".csproj", ".vcxproj")][:1] + files
+                opens = [f"{project}/{f}" if project else f for f in files]
+                b.app_task = AppTask(app=shot.app, goal=shot.goal, shot=shot.expect, open=opens)
+                b.auto_note = appshots.note_for(b, agent_apps.installed(getattr(pipe, "app_paths", {}))
+                                                if sys.platform == "win32" else {})
+                continue
+            if shot is None:  # сценария нет: не молчим — причина видна студенту и чату
+                b.auto_note = NO_SCENARIO
+                continue
+            if shot.mode == "manual":
+                why = shot.reason.strip().rstrip(".")
+                if why[:1].isupper() and why[1:2].islower():  # после двоеточия — со строчной («JDK» не трогаем)
+                    why = why[:1].lower() + why[1:]
+                b.auto_note = f"Этот снимок делаешь ты: {why}." if why else "Этот снимок делаешь ты."
+                continue
+            if info.missing:
+                b.need_tool = info.missing[0]
+                b.auto_note = (f"Для снимка нужна программа {_tool_title(info.missing[0])}: установи её и нажми "
+                               "«Повторить».")
+                continue
+            if info.blocked:
+                b.auto_note = f"Сам не запускал: {info.blocked[0]}"
+                continue
+            if not info.built:
+                b.auto_note = ("В скриптах SQL осталась ошибка, снимок сделай сам." if plan.language == "mysql"
+                               else "Программа не собралась, снимок сделай сам.")
+                continue
+            if shooter is None:
+                b.auto_note = "Снимки окон ForLabs делает только в Windows."
+                continue
+            prog = plan.program_of(shot)
+            which = prog.name if prog is not None else (plan_rules.entry_of(plan, shot.program) or "")
+            if which not in specs:
+                specs[which] = languages.run_spec_for(plan, result, work, tools, which)
+            spec = specs[which]
+            if plan.language == "mysql":
+                db = mysql_server()
+                if db is None:
+                    b.auto_note = f"Сам не снял: {mysql['error']}."
                     continue
-                if shot is None:  # сценария нет: не молчим — причина видна студенту и чату
-                    b.auto_note = NO_SCENARIO
-                    continue
-                if shot.mode == "manual":
-                    why = shot.reason.strip().rstrip(".")
-                    b.auto_note = f"Этот снимок делаешь ты: {why}." if why else "Этот снимок делаешь ты."
-                    continue
-                if info.missing:
-                    b.need_tool = info.missing[0]
-                    b.auto_note = (f"Для снимка нужна программа {_tool_title(info.missing[0])}: установи её и нажми "
-                                   "«Повторить».")
-                    continue
-                if info.blocked:
-                    b.auto_note = f"Сам не запускал: {info.blocked[0]}"
-                    continue
-                if not info.built:
-                    b.auto_note = "Программа не собралась, снимок сделай сам."
-                    continue
-                if shooter is None:
-                    b.auto_note = "Снимки окон ForLabs делает только в Windows."
-                    continue
-                prog = plan.program_of(shot)
-                which = prog.name if prog is not None else (plan_rules.entry_of(plan, shot.program) or "")
-                if which not in specs:
-                    specs[which] = languages.run_spec_for(plan, result, work, tools, which)
-                spec = specs[which]
-                if plan.language == "mysql":
-                    if db is None and db_error is None:
-                        emit("Запускаю отдельный сервер MySQL для снимков")
-                        try:
-                            db = start_mysql(tools["mysql"].path)
-                            spec = specs[which] = dataclasses.replace(spec, cmd=db.client())
-                        except Exception as e:  # noqa: BLE001 — сервер не поднялся: снимки студенту, отчёт собирается
-                            db_error = str(e).rstrip(".") or "сервер MySQL не запустился"
-                    if db_error:
-                        b.auto_note = f"Сам не снял: {db_error}."
-                        continue
-                static = plan.language == "web"  # страница без сервера — из папки сдачи (адрес как у студента)
-                try:
-                    target, shot = _target_and_shot(plan, spec, shot, work, hand_in, static)
-                    target.network = network
-                    target.loopback = plan.language == "mysql"  # консоль mysql идёт на свой сервер по localhost
-                except ValueError as e:
-                    b.auto_note = f"Сам не снял: {e}."
-                    continue
-                emit(f"Снимаю рисунок: {b.topic}")
-                rel = f"assets/shot_{n}_{bi}_{uuid.uuid4().hex[:6]}.png"
-                res = shooter.shoot(target, shot, lab / rel)
-                if res.ok:
-                    b.image_path, b.auto_note = rel, None
-                    mine.add((n, bi))
-                    screen = (res.seen or getattr(res, "ui", "") or "").strip()
-                    if screen:
-                        shown.append((n, bi, b, shots[(n, bi)], screen))
-                    old = kept.pop((n, bi), None)
-                    if old and old != rel and not in_versions(old):  # снимок прежней программы больше не нужен
-                        (lab / old).unlink(missing_ok=True)
-                    pipe._sync(st, [rel])
-                elif (n, bi) in kept:  # программа изменилась, а переснять не вышло: остаётся прежний снимок
-                    b.image_path, b.auto_note = kept.pop((n, bi)), None
-                else:
-                    b.auto_note = f"Сам не снял: {res.reason.rstrip('.')}."
-                    if getattr(res, "kind", ""):
-                        failures.append(ShotFailure(n, bi, b.topic, b.slot or "", shots[(n, bi)], res.reason,
-                                                    res.seen, getattr(res, "ui", "")))
-        finally:
-            if db is not None:
-                db.stop()
+                spec = specs[which] = dataclasses.replace(spec, cmd=db.client())
+                if hasattr(db, "reset"):
+                    try:
+                        db.reset()  # каждый снимок — с чистого сервера: скриптам не нужен DROP DATABASE
+                    except Exception:  # noqa: BLE001
+                        pass
+            static = plan.language == "web"  # страница без сервера — из папки сдачи (адрес как у студента)
+            try:
+                target, shot = _target_and_shot(plan, spec, shot, work, hand_in, static)
+                target.network = network
+                target.loopback = plan.language == "mysql"  # консоль mysql идёт на свой сервер по localhost
+            except ValueError as e:
+                b.auto_note = f"Сам не снял: {e}."
+                continue
+            emit(f"Снимаю рисунок: {b.topic}")
+            rel = f"assets/shot_{n}_{bi}_{uuid.uuid4().hex[:6]}.png"
+            res = shooter.shoot(target, shot, lab / rel)
+            if res.ok:
+                b.image_path, b.auto_note = rel, None
+                mine.add((n, bi))
+                screen = (res.seen or getattr(res, "ui", "") or "").strip()
+                if screen:
+                    shown.append((n, bi, b, shots[(n, bi)], screen))
+                old = kept.pop((n, bi), None)
+                if old and old != rel and not in_versions(old):  # снимок прежней программы больше не нужен
+                    (lab / old).unlink(missing_ok=True)
+                pipe._sync(st, [rel])
+            elif (n, bi) in kept:  # программа изменилась, а переснять не вышло: остаётся прежний снимок
+                b.image_path, b.auto_note = kept.pop((n, bi)), None
+            else:
+                b.auto_note = f"Сам не снял: {res.reason.rstrip('.')}."
+                if getattr(res, "kind", ""):
+                    failures.append(ShotFailure(n, bi, b.topic, b.slot or "", shots[(n, bi)], res.reason,
+                                                res.seen, getattr(res, "ui", "")))
         return failures
 
     def in_versions(rel: str) -> bool:
@@ -1311,7 +1391,9 @@ def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None, 
         info.programs = [x.name for x in plan.programs]
         info.build_log = ""
         if result is not None and not result.ok:
-            info.note = "Программу не собрал: ошибки остались. Проект в папке сдачи, снимки сделай сам."
+            info.note = ("В скриптах SQL осталась ошибка: запросы с ней не выполняются. Скрипты в папке сдачи, "
+                         "снимки сделай сам." if plan.language == "mysql" else
+                         "Программу не собрал: ошибки остались. Проект в папке сдачи, снимки сделай сам.")
             info.build_log = result.log.split(REJECTED)[0].strip()[:BUILD_LOG_LIMIT]
         if info.blocked:
             info.note = f"Сам не собирал и не запускал: {info.blocked[0]}"

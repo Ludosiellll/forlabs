@@ -23,6 +23,10 @@ NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 log = logging.getLogger(__name__)
 
 
+SYSTEM_DBS = {"information_schema", "mysql", "performance_schema", "sys", "test"}
+SYSTEM_USERS = ("root", "mysql.sys", "mysql.session", "mysql.infoschema", "mariadb.sys", "mysql", "pma", "")
+
+
 class MysqlError(Exception):
     """Сообщение — студенту; detail — для журнала и проверки в CI (код выхода, хвост журнала сервера)."""
 
@@ -159,6 +163,40 @@ class LabServer:
         return [str(self.client_path), "--no-defaults", "-u", "root", "-h", "127.0.0.1", f"--port={self.port}",
                 "--default-character-set=utf8mb4"]
 
+    def query(self, sql: str, timeout: float = 60) -> tuple[int, str]:
+        """Один запрос без оформления. → (код выхода, вывод вместе с ошибкой)."""
+        r = subprocess.run([*self.client(), "-N", "-e", sql], capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=timeout, creationflags=NO_WINDOW)
+        return r.returncode, (r.stdout + r.stderr).strip()
+
+    def reset(self) -> None:
+        """Сервер снова чистый: без баз и пользователей лабы. Перед проверкой скриптов и перед каждым снимком —
+        скриптам не нужен DROP DATABASE, а снимки не зависят друг от друга."""
+        code, out = self.query("SHOW DATABASES")
+        names = [x.strip() for x in out.splitlines()] if code == 0 else []
+        drops = [f"DROP DATABASE IF EXISTS `{n.replace('`', '``')}`" for n in names
+                 if n and n.lower() not in SYSTEM_DBS]
+        code, out = self.query("SELECT CONCAT(QUOTE(user), '@', QUOTE(host)) FROM mysql.user")
+        users = [x.strip() for x in out.splitlines()] if code == 0 else []
+        drops += [f"DROP USER IF EXISTS {u}" for u in users
+                  if u and not any(u.lower().startswith(f"'{k}'@") for k in SYSTEM_USERS)]
+        if drops:
+            self.query("; ".join(drops))
+
+    def run_file(self, path: Path, timeout: float = 120) -> str:
+        """Выполняет скрипт целиком. → "" или первая ошибка: «имя файла: ERROR 1064 (42000) at line 3: …»."""
+        try:
+            with open(path, "rb") as fh:
+                r = subprocess.run([*self.client(), "--batch"], stdin=fh, capture_output=True, timeout=timeout,
+                                   creationflags=NO_WINDOW)
+        except subprocess.TimeoutExpired:
+            return f"{Path(path).name}: скрипт выполнялся дольше {int(timeout)} с и был остановлен"
+        if r.returncode == 0:
+            return ""
+        err = r.stderr.decode("utf-8", errors="replace").strip()
+        lines = [ln for ln in err.splitlines() if ln.strip() and "Using a password" not in ln]
+        return f"{Path(path).name}: {(lines[0] if lines else 'ошибка без текста')[:500]}"
+
     def stop(self) -> None:
         self.proc.kill()
         remove_tree(self.data, tries=10)  # файлы сервера освобождаются не мгновенно; ключи — «только для чтения»
@@ -223,3 +261,17 @@ def start(mysql_client: str, work_root: Path, timeout: float = 90, low: bool = T
             time.sleep(0.5)
     server.stop()
     raise MysqlError("сервер MySQL не ответил за полторы минуты")
+
+
+def check_scripts(server: LabServer, folder: Path, names: list[str]) -> str:
+    """Скрипты лабы по порядку на чистом сервере. → "" или первая ошибка (следующие скрипты после неё не идут:
+    их ошибки были бы следствием первой). После проверки сервер снова чистый."""
+    server.reset()
+    try:
+        for name in names:
+            err = server.run_file(Path(folder).joinpath(*name.split("/")))
+            if err:
+                return err
+        return ""
+    finally:
+        server.reset()

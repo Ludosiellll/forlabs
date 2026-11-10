@@ -19,9 +19,25 @@ from forlabs.report.morph import goal_to_conclusion, wrong_gender_verbs
 REQUIRED_HEADER = [("Номер учебной группы",), ("Дата выполнения работы",), ("Тема работы", "Тема"),
                    ("Цель работы", "Цель"), ("Задание",)]
 REFUSAL = re.compile(r"(я не могу (выполнить|помочь|написать|создать)|не могу выполнить это|как языков\w* модел|"
-                     r"как ии[ ,]|as an ai|i (cannot|can't|am unable)|извините, но я)", re.I)
+                     r"как ии[ ,]|as an ai|i (cannot|can't|am unable)|извините, но я|"
+                     # отговорка вместо ответа: в вопросе не хватило кода или рисунка из методички
+                     r"услови\w+ вопроса без|в (условии|вопросе) (не приведен|не привед[её]н|нет|отсутствует)\w*|"
+                     r"(текст|код|листинг)\w* программы (в вопросе |в условии )?(не приведен|не привед[её]н|отсутствует)|"
+                     r"ответить невозможно|ответ дать нельзя)", re.I)
 MAX_ANSWER_WORDS = 22
 MAX_ANSWER_CHARS = 165
+# Вопрос из двух частей («что выведется и почему», «какие… опишите каждую», «какими способами») одним коротким
+# предложением не закрыть: раньше модель отвечала на половину, чтобы уложиться в лимит
+_TWO_PART = re.compile(r"\?.+\?|\bи\s+(?:почему|зачем|для\s+чего|как\w*|чем)\b|\bопишите\b|\bперечислите\b|"
+                       r"\bкакими\s+способами\b|\bприведите\s+пример\w*|\bв\s+ч[её]м\s+(?:разница|отличи\w+|"
+                       r"различи\w+)|\bчем\s+отлича\w+|\bсравните\b|[{};]\s*\S", re.IGNORECASE | re.DOTALL)
+TWO_PART_WORDS = 45
+TWO_PART_CHARS = 330
+
+
+def answer_limits(question: str) -> tuple[int, int]:
+    """(слов, знаков) в ответе: вопросу из двух частей и вопросу с кодом — место на обе части."""
+    return (TWO_PART_WORDS, TWO_PART_CHARS) if _TWO_PART.search(question or "") else (MAX_ANSWER_WORDS, MAX_ANSWER_CHARS)
 
 _DATE = re.compile(r"^\d{2}\.\d{2}\.\d{4}$")
 _MANUAL_REF = re.compile(r"(на\s+рисунк\w*|в\s+листинг\w*|в\s+таблиц\w*)\s+\d+|^(Рисунок|Листинг|Таблица)\s+\d+\s*[–—-]",
@@ -121,9 +137,10 @@ def check_standard(doc: ReportDoc, spec: LabSpec, gender: Gender) -> list[Findin
         if normalize_for_compare(qa.question) not in spec_q:
             out.append(_f("qa.not_in_spec", "Такого вопроса нет в методичке", f"Вопрос {qa.n}", qa.question))
         ans = qa.answer.strip()
-        if len(ans.split()) > MAX_ANSWER_WORDS or len(ans) > MAX_ANSWER_CHARS:
-            out.append(_f("qa.answer_too_long", "Ответ должен быть коротким: до 22 слов, одно предложение",
-                          f"Вопрос {qa.n}", ans))
+        words, chars = answer_limits(qa.question)
+        if len(ans.split()) > words or len(ans) > chars:
+            how = "до 22 слов, одно предложение" if words == MAX_ANSWER_WORDS else f"до {words} слов, два предложения"
+            out.append(_f("qa.answer_too_long", f"Ответ должен быть коротким: {how}", f"Вопрос {qa.n}", ans))
 
     expected_conclusion = spec.conclusion or goal_to_conclusion(spec.goal, gender).text
     if normalize_for_compare(doc.conclusion) != normalize_for_compare(expected_conclusion):
