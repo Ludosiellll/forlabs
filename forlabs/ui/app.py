@@ -79,7 +79,7 @@ HERE = Path(__file__).parent
 _NOTE_NAME = re.compile(r"(wish|chat_[0-9a-f]{8})_\d{1,2}\.jpg")
 LOCAL_HOSTS = ["127.0.0.1", "localhost"]
 STATUS_RU = {"draft": "Черновик", "parsed": "Проверь разбор", "confirmed": "Готова к выполнению",
-             "executing": "Выполняется", "needs_manual": "Нужны скриншоты", "rendered": "Свёрстана",
+             "executing": "Выполняется", "needs_manual": "Нужны скриншоты", "rendered": "Готова",
              "final": "Сдана", "failed": "Ошибка"}
 STEPS = [("parse", "Разбор"), ("write", "Текст"), ("check", "Проверка"), ("render", "Вёрстка"), ("finalize", "Документ")]
 
