@@ -141,12 +141,37 @@ def test_new_plan_keeps_the_project_folder(tmp_home, tmp_path):
     assert folders == ["Проект Сумма"] and hand_in(tmp_path) == NEW_CODE + "\n"  # одна папка, с новым кодом
 
 
-def test_reshoot_with_nothing_to_do_leaves_the_document_alone(tmp_home, tmp_path, monkeypatch):
-    pipe, fake, st = make(tmp_home, tmp_path, [TWO, ASK_RESHOOT], shooter=ScriptShooter(True, True))
+def test_asking_to_reshoot_retakes_pictures_forlabs_took(tmp_home, tmp_path):
+    shooter = ScriptShooter(True, True, True, True)
+    pipe, fake, st = make(tmp_home, tmp_path, [TWO, ASK_RESHOOT], shooter=shooter)
     st = pipe.execute(st)
-    status, sha = st.status, st.docx_sha
-    renders = []
-    monkeypatch.setattr(pipe, "render", lambda s: renders.append(1) or s)
-    st = pipe.chat(st, "сними скриншоты ещё раз")
-    assert "уже на месте" in st.chat[-1].text
-    assert not renders and st.status == status and st.docx_sha == sha  # документ не трогали — сданная лаба осталась сданной
+    old = [f.image_path for f in figures(st)]
+    st = pipe.chat(st, "переснимай скриншоты")
+    new = [f.image_path for f in figures(st)]
+    assert len(shooter.calls) == 4 and all(new) and not set(new) & set(old)  # оба рисунка сняты заново
+    assert not any((pipe.lab_dir(st) / o).exists() for o in old)  # прежние снимки убраны
+    assert "Снял сам" in st.chat[-1].text
+
+
+def test_reshoot_that_fails_keeps_the_picture_that_was_there(tmp_home, tmp_path):
+    shooter = ScriptShooter(True, True, ShotResult(False, reason="окно консоли не появилось"), True)
+    pipe, fake, st = make(tmp_home, tmp_path, [TWO, ASK_RESHOOT], shooter=shooter)
+    st = pipe.execute(st)
+    old = figures(st)[0].image_path
+    st = pipe.chat(st, "переснимай скриншоты")
+    first, second = figures(st)
+    assert first.image_path == old and (pipe.lab_dir(st) / old).exists()  # не вышло — остался прежний
+    assert second.image_path and "Не переснял" in st.chat[-1].text
+
+
+def test_pictures_the_student_attached_are_never_retaken(tmp_home, tmp_path):
+    from test_run import png_bytes
+
+    shooter = ScriptShooter(ShotResult(False, reason="окно консоли не появилось"), True, True)
+    pipe, fake, st = make(tmp_home, tmp_path, [TWO, ASK_RESHOOT], shooter=shooter)
+    st = pipe.execute(st)
+    st = pipe.attach_screenshot(st, section=1, block=3, image=png_bytes())  # первый рисунок вставил студент
+    mine = figures(st)[0].image_path
+    st = pipe.chat(st, "переснимай скриншоты")
+    assert figures(st)[0].image_path == mine and len(shooter.calls) == 3  # переснят только второй
+

@@ -10,6 +10,8 @@ import time
 from ctypes import wintypes
 from dataclasses import dataclass
 
+from forlabs.runner.screen import render_geometry  # noqa: F401 — и для тех, кто берёт её отсюда
+
 if sys.platform != "win32":  # pragma: no cover - модуль только для Windows
     raise ImportError("forlabs.runner.winapi работает только в Windows")
 
@@ -226,8 +228,29 @@ def window_rect(hwnd: int) -> tuple[int, int, int, int]:
     return r.left, r.top, r.right, r.bottom
 
 
+def window_scale(hwnd: int) -> float:
+    """Во сколько раз окно растянуто на экране: точки на дюйм монитора / точки на дюйм, в которых окно рисует себя.
+    Программа без поддержки масштаба рисует в 96 — на экране 125 % её окно растянуто в 1,25 раза."""
+    try:
+        user32.GetDpiForWindow.restype = wintypes.UINT
+        user32.GetDpiForWindow.argtypes = [HW]
+        user32.MonitorFromWindow.restype = ctypes.c_void_p
+        user32.MonitorFromWindow.argtypes = [HW, wintypes.DWORD]
+        own = user32.GetDpiForWindow(wintypes.HWND(hwnd))
+        mon = user32.MonitorFromWindow(wintypes.HWND(hwnd), 2)  # MONITOR_DEFAULTTONEAREST
+        x, y = wintypes.UINT(), wintypes.UINT()
+        if not own or not mon or ctypes.windll.shcore.GetDpiForMonitor(ctypes.c_void_p(mon), 0, ctypes.byref(x),
+                                                                        ctypes.byref(y)) != 0 or not x.value:
+            return 1.0
+        scale = x.value / own
+        return scale if 0.25 <= scale <= 5 else 1.0
+    except (AttributeError, OSError):  # Windows старше 10 1607 — масштаб не различаем
+        return 1.0
+
+
 def capture(hwnd: int):
-    """Снимок окна через PrintWindow: окно может быть закрыто другими окнами, снимок всё равно его."""
+    """Снимок окна через PrintWindow: окно может быть закрыто другими окнами, снимок всё равно его. Окно программы
+    без поддержки масштаба экрана снимается в том размере, в каком оно себя рисует, — без чёрных полей."""
     from PIL import Image
 
     dpi_aware()
@@ -241,6 +264,8 @@ def capture(hwnd: int):
         time.sleep(0.3)
     if w <= 40 or h <= 40:
         raise OSError(f"у окна нет размера ({w}×{h})")
+    (w, h), box = render_geometry((full.left, full.top, full.right, full.bottom), window_rect(hwnd),
+                                  window_scale(hwnd))
     hwnd_dc = user32.GetWindowDC(wintypes.HWND(hwnd))
     mem_dc = gdi32.CreateCompatibleDC(hwnd_dc)
     bmp = gdi32.CreateCompatibleBitmap(hwnd_dc, w, h)
@@ -259,8 +284,6 @@ def capture(hwnd: int):
         gdi32.DeleteObject(bmp)
         gdi32.DeleteDC(mem_dc)
         user32.ReleaseDC(wintypes.HWND(hwnd), hwnd_dc)
-    left, top, right, bottom = window_rect(hwnd)
-    box = (left - full.left, top - full.top, right - full.left, bottom - full.top)
     if 0 <= box[0] < box[2] <= w and 0 <= box[1] < box[3] <= h:
         img = img.crop(box)
     return img

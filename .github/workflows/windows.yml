@@ -87,6 +87,10 @@ jobs:
             if ($bad) { Write-Output ("::error title=окна программ::" + ($bad -join "%0A")) }
           }
           exit $code
+      - name: Снимки окон при масштабе экрана 125 %, как на ноутбуках
+        if: always()
+        shell: pwsh
+        run: python tools/ci_dpi_probe.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:

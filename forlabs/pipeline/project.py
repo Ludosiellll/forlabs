@@ -562,7 +562,7 @@ def fix_shots(plan: ProjectPlan, failures: list[ShotFailure], llm, st: LabState 
     return _quiet_console(_trusted_expects(_tidy(fixed), st)) if st is not None else fixed
 
 
-def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None) -> LabState:
+def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None, retake: bool = False) -> LabState:
     """Сборка (с исправлениями, если есть модель) → листинги → копия в папку сдачи → снимки. Снимок не прошёл из-за
     сценария — модель чинит программу или шаги, и всё повторяется (до MAX_SHOT_FIXES кругов). Меняет st."""
 
@@ -730,6 +730,13 @@ def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None) 
                 b.image_path, b.auto_note = kept.pop((n, bi)), None
 
     plan, result, info.blocked, network = build(plan, fix_builds=True)
+    if retake:  # «Пересобрать» или просьба в чате: снимки, сделанные ForLabs, — заново; не выйдет — останется прежний
+        auto = {(x.section, x.block) for x in plan.shots if x.mode in ("window", "console", "browser")}
+        for n, bi, b in _blocks(st):
+            if (isinstance(b, Figure) and b.image_path and (n, bi) in auto
+                    and Path(b.image_path).name.startswith("shot_")):  # вставленное студентом не трогаем
+                kept[(n, bi)] = b.image_path
+                b.image_path = None
     while True:
         info.built = bool(result is not None and result.ok) and not info.blocked
         if result is not None and not result.ok:

@@ -202,15 +202,16 @@ def test_project_info_survives_a_crash_inside_the_repair_round(tmp_home, tmp_pat
 
 def test_repair_on_retry_retakes_pictures_from_the_earlier_run_too(tmp_home, tmp_path):
     fix = {"files": [{"path": "main.py", "content": BETTER}]}
-    # первый запуск: рисунок 1 снят, рисунок 2 — окно не появилось; «Снять ещё раз»: сценарий 2 не прошёл,
-    # модель поменяла программу — значит, и рисунок 1 должен быть от новой программы
-    shooter = ScriptShooter(True, ShotResult(False, reason="окно консоли не появилось"), ui_fail(), True, True)
+    # первый запуск: рисунок 1 снят, рисунок 2 — окно не появилось; «Снять ещё раз»: рисунок 1 переснят, сценарий 2
+    # не прошёл, модель поменяла программу — значит, и рисунок 1 снимается ещё раз, уже с новой программой
+    shooter = ScriptShooter(True, ShotResult(False, reason="окно консоли не появилось"), True, ui_fail(), True, True)
     pipe, fake, st = make(tmp_home, tmp_path, [TWO, fix], shooter=shooter)
     st = pipe.execute(st)
     old = figures(st)[0].image_path
     st = pipe.retry_project(st)
     first, second = figures(st)
-    assert len(shooter.calls) == 5 and first.image_path != old and second.image_path
+    assert len(shooter.calls) == 6 and first.image_path != old and second.image_path
+    assert hand_in(tmp_path) == BETTER
     assert not (pipe.lab_dir(st) / old).exists()  # прежний снимок убран, а не лежит рядом
 
 
@@ -221,3 +222,13 @@ def test_retake_works_when_plan_file_is_not_on_this_computer(tmp_home, tmp_path)
     (pipe.lab_dir(st) / "project" / "plan.json").unlink()  # лабу открыли на другом компьютере
     st = pipe.retry_project(st)  # план составляется заново, а не «проекта ещё нет»
     assert figures(st)[0].image_path
+
+
+def test_rebuild_button_retakes_pictures_forlabs_took(tmp_home, tmp_path):
+    shooter = ScriptShooter(True, True, True, True)
+    pipe, fake, st = make(tmp_home, tmp_path, [TWO], shooter=shooter)
+    st = pipe.execute(st)
+    old = [f.image_path for f in figures(st)]
+    st = pipe.retry_project(st)  # «Пересобрать»: программа и снимки заново (снимки прошлой версии ForLabs — тоже)
+    new = [f.image_path for f in figures(st)]
+    assert len(shooter.calls) == 4 and all(new) and not set(new) & set(old)
