@@ -1058,7 +1058,11 @@ class Pipeline:
             lines.append("Снял сам: " + "; ".join(f"«{t}»" for t in taken[:6]) + ".")
         if same and (force or outdated):
             lines.append("Не переснял: " + "; ".join(f"«{t}»" for t in same[:5]) + " — оставил прежний снимок.")
-        for b in left[:5]:
+        in_apps = [b for b in left if b.app_task is not None]  # их снимает не пересборка, а работа в программе
+        if in_apps:
+            lines.append("Эти рисунки снимаются в самих программах — нажми «Сделать снимки в программах» в блоке "
+                         "«Снимки в программах» слева: " + "; ".join(f"«{b.topic}»" for b in in_apps[:5]) + ".")
+        for b in [x for x in left if x.app_task is None][:5]:
             why = (b.auto_note or "").removeprefix("Сам не снял: ").rstrip(".")
             lines.append(f"Не получилось: «{b.topic}»" + (f" — {why}." if why else "."))
         return st, "".join("\n" + ln for ln in lines), True

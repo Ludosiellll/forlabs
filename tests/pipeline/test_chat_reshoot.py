@@ -193,3 +193,19 @@ def test_first_plan_has_no_previous_project(tmp_home, tmp_path):
     st = pipe.execute(st)
     asked = "\n".join(m["content"] for m in fake.calls[4] if isinstance(m["content"], str))
     assert "Прежний проект" not in asked
+
+
+def test_figures_taken_inside_programs_are_not_called_failures(tmp_home, tmp_path):
+    # рисунок «окно среды» снимается кнопкой «Сделать снимки в программах»: повтор его не переснимет, и чат так и говорит
+    from forlabs.core.models import AppTask
+
+    app_plan = {**PLAN, "shots": [PLAN["shots"][0],
+                                  {"section": 2, "block": 2, "mode": "app", "app": "idle",
+                                   "goal": "открыть main.py в редакторе", "open": ["main.py"]}]}
+    pipe, fake, st = make(tmp_home, tmp_path, [app_plan, ASK_RESHOOT], shooter=ScriptShooter(True, True))
+    st = pipe.execute(st)
+    assert isinstance(figures(st)[1].app_task, AppTask)
+    st = pipe.chat(st, "попробуй ещё раз сделать все скрины")
+    reply = st.chat[-1].text
+    assert "Сделать снимки в программах" in reply and "Окно IDLE" in reply
+    assert "Не получилось: «Окно IDLE" not in reply
