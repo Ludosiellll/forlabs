@@ -181,6 +181,9 @@ table.t tr.click:hover td { background: var(--panel); }
 .fold[open] > summary::before { transform: translateY(-3px) rotate(45deg); }
 .fold[open] > summary { margin-bottom: 8px; }
 .fold .hint { margin-top: 6px; }
+.with-pick { display: flex; gap: 6px; align-items: center; }
+.with-pick input { flex: 1; min-width: 0; }
+.with-pick .btn { flex: none; white-space: nowrap; }
 .build-log { margin: 6px 0 10px; }
 .build-log > summary { cursor: pointer; font-size: 13px; color: var(--err); }
 .build-log pre { margin: 8px 0 6px; padding: 8px 10px; max-height: 220px; overflow: auto; border-radius: var(--radius);

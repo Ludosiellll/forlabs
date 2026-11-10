@@ -113,6 +113,25 @@ def _open_window(url: str, ctx=None) -> None:
                 pass
 
         ctx.minimize = minimize
+
+        def pick(kind: str, initial: str = "") -> str | None:
+            """Системное окно выбора папки (folder) или файла программы (file). Отмена — None."""
+            import os
+            from pathlib import Path
+
+            folder = kind == "folder"
+            dialogs = getattr(webview, "FileDialog", None)
+            mode = getattr(dialogs, "FOLDER" if folder else "OPEN", None)
+            if mode is None:
+                mode = webview.FOLDER_DIALOG if folder else webview.OPEN_DIALOG
+            start = initial if initial and os.path.isdir(initial) else (str(Path(initial).parent) if initial else "")
+            kw = {"directory": start if start and os.path.isdir(start) else ""}
+            if not folder:
+                kw["file_types"] = ("Программы (*.exe)", "Все файлы (*.*)")
+            res = window.create_file_dialog(mode, **kw)
+            return str(res[0]) if res else None
+
+        ctx.pick = pick
     # на Windows только WebView2: без него pywebview тихо взял бы движок IE (без fetch и потоков событий) —
     # лучше ошибка, тогда откроется обычный браузер
     webview.start(gui="edgechromium") if sys.platform == "win32" else webview.start()

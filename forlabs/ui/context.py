@@ -59,6 +59,9 @@ class AppContext:
         self.spawn_installer = spawn_detached
         self.quit: Callable[[], None] | None = None  # закрыть окно ForLabs (задаёт запуск окна)
         self.minimize: Callable[[], None] | None = None  # свернуть окно ForLabs, пока агент работает в программе
+        # системное окно выбора папки или файла: pick("folder" | "file", откуда начать) → путь или None (отмена).
+        # Задаёт запуск окна; в обычном браузере его нет — тогда путь вписывают руками
+        self.pick: Callable[..., str | None] | None = None
         self._tools = None  # программы для лаб: создаются при первом обращении
         if self.cloud:
             self.auth.load_session()

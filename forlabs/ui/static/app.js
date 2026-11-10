@@ -649,3 +649,23 @@ window.addEventListener("pageshow", function () {
   if (recheck) recheck.addEventListener("click", function () { poll(true); });
   poll(); // загрузка могла идти, пока студент был на другой странице
 })();
+
+// «Выбрать…» у поля с путём: системное окно выбора папки или файла вместо ввода пути руками
+document.querySelectorAll("[data-pick]").forEach(function (b) {
+  b.addEventListener("click", function () {
+    var input = document.getElementById(b.getAttribute("data-pick-for"));
+    if (!input || b.disabled) return;
+    var body = new URLSearchParams();
+    body.append("kind", b.getAttribute("data-pick"));
+    body.append("initial", input.value || "");
+    b.disabled = true;
+    fetch("/pick", { method: "POST", body: body })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (j.path) { input.value = j.path; input.dispatchEvent(new Event("change", { bubbles: true })); }
+        else if (j.error) { input.focus(); input.setAttribute("title", j.error); }
+      })
+      .catch(function () {})
+      .then(function () { b.disabled = false; });
+  });
+});

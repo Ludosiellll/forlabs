@@ -53,6 +53,7 @@
           <input type="hidden" name="key" value="{{ app.key }}">
           <label class="visually-hidden" for="path-{{ app.key }}">Где установлена «{{ app.title }}»</label>
           <input id="path-{{ app.key }}" name="path" type="text" maxlength="400" placeholder="Она у меня есть: путь к .exe">
+          {% if ctx.pick %}<button type="button" class="btn small" data-pick="file" data-pick-for="path-{{ app.key }}">Выбрать…</button>{% endif %}
           <button class="btn small" type="submit">Сохранить</button>
         </form></div>
       {% endfor %}

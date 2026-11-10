@@ -57,9 +57,11 @@
     <p class="small">Word: <b>{{ 'найден' if word else 'не найден' }}</b>{% if not word %} — номера страниц посчитает LibreOffice, а «Продолжение листинга» появится после пересборки на ПК с Word{% endif %}.
       LibreOffice: <b>{{ 'найден' if soffice else 'не найден' }}</b>.</p>
     <div class="field"><label for="soffice_path">Путь к LibreOffice, если ForLabs не нашёл его сам</label>
-      <input id="soffice_path" name="soffice_path" type="text" value="{{ s.soffice_path or '' }}" placeholder="{{ soffice or 'C:\\Program Files\\LibreOffice\\program\\soffice.exe' }}"></div>
+      <div class="with-pick"><input id="soffice_path" name="soffice_path" type="text" value="{{ s.soffice_path or '' }}" placeholder="{{ soffice or 'C:\\Program Files\\LibreOffice\\program\\soffice.exe' }}">
+        {% if ctx.pick %}<button type="button" class="btn small" data-pick="file" data-pick-for="soffice_path">Выбрать…</button>{% endif %}</div></div>
     <div class="field"><label for="tesseract_path">Путь к Tesseract (читает методички-фото)</label>
-      <input id="tesseract_path" name="tesseract_path" type="text" value="{{ s.tesseract_path or '' }}" placeholder="C:\Program Files\Tesseract-OCR\tesseract.exe"></div>
+      <div class="with-pick"><input id="tesseract_path" name="tesseract_path" type="text" value="{{ s.tesseract_path or '' }}" placeholder="C:\Program Files\Tesseract-OCR\tesseract.exe">
+        {% if ctx.pick %}<button type="button" class="btn small" data-pick="file" data-pick-for="tesseract_path">Выбрать…</button>{% endif %}</div></div>
     <div class="row wrap">
       <button class="btn small primary" type="submit">Сохранить пути</button>
       <button class="btn small" type="submit" form="check-form">Проверить связь с моделью</button>

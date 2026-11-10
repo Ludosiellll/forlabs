@@ -17,7 +17,8 @@
         <label class="radio"><input type="radio" name="gender" value="f" {{ 'checked' if p.gender == 'f' }}> Женский</label>
         <div class="hint">От него зависят окончания: «выполнил» или «выполнила».</div></div>
       <div class="field"><label for="output_root">Папка для готовых отчётов</label>
-        <input id="output_root" name="output_root" type="text" value="{{ p.output_root }}" placeholder="D:\Лабы\Иванов"></div>
+        <div class="with-pick"><input id="output_root" name="output_root" type="text" value="{{ p.output_root }}" placeholder="D:\Лабы\Иванов">
+          {% if ctx.pick %}<button type="button" class="btn small" data-pick="folder" data-pick-for="output_root">Выбрать…</button>{% endif %}</div></div>
     </div>
 
     <h2 class="sect">Предметы</h2>

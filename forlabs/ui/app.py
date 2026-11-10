@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 import json
+import logging
 import os
 import re
 import subprocess
@@ -1189,6 +1190,19 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
                       show_mode=not _version.frozen() and admin, show_model=admin,
                       word=word_com.available(), soffice=libreoffice.find_soffice(ctx.settings.soffice_path),
                       nav="settings", model_choices=MODEL_CHOICES)
+
+    @app.post("/pick")
+    def pick_path(kind: str = Form("folder"), initial: str = Form("")):
+        """«Выбрать…» у поля с путём: системное окно выбора папки или файла. Путь выбирает сам человек в окне."""
+        if ctx.pick is None:
+            return JSONResponse({"error": "Окно выбора есть только в окне ForLabs — впиши путь руками."},
+                                status_code=409)
+        try:
+            path = ctx.pick("file" if kind == "file" else "folder", initial.strip()[:500])
+        except Exception as e:  # noqa: BLE001 — окно не открылось: поле остаётся для ввода руками
+            logging.getLogger("forlabs").warning("окно выбора: %s", e)
+            return JSONResponse({"error": "Не получилось открыть окно выбора — впиши путь руками."}, status_code=500)
+        return {"path": path or ""}
 
     @app.get("/settings/balance")
     def settings_balance():
