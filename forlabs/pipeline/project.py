@@ -186,6 +186,20 @@ go.mod, pom.xml, package.json, CMakeLists.txt) делает ForLabs — не п�
 """ + SCENARIO_RULES
 
 REJECTED = "\n\nПрошлое исправление не принято: "
+REPAIR_SYSTEM = """Ты чинишь проект лабораторной работы по просьбе студента. Ниже — что нужно исправить, ошибки
+последней сборки (если она не прошла) и все файлы проекта. Найди причину и исправь её в файлах; меняй как можно
+меньше и тем же стилем, то, о чём не просили, не трогай. Если изменился код, который входит в листинг отчёта (список
+ниже), верни этот листинг в listings — так, как он теперь стоит в файле. Ответ — только JSON: {"files": [{"path": "…",
+"content": "файл целиком"}], "listings": [{"section": 1, "block": 2, "file": "…", "code": "…"}], "remove": [],
+"programs": [], "shots": []} — только изменённые файлы. Файлы сборки (csproj, sln, go.mod, pom.xml, package.json,
+CMakeLists.txt) делает ForLabs — не пиши их; "remove" — пути файлов проекта, которые нужно убрать. Правила те же:
+русские надписи, без служебных пометок, без работы с файлами вне папки программы и процессами; в интернет — только
+если этого требует задание.
+""" + SPLIT_RULES + """
+Если из-за исправления меняется то, что видно на снимке, верни в shots исправленный сценарий этого снимка целиком.
+Как ForLabs проходит сценарий:
+""" + SCENARIO_RULES
+
 MAX_SHOT_FIXES = 2  # кругов «снимок не вышел → модель чинит программу или сценарий → снимаю заново»
 SEEN_LIMIT = 2500  # экран консоли или окно программы в запросе на исправление
 PLAN_MAX_TOKENS = 8000
@@ -422,8 +436,10 @@ def _quiet_console(plan: ProjectPlan) -> ProjectPlan:
     return plan.model_copy(update={"shots": shots})
 
 
-def plan_project(st: LabState, llm, memory: str = "") -> ProjectPlan:
+def plan_project(st: LabState, llm, memory: str = "", wish: str = "") -> ProjectPlan:
     user = lab_text(st) + (f"\n\nПамять предмета и требования:\n{memory[:6000]}" if memory.strip() else "")
+    if wish.strip():  # просьба из чата правок: что в прежнем проекте было не так
+        user += f"\n\nСтудент просит о программе: {wish.strip()}"
     try:
         plan = llm.json([{"role": "system", "content": PROJECT_SYSTEM}, {"role": "user", "content": user}],
                         ProjectPlan, max_tokens=PLAN_MAX_TOKENS)
@@ -495,6 +511,32 @@ def _apply_fix(plan: ProjectPlan, out: FixOut, scenarios: bool) -> ProjectPlan:
         return _assign_programs(ProjectPlan.model_validate(data))
     except ValueError:
         return plan  # ответ не складывается в план: остаётся прежний, причину покажет сборка
+
+
+def repair_project(plan: ProjectPlan, wish: str, log: str, llm, st: LabState | None = None) -> ProjectPlan:
+    """Просьба из чата правок («исправь ошибки сборки», «разнеси по проектам»): модель видит просьбу, ошибки
+    последней сборки и все файлы и возвращает исправление. Собирает и проверяет его уже конвейер."""
+    files = "\n\n".join(f"Файл {f.path}:\n<<<\n{f.content}\n>>>" for f in plan.files
+                        if Path(f.path).suffix.lower() not in DATA_EXT)
+    refs = "; ".join(f"[{r.section}.{r.block}] из {r.file}" for r in plan.listings) or "нет"
+    shots = "\n".join(f"[{x.section}.{x.block}] " + x.model_dump_json(
+        exclude={"section", "block", "reason", "app", "goal", "open"}, exclude_defaults=True)
+        for x in plan.shots if x.mode in AUTO_MODES) or "нет"
+    errors = f"Ошибки последней сборки:\n{log[-6000:]}" if log.strip() else "Последняя сборка прошла без ошибок."
+    user = (f"Что исправить: {wish.strip()}\n\nЯзык: {plan.language}, вид: {plan.kind}. {programs_text(plan)}\n\n"
+            f"{errors}\n\nЛистинги отчёта: {refs}.\nСнимки, которые ForLabs делает сам:\n{shots}\n\n"
+            f"Файлы проекта:\n{files}")
+    out = llm.json([{"role": "system", "content": REPAIR_SYSTEM}, {"role": "user", "content": user}], FixOut,
+                   max_tokens=PLAN_MAX_TOKENS)
+    fixed = _apply_fix(plan, out, scenarios=True)
+    return _quiet_console(_trusted_expects(_tidy(fixed), st)) if st is not None else fixed
+
+
+def first_error(log: str, limit: int = 300) -> str:
+    """Главная строка лога сборки — та, что с ошибкой (иначе первая непустая): её чат показывает студенту."""
+    lines = [ln.strip() for ln in (log or "").splitlines() if ln.strip()]
+    hit = next((ln for ln in lines if re.search(r"\berror\b|Error\b|ошибк", ln, re.I)), lines[0] if lines else "")
+    return hit if len(hit) <= limit else hit[:limit].rstrip() + "…"
 
 
 def _with_materials(plan: ProjectPlan, st: LabState) -> ProjectPlan:

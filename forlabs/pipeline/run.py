@@ -795,17 +795,25 @@ class Pipeline:
             return None
         return str(int(f) - 1) if f == int(f) and f >= 2 else None
 
-    def _project(self, st: LabState, llm, plan=None, retake: bool = False) -> LabState:
-        """Этап «Проект»: программа лабы собирается и запускается, снимки окон — сам ForLabs. Сбой — не ошибка лабы."""
+    def _project(self, st: LabState, llm, plan=None, retake: bool = False, fix: str = "") -> LabState:
+        """Этап «Проект»: программа лабы собирается и запускается, снимки окон — сам ForLabs. Сбой — не ошибка лабы.
+        fix — просьба из чата исправить программу: модель чинит файлы прежнего плана, затем обычная сборка."""
         from forlabs.pipeline import project as proj
 
         if not self.projects or not st.report or (plan is None and not proj.needs_project(st)):
             return st
         emit = lambda text, kind="info": self._emit(st, text, kind, step="check")  # noqa: E731
         try:
+            if plan is not None and fix:
+                emit("Исправляю программу")
+                fixed = proj.repair_project(plan, fix, st.project.build_log if st.project else "", llm, st)
+                if problems := proj.validate(fixed):
+                    emit("Исправление не принято: " + "; ".join(problems[:3]), "warn")
+                else:
+                    plan = fixed
             if plan is None:
                 emit("Составляю проект программы")
-                plan = proj.plan_project(st, llm, self._memory_text(st))
+                plan = proj.plan_project(st, llm, self._memory_text(st), wish=fix)
                 if st.project is not None and st.project.name:  # план составлен заново: проект остаётся в своей папке
                     plan = plan.model_copy(update={"name": st.project.name})
                 problems = proj.validate(plan)
@@ -867,7 +875,7 @@ class Pipeline:
                 self.projects = projects
         return self.render(st)
 
-    def _reproject(self, st: LabState, llm, fresh: bool = False, retake: bool = False) -> LabState:
+    def _reproject(self, st: LabState, llm, fresh: bool = False, retake: bool = False, fix: str = "") -> LabState:
         """Программа и снимки заново. Прежний план годится, только если отчёт с тех пор не меняли: план ссылается на
         блоки по номерам, и после правки кода в чате он вернул бы в отчёт старый код. Иначе (и при fresh — код
         только что меняли) план составляется снова."""
@@ -876,11 +884,12 @@ class Pipeline:
         plan = None if fresh else proj.load_plan(self, st)
         if plan is not None and proj.stale(st, plan):
             plan = None
-        return self._project(st, llm, plan=plan, retake=retake)
+        return self._project(st, llm, plan=plan, retake=retake, fix=fix)
 
     def _chat_reshoot(self, st: LabState, llm, code_changed: bool = False,
-                      force: bool = True) -> tuple[LabState, str, bool]:
-        """Снимки программы по просьбе в чате (force: и те, что ForLabs уже снимал) или после правки кода.
+                      force: bool = True, fix: str = "") -> tuple[LabState, str, bool]:
+        """Снимки программы по просьбе в чате (force: и те, что ForLabs уже снимал) или после правки кода; fix —
+        просьба исправить саму программу: сначала чинятся файлы проекта, потом сборка и снимки.
         → (лаба, что получилось — строками для ответа, менялось ли что-то: тогда документ собирается заново)."""
         from forlabs.pipeline import project as proj
 
@@ -896,16 +905,24 @@ class Pipeline:
         auto = {k for k, path in was.items() if path and Path(path).name.startswith("shot_")}  # снятые ForLabs
         missing = {k for k, path in was.items() if not path}
         outdated = code_changed or proj.stale(st, proj.load_plan(self, st))
-        if not missing and not outdated and not (force and auto):
+        if not fix and not missing and not outdated and not (force and auto):
             return st, "\nВсе рисунки уже на месте.", False
-        st = self._reproject(st, llm, fresh=code_changed, retake=force or outdated)
+        st = self._reproject(st, llm, fresh=code_changed, retake=force or outdated or bool(fix), fix=fix)
         now = figures()
         taken = [b.topic for k, b in now.items() if b.image_path and b.image_path != was.get(k)]
         same = [now[k].topic for k in sorted(auto) if k in now and now[k].image_path == was[k]]
         left = [b for b in now.values() if not b.image_path]
         lines = []
-        if outdated and st.project is not None and st.project.built:
+        built = st.project is not None and st.project.built
+        if fix and built:
+            lines.append("Программу исправил и собрал заново.")
+        elif outdated and built:
             lines.append("Программу пересобрал под новый код.")
+        if st.project is not None and not built and st.project.build_log.strip():
+            # не «ошибки остались», а сама ошибка компилятора: по ней видно, что чинить
+            lines.append(f"Сборка не прошла: {proj.first_error(st.project.build_log)}")
+            lines.append("Все ошибки — слева, в блоке «Программа». Напиши «исправь ошибки сборки», и я попробую ещё раз.")
+            left = [b for b in left if "не собралась" not in (b.auto_note or "")]  # причина уже названа
         if taken:
             lines.append("Снял сам: " + "; ".join(f"«{t}»" for t in taken[:6]) + ".")
         if same and (force or outdated):
@@ -1064,7 +1081,13 @@ class Pipeline:
                     message = f"{message}\n\nНа приложенных фото:\n{user_msg.image_text}".strip()
                 self._emit(st, "Разбираю правку", step="write")
                 enrollment = self._enrollment(profile, st.subject_id)
-                plan = plan_edit(st, message, profile, subject, llm, self.rules, self._teacher_text(st), enrollment)
+                from forlabs.pipeline import project as proj
+                from forlabs.pipeline.lookup import ProjectView
+
+                view = ProjectView(plan=proj.load_plan(self, st), st=st,
+                                   folder=st.project.folder if st.project is not None else None)
+                plan = plan_edit(st, message, profile, subject, llm, self.rules, self._teacher_text(st), enrollment,
+                                 view=view)
                 from forlabs.pipeline.chat import profile_changes
 
                 proposals = profile_changes(plan.profile, profile, enrollment)
@@ -1088,14 +1111,18 @@ class Pipeline:
                 was_final = st.status == "final"
                 if plan.kind != "edit":
                     shots, touched = "", False
-                    if plan.reshoot:  # «сними сам ещё раз»
-                        st, shots, touched = self._chat_reshoot(st, llm)
+                    if plan.project and self.projects:  # «исправь программу»: чинит и листинги отчёта — с откатом
+                        vid = push_version(st, message)
+                    if plan.reshoot or plan.project:  # «сними сам ещё раз», «исправь ошибки сборки»
+                        st, shots, touched = self._chat_reshoot(st, llm, fix=plan.project or "")
                         if touched and was_final:
                             shots += "\nЛаба уже была сдана. Сдай заново, чтобы в папке сдачи был новый файл."
+                    if vid is not None and not touched:
+                        st.versions, vid = [v for v in st.versions if v.id != vid], None
                     note = remember_rule()
                     reply = ChatMessage(id=uuid.uuid4().hex[:8], role="assistant",
                                         text=(plan.reply + shots + note).strip(), at=_now(), kind=plan.kind,
-                                        profile=proposals)
+                                        profile=proposals, version=vid)
                     st.chat.append(reply)
                     self._emit(st, "Ответ в чате правок", "done", step="write")
                     if not touched:  # ничего не менялось — документ остаётся как был (сданная лаба — сданной)
@@ -1147,9 +1174,11 @@ class Pipeline:
                     codes = lambda r: [b.code for sec in r.sections for b in sec.blocks  # noqa: E731
                                        if isinstance(b, Listing)]
                     code_changed = codes(st.report) != codes(backup_report)
-                    if self.projects and (plan.reshoot or ((retake or code_changed) and st.project is not None)):
+                    if self.projects and (plan.reshoot or plan.project
+                                          or ((retake or code_changed) and st.project is not None)):
                         # код отчёта изменился: программа в папке сдачи и снимки должны быть от нового кода
-                        st, shots, _ = self._chat_reshoot(st, llm, code_changed, force=plan.reshoot)
+                        st, shots, _ = self._chat_reshoot(st, llm, code_changed, force=plan.reshoot,
+                                                          fix=plan.project or "")
                         open_topics = {b.topic for sec in st.report.sections for b in sec.blocks
                                        if isinstance(b, Figure) and not b.image_path}
                         retake = [t for t in retake if t in open_topics]

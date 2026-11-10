@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import uuid
 from pathlib import Path
@@ -40,6 +41,8 @@ from forlabs.pipeline.write import (
 )
 
 SOURCE_LIMIT = 30_000
+MAX_LOOKS = 3  # сколько раз за одно сообщение чат может заглянуть в файлы проекта, прежде чем ответить
+LOST = "Не получилось разобраться с первого раза. Напиши, пожалуйста, точнее, что поменять или что не так."
 _NEEDS_SOURCE = re.compile(r"вариант|приложени|методичк|по заданию|из задания|дословно", re.IGNORECASE)
 HISTORY = 6
 
@@ -54,6 +57,27 @@ class QuestionEdit(BaseModel):
     instruction: str
 
 
+class Look(BaseModel):
+    """Что чат хочет посмотреть сам: файл проекта, текст в файлах проекта или задание отчёта целиком."""
+    file: str = ""
+    line: int = 1
+    find: str = ""
+    task: int | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _loose(cls, v):
+        if isinstance(v, str):  # модель иногда пишет просто путь
+            return {"file": v}
+        if isinstance(v, dict):
+            v = {k: v[k] for k in ("file", "line", "find", "task") if v.get(k) not in (None, "")}
+            v.update({k: str(v[k]) for k in ("file", "find") if k in v})
+            for k in ("line", "task"):
+                if k in v and not str(v[k]).strip().lstrip("-").isdigit():
+                    v.pop(k)
+        return v
+
+
 class EditPlan(BaseModel):
     kind: Literal["edit", "answer", "question", "offtopic"] = "question"
 
@@ -66,7 +90,9 @@ class EditPlan(BaseModel):
             kind = str(v.get("kind") or "").strip().lower()
             if kind not in ("edit", "answer", "question", "offtopic"):  # непонятное: есть правки — правка
                 kind = "edit" if (v.get("tasks") or v.get("questions") or v.get("conclusion")) else "question"
-            v = {**v, "kind": kind, "profile": v.get("profile") if isinstance(v.get("profile"), list) else []}
+            v = {**v, "kind": kind, "profile": v.get("profile") if isinstance(v.get("profile"), list) else [],
+                 "look": v.get("look") if isinstance(v.get("look"), list) else [],
+                 "project": v.get("project") if isinstance(v.get("project"), str) else None}
         return v
 
     profile: list[dict] = Field(default_factory=list)  # [{"field": "teacher", "value": "…"}]
@@ -79,6 +105,8 @@ class EditPlan(BaseModel):
     conclusion: str | None = None
     remember: str | None = None
     reshoot: bool = False  # студент просит ForLabs самому снять скриншоты окон программы ещё раз
+    project: str | None = None  # что исправить в самой программе: ForLabs чинит файлы проекта и пересобирает
+    look: list[Look] = Field(default_factory=list)  # что посмотреть, прежде чем отвечать
 
     @property
     def changes_anything(self) -> bool:
@@ -213,7 +241,7 @@ def shown(change: ProfileChange, which: str = "value") -> str:
 
 
 def plan_edit(st: LabState, message: str, profile: Profile, subject: Subject, llm, rules: RuleBook,
-              teacher: str, enrollment=None) -> EditPlan:
+              teacher: str, enrollment=None, view=None) -> EditPlan:
     spec, report = st.spec, st.report
     qa = "\n".join(f"{q.n}. {q.question}\n   Ответ: {q.answer}" for q in report.questions) or "нет"
     prior = st.chat[:-1] if st.chat and st.chat[-1].role == "user" else st.chat  # текущее сообщение — ниже
@@ -230,13 +258,28 @@ def plan_edit(st: LabState, message: str, profile: Profile, subject: Subject, ll
             f"Пожелания и отклонения от методички для этой лабы: {spec.wishes or 'нет'}\n"
             f"Файлы к лабе от преподавателя (их целиком видит правка заданий): "
             f"{', '.join(m.name for m in st.materials) or 'нет'}\n\n"
+            f"{view.summary() if view is not None else 'Программа лабы: нет сведений.'}\n\n"
             f"Отчёт сейчас (блоки по заданиям):\n{_outline(st)}\n\n"
             f"Контрольные вопросы и ответы:\n{qa}\n\n"
             f"Последние сообщения чата:\n{history or 'нет'}\n\n"
             f"Текст методички (для вариантов):\n{source}\n\n"
             f"Новое сообщение студента:\n{message}")
-    plan = llm.json([{"role": "system", "content": CHAT_PLAN_SYSTEM.format(rules=rules.load("repair", subject.id))},
-                     {"role": "user", "content": user}], EditPlan, max_tokens=PLAN_MAX_TOKENS)
+    messages = [{"role": "system", "content": CHAT_PLAN_SYSTEM.format(rules=rules.load("repair", subject.id))},
+                {"role": "user", "content": user}]
+    for rounds in range(MAX_LOOKS + 1):
+        plan = llm.json(messages, EditPlan, max_tokens=PLAN_MAX_TOKENS)
+        if not plan.look or view is None or rounds == MAX_LOOKS:
+            break
+        asked = json.dumps({"look": [x.model_dump(exclude_defaults=True) for x in plan.look]}, ensure_ascii=False)
+        last = rounds == MAX_LOOKS - 1
+        messages = [*messages, {"role": "assistant", "content": asked},
+                    {"role": "user", "content": f"Вот что нашлось:\n\n{view.answer(plan.look)}\n\n" + (
+                        "Больше смотреть нельзя: ответь по формату, без look." if last else
+                        "Теперь ответь по формату. Если без этого не ответить, посмотри ещё.")}]
+    if plan.look and not (plan.reply.strip() or plan.changes_anything or plan.project or plan.reshoot):
+        plan.kind, plan.reply = "question", LOST  # так ничего и не решил: студент не остаётся без ответа
+    plan.look = []
+    plan.project = " ".join((plan.project or "").split())[:600] or None
     task_numbers = {t.n for t in spec.tasks}
     dropped = sorted({t.n for t in plan.tasks if t.n not in task_numbers})
     plan.tasks = [t for t in plan.tasks if t.n in task_numbers and t.instruction.strip()]
@@ -246,13 +289,13 @@ def plan_edit(st: LabState, message: str, profile: Profile, subject: Subject, ll
         plan.reply = _short(plan.reply)
     plan.remember = (plan.remember or "").strip() or None
     if plan.kind == "offtopic":
-        plan.reshoot = False
-    elif plan.reshoot and plan.kind == "question":  # просьба понятна: снять заново
+        plan.reshoot, plan.project = False, None
+    elif (plan.reshoot or plan.project) and plan.kind == "question":  # просьба понятна: снять заново, исправить
         plan.kind = "answer"
     if plan.kind != "edit":
         plan.tasks, plan.questions = [], []
         plan.variant = plan.variant_text = plan.conclusion = None
-    elif not plan.changes_anything and plan.reshoot:
+    elif not plan.changes_anything and (plan.reshoot or plan.project):
         plan.kind = "answer"
     elif not plan.changes_anything:
         plan.kind = "question"
