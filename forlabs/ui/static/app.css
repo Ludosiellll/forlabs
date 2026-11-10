@@ -181,6 +181,11 @@ table.t tr.click:hover td { background: var(--panel); }
 .fold[open] > summary::before { transform: translateY(-3px) rotate(45deg); }
 .fold[open] > summary { margin-bottom: 8px; }
 .fold .hint { margin-top: 6px; }
+.build-log { margin: 6px 0 10px; }
+.build-log > summary { cursor: pointer; font-size: 13px; color: var(--err); }
+.build-log pre { margin: 8px 0 6px; padding: 8px 10px; max-height: 220px; overflow: auto; border-radius: var(--radius);
+  background: var(--panel); border: 1px solid var(--line-soft); font: 11.5px/1.45 var(--mono);
+  white-space: pre-wrap; overflow-wrap: anywhere; }
 .lab-left .fold { margin: 0; }
 .lab-delete .btn { padding-left: 0; }
 .fold.program-box { border: 0; border-top: 1px solid var(--line-soft); border-radius: 0; margin: 0; padding: 8px 0; }

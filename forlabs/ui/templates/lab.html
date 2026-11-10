@@ -25,8 +25,14 @@
       {% if pr.missing %}<p class="small">Не хватает: {{ pr.missing|map('tool_title')|join(', ') }}. Установи и нажми «Повторить».</p>
         {% for key in pr.missing %}{% if key in ctx.tools.tools %}{% with tool=ctx.tools.tool_status(key) %}{% include "_tool_missing.html" %}{% endwith %}{% endif %}{% endfor %}
       {% endif %}
+      {% if pr.programs %}<p class="small muted">Программ в проекте: {{ pr.programs|length }} — {{ pr.programs|join(', ') }}. У каждой своя папка{% if pr.language == 'csharp' %}; в Visual Studio открой файл .sln из папки проекта, в нём все сразу{% endif %}.</p>{% endif %}
       {% if pr.blocked %}<p class="small muted">Сам не запускал: {{ pr.blocked[0] }}</p>{% endif %}
       {% if pr.note and not pr.built and not pr.missing %}<p class="small muted">{{ pr.note }}</p>{% endif %}
+      {% if pr.build_log and not pr.built %}
+      <details class="build-log"><summary>Ошибки сборки</summary>
+        <pre>{{ pr.build_log }}</pre>
+        <p class="small muted">Напиши в «Правках»: «исправь ошибки сборки» — ForLabs поправит код и соберёт заново.</p>
+      </details>{% endif %}
       <div class="row until">
         {% if pr.folder %}<form method="post" action="{{ base_url }}/project/open"><button class="btn small" type="submit">Папка проекта</button></form>
         <a class="btn small" href="{{ base_url }}/project.zip">.zip</a>{% endif %}
