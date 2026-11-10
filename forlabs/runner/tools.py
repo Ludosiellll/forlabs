@@ -127,6 +127,24 @@ def catalog() -> dict[str, Tool]:
     return _CATALOG[0]
 
 
+def how_to_get(key: str) -> str:
+    """Чего не хватает и как это поставить — словами для студента (страница лабы и чат правок)."""
+    t = catalog().get(key)
+    if t is None:
+        return ""
+    what = f"«{t.name}»" + (f" (нужна для: {t.purpose})" if t.purpose else "")
+    page = f" Официальная страница: {t.page}" if t.page else ""
+    note = f" {t.note.rstrip('.')}." if t.note else ""
+    if t.portable:
+        return (f"{what}. Слева в блоке «Программа» нажми «Установить»: ForLabs сам скачает её с официального сайта "
+                f"и поставит в свою папку (около {t.size_mb} МБ, права администратора не нужны). Можно поставить и "
+                f"самому.{page}{note} Потом нажми «Повторить».")
+    if t.kind == "system":
+        return f"{what}.{note}{page} Потом нажми «Повторить»."
+    return (f"{what}. ForLabs её сам не ставит: скачай установщик с официальной страницы и установи.{page}{note} "
+            "Потом нажми «Повторить».")
+
+
 def vcredist() -> dict:
     catalog()
     assert _CATALOG is not None

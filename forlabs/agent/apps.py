@@ -197,6 +197,17 @@ _CACHE: dict[tuple, tuple[float, dict[str, str]]] = {}
 CACHE_SECONDS = 120
 
 
+def how_to_get(key: str) -> str:
+    """Какой программы не хватает для снимка и что с этим делать — словами для студента."""
+    app = APPS.get(key)
+    if app is None:
+        return ""
+    where = f" Скачать: {app.get}" if app.get else ""
+    note = f" {app.note[:1].upper()}{app.note[1:].rstrip('.')}." if app.note else ""
+    return (f"«{app.title}» на этом компьютере не найдена.{where}{note} Если она установлена в необычном месте, "
+            "укажи путь к ней слева, в блоке «Снимки в программах». Потом нажми «Сделать снимки в программах».")
+
+
 def installed(custom: dict[str, str] | None = None, fresh: bool = False) -> dict[str, str]:
     """Какие программы есть: ключ → путь. Поиск небыстрый (реестр, vswhere, Python) — ответ помнится пару минут."""
     import time

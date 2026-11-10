@@ -945,6 +945,18 @@ class Pipeline:
                          "поменять.")
         elif outdated and built:
             lines.append("Программу пересобрал под новый код.")
+        if st.project is not None and st.project.missing:  # чего нет, зачем оно и как поставить — со ссылкой
+            from forlabs.runner import tools as tool_catalog
+
+            for key in st.project.missing[:3]:
+                lines.append("Не хватает программы " + (tool_catalog.how_to_get(key) or key))
+            left = [b for b in left if not b.need_tool or b.need_tool.startswith("app:")]  # причина уже названа
+        wanted = list(dict.fromkeys(b.need_tool[4:] for b in left if (b.need_tool or "").startswith("app:")))
+        if wanted:  # снимки в программах студента (Visual Studio и т.п.), которых на компьютере нет
+            from forlabs.agent import apps as agent_apps
+
+            lines += ["Для снимка нужна программа " + agent_apps.how_to_get(key) for key in wanted[:3]]
+            left = [b for b in left if not (b.need_tool or "").startswith("app:")]
         if st.project is not None and not built and st.project.build_log.strip():
             # не «ошибки остались», а сама ошибка компилятора: по ней видно, что чинить
             lines.append(f"Сборка не прошла: {proj.first_error(st.project.build_log)}")
@@ -1140,6 +1152,9 @@ class Pipeline:
                                 "«Запомнить» ещё раз, когда будет связь.")
                     return f"\nЗапомнил для следующих лаб: {rule.rstrip('.')}."
 
+                if plan.project and st.project is not None and st.project.missing:
+                    # программы нет на компьютере: код тут ни при чём — проверим ещё раз (вдруг уже поставили)
+                    plan.project, plan.reshoot = None, True
                 was_final = st.status == "final"
                 if plan.kind != "edit":
                     shots, touched = "", False

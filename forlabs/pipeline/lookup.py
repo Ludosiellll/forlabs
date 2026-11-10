@@ -144,7 +144,8 @@ class ProjectView:
         """Состояние программы лабы для чата: собрана ли, какие в ней программы и файлы, ошибки последней сборки."""
         pr = self.st.project if self.st is not None else None
         files = self.files()
-        if pr is None and not files:
+        need = self._apps_needed()
+        if pr is None and not files and not need:
             return "Программа лабы: проекта нет (в отчёте нет кода, который ForLabs собирает сам)."
         parts = []
         if pr is not None:
@@ -158,11 +159,30 @@ class ProjectView:
             from forlabs.pipeline.project import programs_text
 
             parts.append(programs_text(self.plan))
+        if pr is not None and pr.missing:
+            from forlabs.runner import tools
+
+            parts.append("Не хватает программ на этом компьютере (поэтому программа не собрана):\n"
+                         + "\n".join("- " + (tools.how_to_get(k) or k) for k in pr.missing))
+        if need:
+            from forlabs.agent import apps
+
+            parts.append("Для снимков в программах не хватает:\n" + "\n".join("- " + apps.how_to_get(k) for k in need))
         listed = ", ".join(f"{p} ({_size(n)})" for p, n in list(files.items())[:60])
         parts.append(f"Файлы проекта: {listed or 'нет'}." + (" …" if len(files) > 60 else ""))
         if pr is not None and not pr.built and pr.build_log.strip():
             parts.append(f"Ошибки последней сборки:\n<<<\n{pr.build_log.strip()}\n>>>")
         return "\n".join(parts)
+
+    def _apps_needed(self) -> list[str]:
+        """Программы студента, без которых не сделать снимки (Visual Studio и т.п.)."""
+        out: list[str] = []
+        for sec in (self.st.report.sections if self.st is not None and self.st.report else []):
+            for b in sec.blocks:
+                tool = getattr(b, "need_tool", None) or ""
+                if tool.startswith("app:") and not getattr(b, "image_path", None) and tool[4:] not in out:
+                    out.append(tool[4:])
+        return out
 
     def answer(self, looks: list) -> str:
         out = []
