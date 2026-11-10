@@ -14,6 +14,7 @@ READ_LIMIT = 12_000  # знаков одного файла за раз
 FILE_LIMIT = 300 * 1024  # байт: файлы больше не читаются
 ANSWER_LIMIT = 30_000  # знаков на всё найденное за один круг
 FIND_LINES = 40
+LINE_LIMIT = 1000  # знаков одной строки: сжатый в одну строку файл целиком не показывается
 MAX_FILES = 300
 SKIP_DIRS = {"bin", "obj", "out", "__pycache__", ".vs", ".git", ".idea", "node_modules", "debug", "release"}
 TEXT_EXT = (set().union(*CODE_EXT.values(), *EXTRA_EXT.values()) | DATA_EXT
@@ -70,13 +71,13 @@ class ProjectView:
                 out[f.path] = len(f.content.encode("utf-8"))
         return out
 
-    def _text(self, path: str) -> tuple[str, bool] | None:
+    def _text(self, path: str, disk: dict[str, Path] | None = None) -> tuple[str, bool] | None:
         """(текст файла, с диска ли он). None — такого файла в проекте нет или читать его нельзя."""
         raw = str(path or "").strip()
         key = norm_path(raw)
         if not key or key.startswith("/") or ":" in key or ".." in key.split("/"):
             return None
-        disk = self._on_disk()
+        disk = self._on_disk() if disk is None else disk
         f = disk.get(key) or next((v for k, v in disk.items() if k.lower() == key.lower()), None)
         if f is not None:
             try:
@@ -98,7 +99,7 @@ class ProjectView:
         for i, ln in enumerate(lines, start=1):
             if i < start:
                 continue
-            row = f"{i}: {ln}"
+            row = f"{i}: {ln}" if len(ln) <= LINE_LIMIT else f"{i}: {ln[:LINE_LIMIT]}… (строка обрезана)"
             if used + len(row) + 1 > READ_LIMIT:
                 stop = i
                 break
@@ -114,8 +115,11 @@ class ProjectView:
         if not needle:
             return "Что искать — не сказано."
         hits = []
-        for path in self.files():
-            got = self._text(path)
+        disk = self._on_disk()  # папка обходится один раз на весь поиск
+        names = list(disk) + [f.path for f in (self.plan.files if self.plan else [])
+                              if f.path.lower() not in {p.lower() for p in disk}]
+        for path in names:
+            got = self._text(path, disk)
             for i, ln in enumerate(got[0].splitlines() if got else [], start=1):
                 if needle in ln.lower():
                     hits.append(f"{path}:{i}: {ln.strip()[:200]}")

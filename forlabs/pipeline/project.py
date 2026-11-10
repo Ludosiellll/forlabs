@@ -867,11 +867,14 @@ def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None, 
         sync_listings(st, plan)
         folder = work
         try:
-            folder, locked = _copy_to_hand_in(pipe, st, plan, work)
+            folder, locked, saved = _copy_to_hand_in(pipe, st, plan, work)
             info.folder = str(folder)
             if locked:
                 emit("Не обновил файлы проекта, открытые в другой программе: " + ", ".join(locked[:5])
                      + ". Закрой их и нажми «Пересобрать».", "warn")
+            if saved:
+                emit("Эти файлы ты менял сам, а проект их заменил. Твои версии лежат рядом с пометкой .bak: "
+                     + ", ".join(saved[:5]), "warn")
         except OSError as e:
             emit(f"Проект не скопировался в папку сдачи ({e})", "warn")
         return folder
@@ -953,7 +956,7 @@ def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None, 
                     b.image_path, b.auto_note = rel, None
                     mine.add((n, bi))
                     old = kept.pop((n, bi), None)
-                    if old and old != rel:  # снимок прежней программы больше не нужен
+                    if old and old != rel and not in_versions(old):  # снимок прежней программы больше не нужен
                         (lab / old).unlink(missing_ok=True)
                     pipe._sync(st, [rel])
                 elif (n, bi) in kept:  # программа изменилась, а переснять не вышло: остаётся прежний снимок
@@ -967,6 +970,11 @@ def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None, 
             if db is not None:
                 db.stop()
         return failures
+
+    def in_versions(rel: str) -> bool:
+        """Снимок ещё нужен: на него ссылается сохранённая версия отчёта (к ней можно откатиться)."""
+        return any(isinstance(b, Figure) and b.image_path == rel
+                   for v in st.versions for sec in v.report.sections for b in sec.blocks)
 
     def restore_kept() -> None:
         for n, bi, b in _blocks(st):
@@ -1043,10 +1051,14 @@ def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None, 
     return st
 
 
-def _copy_to_hand_in(pipe, st: LabState, plan: ProjectPlan, work: Path) -> tuple[Path, list[str]]:
+BACKUP = ".bak"  # прежняя версия файла студента рядом с новой: «main.py.bak» (компилятор её не берёт)
+
+
+def _copy_to_hand_in(pipe, st: LabState, plan: ProjectPlan, work: Path) -> tuple[Path, list[str], list[str]]:
     """Проект в папку сдачи. Меняются только свои файлы (каждый — атомарно), свои прошлые, которых больше нет, —
-    удаляются; файлы, которые студент положил туда сам, не трогаются. Список своих файлов — в папке лабы, а не у
-    студента. Возвращает (папка, файлы, которые не обновились — открыты в другой программе)."""
+    удаляются; файлы, которые студент положил туда сам, не трогаются. Файл, который студент правил (или положил
+    сам на то же место), перед заменой сохраняется рядом как «имя.bak». Список своих файлов и отпечатки записанного —
+    в папке лабы, а не у студента. → (папка, что не обновилось — открыто в другой программе, чьи копии сохранены)."""
     import os
 
     from forlabs.core.store import safe_name
@@ -1068,21 +1080,37 @@ def _copy_to_hand_in(pipe, st: LabState, plan: ProjectPlan, work: Path) -> tuple
     same = before.get("folder") == str(out)
     old = set(before.get("files", [])) if same else set()
     sha = dict(before.get("sha") or {}) if same else {}  # что ForLabs записал: по нему видно правки студента
+    theirs = set(before.get("mine") or []) if same else set()  # файлы, чей текст взят у студента
+    tracked = bool(sha) or not old  # прежние версии отпечатков не вели: чьи там правки, по ним не понять
     out.mkdir(parents=True, exist_ok=True)
     locked: list[str] = []
+    saved: list[str] = []
     for rel in files:
         dst = out / rel
         dst.parent.mkdir(parents=True, exist_ok=True)
         tmp = dst.with_name(f".{dst.name}.{uuid.uuid4().hex[:6]}.tmp")
         try:
+            new = (work / rel).read_bytes()
+            if dst.is_file() and not dst.is_symlink():
+                cur = dst.read_bytes()
+                changed = text_sha(cur) != text_sha(new)
+                his = rel in theirs or (text_sha(cur) != sha[rel] if rel in sha else tracked and rel not in old)
+                if changed and his:  # не затираем молча: версия студента остаётся рядом
+                    shutil.copy2(dst, dst.with_name(dst.name + BACKUP))
+                    saved.append(rel)
             shutil.copy2(work / rel, tmp)
             os.replace(tmp, dst)
-            sha[rel] = text_sha((work / rel).read_bytes())
+            sha[rel] = text_sha(new)
+            theirs.discard(rel)
         except OSError:
             tmp.unlink(missing_ok=True)
             locked.append(rel)
     sha = {rel: v for rel, v in sha.items() if rel in files}
+    now = {rel.lower() for rel in files}
+    kept_his = theirs - set(files)  # файлы, которые положил студент: в новом проекте их нет, но они его
     for rel in sorted(old - set(files)):  # свои прошлые файлы, которых в проекте больше нет
+        if rel.lower() in now or rel in kept_his:
+            continue  # тот же файл с другим регистром букв: в Windows удаление стёрло бы только что записанный
         try:
             (out / rel).unlink(missing_ok=True)
             parent = (out / rel).parent
@@ -1091,20 +1119,39 @@ def _copy_to_hand_in(pipe, st: LabState, plan: ProjectPlan, work: Path) -> tuple
                 parent = parent.parent
         except OSError:
             locked.append(rel)
-    manifest.write_text(json.dumps({"folder": str(out), "files": files, "sha": sha}, ensure_ascii=False),
-                        encoding="utf-8")
-    return out, locked
+    manifest.write_text(json.dumps({"folder": str(out), "files": files, "sha": sha,
+                                    "mine": sorted(theirs & set(files))}, ensure_ascii=False), encoding="utf-8")
+    return out, locked, saved
+
+
+def decode_text(raw: bytes) -> str | None:
+    """Текст файла студента, как бы его ни сохранил редактор: UTF-8 (с меткой и без), UTF-16 с меткой, Windows-1251.
+    None — это не текст (или кодировка неизвестна): такой файл в проект не берётся."""
+    try:
+        if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+            text = raw.decode("utf-16")
+        else:
+            try:
+                text = raw.decode("utf-8-sig")
+            except UnicodeDecodeError:
+                text = raw.decode("cp1251")
+    except (UnicodeDecodeError, ValueError):
+        return None
+    if "\x00" in text or sum(1 for ch in text if ch < " " and ch not in "\n\r\t\f") > 0:
+        return None
+    return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
 def _plain(raw: bytes) -> str:
     """Текст файла без метки кодировки и с одинаковыми концами строк: редактор пересохраняет файл по-своему."""
-    return raw.decode("utf-8-sig", "replace").replace("\r\n", "\n").replace("\r", "\n")
+    text = decode_text(raw)
+    return text if text is not None else raw.decode("utf-8", "replace")
 
 
 def text_sha(raw: bytes) -> str:
     import hashlib
 
-    return hashlib.sha1(_plain(raw).encode("utf-8")).hexdigest()
+    return hashlib.sha1(_plain(raw).encode("utf-8", "replace")).hexdigest()
 
 
 def sync_listings(st: LabState, plan: ProjectPlan) -> None:
@@ -1124,10 +1171,39 @@ def sync_listings(st: LabState, plan: ProjectPlan) -> None:
         b.code = code
 
 
+def follow_listing(code: str, old: str, new: str) -> str | None:
+    """Где листинг оказался после правки файла: его место в прежнем тексте переносится на новый по построчному
+    сравнению. Так листинг идёт за любой правкой — и когда студент переписал его почти целиком. None — в прежнем
+    файле этого листинга не было."""
+    was = listing_in_file(code, old)
+    if was is None:
+        return None
+    a_lines, b_lines, part = old.splitlines(), new.splitlines(), [x.rstrip() for x in was.splitlines()]
+    start = next((i for i in range(len(a_lines) - len(part) + 1)
+                  if [x.rstrip() for x in a_lines[i:i + len(part)]] == part), None)
+    if start is None or not part:
+        return None
+    end = start + len(part)
+    lo, hi = None, None
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a_lines, b_lines, autojunk=False).get_opcodes():
+        if lo is None and i1 <= start < i2:
+            lo = j1 + (start - i1) if tag == "equal" else j1
+        if hi is None and i1 < end <= i2:
+            hi = j1 + (end - i1) if tag == "equal" else j2
+    if lo is None or hi is None or hi <= lo:
+        return None
+    return "\n".join(b_lines[lo:hi]).strip("\n") or None
+
+
+NEW_FILES_LIMIT = 20  # столько новых файлов студента берётся в проект за раз
+
+
 def import_student_edits(pipe, st: LabState, emit=None) -> list[str]:
-    """Студент поправил файлы проекта у себя в папке (в Visual Studio, в редакторе): его текст становится текстом
-    проекта и листингов отчёта — пересборка его не затрёт, а чат правит уже его код. Правкой считается только то,
-    что отличается от записанного ForLabs в прошлый раз; новые файлы студента не берутся. → какие файлы взяты."""
+    """Студент поправил код проекта у себя в папке (в Visual Studio, в редакторе): его текст становится текстом
+    проекта и листингов отчёта — пересборка его не затрёт, а чат правит уже его код. Берутся исходники, которые
+    отличаются от записанного ForLabs в прошлый раз, и новые исходники студента; данные программы не берутся (их
+    меняет сама программа при запуске). Если отчёт с тех пор уже меняли, проект всё равно составляется заново —
+    тогда не берётся ничего, а версии студента сохранятся рядом как «.bak». → какие файлы взяты."""
     pdir = pipe.lab_dir(st) / "project"
     plan = load_plan(pipe, st)
     try:
@@ -1135,42 +1211,82 @@ def import_student_edits(pipe, st: LabState, emit=None) -> list[str]:
     except (OSError, ValueError):
         return []
     sha, root = dict(before.get("sha") or {}), Path(before.get("folder") or "-")
-    if plan is None or not sha or not root.is_dir():
+    if plan is None or not sha or not root.is_dir() or stale(st, plan):
         return []
+    code_ext = plan_rules.CODE_EXT[plan.language] | plan_rules.EXTRA_EXT[plan.language]
+    skip = set(languages.BUILD_DIRS) | {"__pycache__", ".vs", ".git", ".idea", "node_modules"}
+
+    def text_of(disk: Path) -> str | None:
+        try:
+            if disk.is_symlink() or not disk.is_file() or disk.stat().st_size > plan_rules.MAX_FILE:
+                return None
+            return decode_text(disk.read_bytes())
+        except OSError:
+            return None
+
     mine: dict[str, str] = {}
     for f in plan.files:
-        was = sha.get(f.path)
-        disk = root.joinpath(*f.path.split("/"))
-        try:
-            if not was or disk.is_symlink() or not disk.is_file() or disk.stat().st_size > plan_rules.MAX_FILE:
-                continue
-            raw = disk.read_bytes()
-        except OSError:
+        if f.path not in sha or Path(f.path).suffix.lower() not in code_ext:
             continue
-        if text_sha(raw) != was and _plain(raw) != _plain(f.content.encode("utf-8")):
-            mine[f.path] = _plain(raw)
-    if not mine:
+        text = text_of(root.joinpath(*f.path.split("/")))
+        if text is not None and text_sha(text.encode("utf-8")) != sha[f.path] and text != _plain(f.content.encode("utf-8")):
+            mine[f.path] = text
+    added: dict[str, str] = {}
+    known = {x.lower() for x in before.get("files", [])} | {f.path.lower() for f in plan.files}
+    folders = [p.name.lower() + "/" for p in plan.programs]
+    try:
+        for disk in sorted(root.rglob("*")):
+            rel = disk.relative_to(root).as_posix()
+            if (rel.lower() in known or disk.suffix.lower() not in code_ext or len(added) >= NEW_FILES_LIMIT
+                    or {x.lower() for x in Path(rel).parts[:-1]} & skip
+                    or (folders and not any(rel.lower().startswith(d) for d in folders))):
+                continue
+            text = text_of(disk)
+            if text is not None and plan_rules._path_problem(rel) is None:
+                added[rel] = text
+    except OSError:
+        pass
+    if not mine and not added:
         return []
-    files = [ProjectFile(path=f.path, content=mine.get(f.path, f.content)) for f in plan.files]
-    # листинг, который модель когда-то вернула своим текстом, больше не указ: теперь он берётся из файла студента
-    listings = [r.model_copy(update={"code": ""}) if r.file in mine and _squash(r.code) not in _squash(mine[r.file])
-                else r for r in plan.listings]
-    new = plan.model_copy(update={"files": files, "listings": listings})
-    if validate(new):
+
+    def with_files(extra: dict[str, str]) -> ProjectPlan:
+        files = [ProjectFile(path=f.path, content=mine.get(f.path, f.content)) for f in plan.files]
+        files += [ProjectFile(path=path, content=text) for path, text in extra.items()]
+        # листинг, который модель когда-то вернула своим текстом, больше не указ: теперь он берётся из файла студента
+        listings = [r.model_copy(update={"code": ""}) if r.file in mine else r for r in plan.listings]
+        return plan.model_copy(update={"files": files, "listings": listings})
+
+    new = with_files(added)
+    if validate(new):  # новые файлы не годятся (слишком много, не те имена): берём только правки
+        added, new = {}, with_files({})
+    if validate(new) or not (mine or added):
         return []
+    blocks = {(n, bi): b for n, bi, b in _blocks(st)}
+    follows: dict[tuple[int, int], str] = {}
+    for r in plan.listings:  # где каждый листинг оказался после правки
+        b, f = blocks.get((r.section, r.block)), plan.file(r.file)
+        if r.file in mine and isinstance(b, Listing) and f is not None:
+            code = follow_listing(r.code.rstrip() if r.code.strip() else b.code, f.content, mine[r.file])
+            if code is None:
+                return []  # листинг в прежнем файле не найден: отчёт и проект уже расходятся, проект составят заново
+            follows[(r.section, r.block)] = code
+    taken = [*mine, *added]
     try:
         (pdir / "plan.json").write_text(new.model_dump_json(indent=1), encoding="utf-8")
-        sha.update({path: text_sha(text.encode("utf-8")) for path, text in mine.items()})
-        (pdir / "hand_in.json").write_text(json.dumps(before | {"sha": sha}, ensure_ascii=False), encoding="utf-8")
+        sha.update({path: text_sha(text.encode("utf-8")) for path, text in (mine | added).items()})
+        marks = sorted(set(before.get("mine") or []) | set(taken))
+        (pdir / "hand_in.json").write_text(json.dumps(before | {"sha": sha, "mine": marks, "files": sorted(
+            set(before.get("files", [])) | set(added))}, ensure_ascii=False), encoding="utf-8")
     except OSError:
         return []
-    sync_listings(st, new)
+    for key, code in follows.items():
+        blocks[key].code = code
     if st.project is not None:
         st.project.report_sha = report_sha(st)  # проект по-прежнему от этого отчёта: заново его составлять не нужно
     st.docx_sha = None
     if emit is not None:
-        emit("Взял твои правки из папки проекта: " + ", ".join(list(mine)[:6]))
-    return list(mine)
+        emit("Взял твои правки из папки проекта: " + ", ".join(taken[:6]))
+    return taken
 
 
 def load_plan(pipe, st: LabState) -> ProjectPlan | None:

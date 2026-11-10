@@ -190,3 +190,67 @@ def test_fix_that_does_not_fit_the_rules_is_asked_again_with_the_reason(tmp_home
     assert st.project.built and "Программу исправил" in st.chat[-1].text
     again = said(fake.calls[-1])
     assert "Прошлое исправление не принято" in again and "выводит за папку проекта" in again
+
+
+# ---------- по замечаниям проверки ----------
+
+def test_reply_does_not_claim_a_fix_that_was_not_applied(tmp_home, tmp_path):
+    wrong = {"files": [{"path": "../main.py", "content": GOOD}]}  # оба ответа не годятся: правка не применена
+    pipe, fake, st = make(tmp_home, tmp_path, [PLAN, FIX_IT, wrong, wrong], shooter=ScriptShooter(True, True))
+    st = pipe.execute(st)
+    versions = len(st.versions)
+    st = pipe.chat(st, "исправь программу")
+    reply = st.chat[-1].text
+    assert "Программу исправил" not in reply and "Исправить не получилось" in reply
+    assert len(st.versions) == versions  # откатывать нечего
+
+
+def test_fix_that_breaks_a_working_program_is_rolled_back(tmp_home, tmp_path):
+    broke = {"files": [{"path": "main.py", "content": BAD}]}
+    pipe, fake, st = make(tmp_home, tmp_path, [PLAN, FIX_IT, broke, STILL, STILL, STILL],
+                          shooter=ScriptShooter(True, True, True))
+    st = pipe.execute(st)
+    assert st.project.built
+    st = pipe.chat(st, "исправь программу")
+    assert st.project.built  # осталась прежняя, рабочая программа
+    assert (hand_in_dir(tmp_path) / "main.py").read_text(encoding="utf-8") == GOOD
+    assert "Программу исправил" not in st.chat[-1].text and "верну" in st.chat[-1].text.lower()
+    assert figures(st)[0].image_path and st.report.sections[0].blocks[1].code.strip() == GOOD.strip()
+
+
+def test_fix_can_be_reverted_with_its_old_screenshot(tmp_home, tmp_path):
+    better = {"files": [{"path": "main.py", "content": GOOD.replace("Сумма:", "Итог:")}],
+              "shots": [{"section": 1, "block": 3, "mode": "console", "input": "12\n5\n", "expect": "Итог:"}]}
+    pipe, fake, st = make(tmp_home, tmp_path, [PLAN, FIX_IT, better], shooter=ScriptShooter(True, True))
+    st = pipe.execute(st)
+    old = figures(st)[0].image_path
+    st = pipe.chat(st, "исправь подпись")
+    assert figures(st)[0].image_path != old and (pipe.lab_dir(st) / old).exists()  # прежний снимок нужен версии
+    st = pipe.revert(st, st.chat[-1].version)
+    assert st.status != "failed" and figures(st)[0].image_path == old
+
+
+def test_students_edit_seen_by_the_chat_rebuilds_the_program_and_retakes_pictures(tmp_home, tmp_path):
+    answer = {"kind": "answer", "reply": "Да, вижу."}
+    shooter = ScriptShooter(True, True)
+    pipe, fake, st = make(tmp_home, tmp_path, [PLAN, answer], shooter=shooter)
+    st = pipe.execute(st)
+    old = figures(st)[0].image_path
+    (hand_in_dir(tmp_path) / "main.py").write_text(GOOD.replace("Сумма:", "Итог:"), encoding="utf-8")
+    st = pipe.chat(st, "я поменял подпись в main.py, видишь?")
+    assert len(shooter.calls) == 2 and figures(st)[0].image_path != old  # снимок — уже от его программы
+    assert "Взял твои правки" in st.chat[-1].text
+
+
+def test_view_cuts_a_very_long_line_instead_of_returning_nothing(view):
+    (view.folder / "min.js").write_text("var a = 1;" * 5000, encoding="utf-8")  # одна строка в 50 тысяч знаков
+    text = view.read("min.js")
+    assert "1: var a = 1;" in text and len(text) < 3000 and "дальше — тем же запросом" not in text
+
+
+def test_view_walks_the_folder_once_per_search(view, monkeypatch):
+    walks = []
+    real = type(view)._on_disk
+    monkeypatch.setattr(type(view), "_on_disk", lambda self: walks.append(1) or real(self))
+    assert "main.py:3:" in view.find("Сумма")
+    assert len(walks) == 1

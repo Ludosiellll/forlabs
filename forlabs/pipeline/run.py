@@ -115,6 +115,7 @@ class Pipeline:
         self.agents = False  # снимки в программах студента (агент): план после этапа «Проект» (в приложении включён)
         self.app_paths: dict[str, str] = {}  # программы, которые студент указал сам (ключ → путь)
         self.app_hooks: tuple = (None, None)  # свернуть и вернуть окно ForLabs на время работы агента
+        self.fix_outcome: dict[str, str] = {}  # лаба → чем кончилась просьба чата исправить программу
         self._locks: dict[str, threading.Lock] = {}
         self.renamed: dict[str, str] = {}
         self.background: set[str] = set()  # фоновая работа после «Сдать» (память предмета): окно спросит при закрытии
@@ -803,6 +804,8 @@ class Pipeline:
         if not self.projects or not st.report or (plan is None and not proj.needs_project(st)):
             return st
         emit = lambda text, kind="info": self._emit(st, text, kind, step="check")  # noqa: E731
+        outcome = ""  # чем кончилась просьба исправить: applied, rejected (не сложилось в план), broke (не собралось)
+        before, was_built = None, st.project is not None and st.project.built
         try:
             if plan is not None and fix:
                 emit("Исправляю программу")
@@ -814,11 +817,15 @@ class Pipeline:
                     problems = proj.validate(fixed)
                 if problems:
                     emit("Исправление не принято: " + "; ".join(problems[:3]), "warn")
+                    outcome = "rejected"
+                elif fixed == plan:
+                    outcome = "rejected"  # модель ничего не поменяла
                 else:
-                    plan = fixed
+                    before, plan, outcome = plan, fixed, "applied"
             if plan is None:
                 emit("Составляю проект программы")
                 plan = proj.plan_project(st, llm, self._memory_text(st), wish=fix)
+                outcome = "applied" if fix else ""
                 if st.project is not None and st.project.name:  # план составлен заново: проект остаётся в своей папке
                     plan = plan.model_copy(update={"name": st.project.name})
                 problems = proj.validate(plan)
@@ -827,12 +834,19 @@ class Pipeline:
                 if problems:
                     raise PipelineError("план проекта не прошёл проверку: " + "; ".join(problems[:3]))
             st = proj.build_and_shoot(self, st, plan, llm, emit, retake=retake)
+            if before is not None and was_built and not st.project.built:
+                # исправление сломало рабочую программу: студенту возвращается прежняя, а не та, что не собирается
+                emit("Исправление не собралось — возвращаю прежнюю программу", "warn")
+                st = proj.build_and_shoot(self, st, before, None, emit, retake=retake)
+                outcome = "broke"
             left = [f for f in self.slots(st)]
             emit("Программа собрана" + (f". Снял сам: {self._auto_shots(st)}" if st.project.built else "")
                  + (f", нужно от тебя: {len(left)}" if left else ""), "done" if st.project.built else "warn")
         except Exception as e:  # проект — помощь, а не условие: лаба собирается и без него
             logging.getLogger("forlabs").warning("Этап «Проект»: %s", e, exc_info=True)
             emit(f"Программу собрать не получилось ({getattr(e, 'message_ru', None) or e}). Снимки сделай сам.", "warn")
+            outcome = "rejected" if fix else ""
+        self.fix_outcome[self.key(st)] = outcome
         return self._save(st)
 
     def _plan_app_shots(self, st: LabState, llm) -> LabState:
@@ -921,8 +935,14 @@ class Pipeline:
         left = [b for b in now.values() if not b.image_path]
         lines = []
         built = st.project is not None and st.project.built
-        if fix and built:
+        outcome = self.fix_outcome.get(self.key(st), "") if fix else ""
+        if outcome == "applied" and built:
             lines.append("Программу исправил и собрал заново.")
+        elif outcome == "broke":
+            lines.append("Исправление не собралось, поэтому я вернул прежнюю программу. Напиши точнее, что поменять.")
+        elif fix and outcome != "applied":
+            lines.append("Исправить не получилось: правка не сложилась в рабочий проект. Напиши точнее, что "
+                         "поменять.")
         elif outdated and built:
             lines.append("Программу пересобрал под новый код.")
         if st.project is not None and not built and st.project.build_log.strip():
@@ -1125,11 +1145,13 @@ class Pipeline:
                     shots, touched = "", False
                     if plan.project and self.projects:  # «исправь программу»: чинит и листинги отчёта — с откатом
                         vid = push_version(st, message)
-                    if plan.reshoot or plan.project:  # «сними сам ещё раз», «исправь ошибки сборки»
+                    if plan.reshoot or plan.project or mine:  # «сними сам ещё раз», «исправь ошибки сборки»
+                        # и когда студент сам поправил код: программа и снимки должны быть от его текста
                         st, shots, touched = self._chat_reshoot(st, llm, fix=plan.project or "")
                         if touched and was_final:
                             shots += "\nЛаба уже была сдана. Сдай заново, чтобы в папке сдачи был новый файл."
-                    if vid is not None and not touched:
+                    applied = self.fix_outcome.pop(self.key(st), "") == "applied"
+                    if vid is not None and not (touched and applied):  # правка не применилась: откатывать нечего
                         st.versions, vid = [v for v in st.versions if v.id != vid], None
                     if mine:  # листинги отчёта теперь из его файлов: документ собирается заново
                         touched = True
@@ -1189,11 +1211,12 @@ class Pipeline:
                     codes = lambda r: [b.code for sec in r.sections for b in sec.blocks  # noqa: E731
                                        if isinstance(b, Listing)]
                     code_changed = codes(st.report) != codes(backup_report)
-                    if self.projects and (plan.reshoot or plan.project
+                    if self.projects and (plan.reshoot or plan.project or mine
                                           or ((retake or code_changed) and st.project is not None)):
                         # код отчёта изменился: программа в папке сдачи и снимки должны быть от нового кода
-                        st, shots, _ = self._chat_reshoot(st, llm, code_changed, force=plan.reshoot,
+                        st, shots, _ = self._chat_reshoot(st, llm, code_changed, force=plan.reshoot or bool(mine),
                                                           fix=plan.project or "")
+                        self.fix_outcome.pop(self.key(st), None)
                         open_topics = {b.topic for sec in st.report.sections for b in sec.blocks
                                        if isinstance(b, Figure) and not b.image_path}
                         retake = [t for t in retake if t in open_topics]
