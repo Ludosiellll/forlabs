@@ -213,6 +213,152 @@ def _picture_size(data: bytes) -> tuple[int, int] | None:
         return None
 
 
+_RU_LETTERS = "абвгдежзиклмнопрстуфхцчшщэюя"  # как считает Word: без ё, й, ъ, ы, ь
+_ROMAN = [(1000, "m"), (900, "cm"), (500, "d"), (400, "cd"), (100, "c"), (90, "xc"), (50, "l"), (40, "xl"), (10, "x"),
+          (9, "ix"), (5, "v"), (4, "iv"), (1, "i")]
+_TYPED_MARK = re.compile(r"^\s*(?:\d{1,3}(?:\.\d{1,3})*[.)]|[а-яёa-z]\)|[-–—•·])\s")
+
+
+def _number_text(n: int, fmt: str) -> str:
+    def letters(abc: str) -> str:
+        return abc[(n - 1) % len(abc)] * ((n - 1) // len(abc) + 1) if n > 0 else str(n)
+
+    if fmt in ("lowerLetter", "upperLetter"):
+        out = letters("abcdefghijklmnopqrstuvwxyz")
+        return out.upper() if fmt == "upperLetter" else out
+    if fmt in ("russianLower", "russianUpper"):
+        out = letters(_RU_LETTERS)
+        return out.upper() if fmt == "russianUpper" else out
+    if fmt in ("lowerRoman", "upperRoman") and 0 < n < 4000:
+        out, rest = "", n
+        for value, mark in _ROMAN:
+            while rest >= value:
+                out, rest = out + mark, rest - value
+        return out.upper() if fmt == "upperRoman" else out
+    if fmt == "decimalZero":
+        return f"{n:02d}"
+    return str(n)
+
+
+class _DocxNumbers:
+    """Автонумерация Word. Номер пункта виден на экране, но в тексте абзаца его нет: он считается по списку,
+    к которому привязан абзац. Без него пропадают номера вариантов в таблицах, шагов задания и вопросов."""
+
+    def __init__(self, d):
+        from docx.oxml.ns import qn
+
+        self.qn = qn
+        self.levels: dict[str, dict[int, tuple[str, str, int]]] = {}  # список → уровень → (формат, шаблон, начало)
+        self.nums: dict[str, tuple[str, dict[int, int]]] = {}  # numId → (список, {уровень: начать заново с})
+        self.style_num: dict[str, tuple[str | None, int | None]] = {}
+        self.based_on: dict[str, str] = {}
+        self.counters: dict[tuple[str, int], int] = {}
+        self.started: set[str] = set()
+        try:
+            root = d.part.numbering_part.element
+        except Exception:  # noqa: BLE001 — документ без списков
+            root = None
+        val = qn("w:val")
+        for a in (root.findall(qn("w:abstractNum")) if root is not None else []):
+            lvls = {}
+            for lvl in a.findall(qn("w:lvl")):
+                fmt, text, start = lvl.find(qn("w:numFmt")), lvl.find(qn("w:lvlText")), lvl.find(qn("w:start"))
+                lvls[self._int(lvl.get(qn("w:ilvl")))] = (
+                    fmt.get(val) if fmt is not None else "decimal", (text.get(val) if text is not None else "") or "",
+                    self._int(start.get(val), 1) if start is not None else 1)
+            self.levels[a.get(qn("w:abstractNumId"))] = lvls
+        for n in (root.findall(qn("w:num")) if root is not None else []):
+            ref = n.find(qn("w:abstractNumId"))
+            restart = {}
+            for o in n.findall(qn("w:lvlOverride")):
+                so = o.find(qn("w:startOverride"))
+                if so is not None:
+                    restart[self._int(o.get(qn("w:ilvl")))] = self._int(so.get(val), 1)
+            if ref is not None:
+                self.nums[n.get(qn("w:numId"))] = (ref.get(val), restart)
+        try:
+            styles = d.styles.element.findall(qn("w:style"))
+        except Exception:  # noqa: BLE001
+            styles = []
+        for st in styles:
+            sid, base = st.get(qn("w:styleId")), st.find(qn("w:basedOn"))
+            if base is not None:
+                self.based_on[sid] = base.get(val)
+            found = self._numpr(st.find(qn("w:pPr")))
+            if found is not None:
+                self.style_num[sid] = found
+
+    @staticmethod
+    def _int(v, default: int = 0) -> int:
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return default
+
+    def _numpr(self, ppr) -> tuple[str | None, int | None] | None:
+        numpr = ppr.find(self.qn("w:numPr")) if ppr is not None else None
+        if numpr is None:
+            return None
+        nid, lvl = numpr.find(self.qn("w:numId")), numpr.find(self.qn("w:ilvl"))
+        val = self.qn("w:val")
+        return (nid.get(val) if nid is not None else None,
+                self._int(lvl.get(val)) if lvl is not None else None)
+
+    def _of(self, p) -> tuple[str | None, int]:
+        ppr = p.find(self.qn("w:pPr"))
+        own = self._numpr(ppr) or (None, None)
+        nid, lvl = own
+        style = ppr.find(self.qn("w:pStyle")) if ppr is not None else None
+        sid = style.get(self.qn("w:val")) if style is not None else None
+        for _ in range(6):  # стиль и его предки
+            if sid is None or (nid is not None and lvl is not None):
+                break
+            s_nid, s_lvl = self.style_num.get(sid, (None, None))
+            nid = nid if nid is not None else s_nid
+            lvl = lvl if lvl is not None else s_lvl
+            sid = self.based_on.get(sid)
+        return nid, lvl or 0
+
+    def mark(self, p) -> str:
+        """Номер или маркер пункта для абзаца («3.», «б)», «1.2.», «-»); пусто — абзац не из списка."""
+        nid, lvl = self._of(p)
+        if nid is None or nid == "0" or nid not in self.nums:
+            return ""
+        aid, restart = self.nums[nid]
+        levels = self.levels.get(aid, {})
+        if lvl not in levels:
+            return ""
+        fmt, text, start = levels[lvl]
+        if nid not in self.started:
+            self.started.add(nid)
+            for at, value in restart.items():
+                self.counters[(aid, at)] = value - 1
+        self.counters[(aid, lvl)] = self.counters.get((aid, lvl), start - 1) + 1
+        for key in [k for k in self.counters if k[0] == aid and k[1] > lvl]:
+            del self.counters[key]  # вложенные пункты после нового пункта считаются заново
+        if fmt == "bullet":
+            return "-"
+        if fmt == "none":
+            return ""
+
+        def level(m: re.Match) -> str:
+            at = int(m.group(1)) - 1
+            f, _, s = levels.get(at, ("decimal", "", 1))
+            return _number_text(self.counters.get((aid, at), s), f)
+
+        return re.sub(r"%(\d)", level, text).strip()
+
+    def text(self, p, body: str, keep_empty: bool = False) -> str:
+        """Текст абзаца с номером пункта. Номер, набранный руками, не удваивается; пустой пункт вне таблицы
+        считается, но строки не даёт (keep_empty — ячейка таблицы: там номер и есть содержимое)."""
+        mark = self.mark(p)
+        if not mark or _TYPED_MARK.match(body):
+            return body
+        if not body.strip():
+            return mark if keep_empty else body
+        return f"{mark} {body}"
+
+
 def _docx(path: Path, pictures: bool = False) -> SourceText:
     from docx import Document
     from docx.oxml.ns import qn
@@ -240,20 +386,26 @@ def _docx(path: Path, pictures: bool = False) -> SourceText:
             out.append(picture_mark(len(found)))
         return out
 
+    numbers = _DocxNumbers(d)
+
     def text_of(el) -> str:
         return "".join(t.text or "" for t in el.iter(qn("w:t")))
+
+    def cell(tc) -> str:
+        """Абзацы ячейки через пробел (а не слитно), с номерами пунктов; номер в пустой ячейке — её содержимое."""
+        parts = [numbers.text(p, text_of(p).strip(), keep_empty=True) for p in tc.iter(qn("w:p"))]
+        return " ".join([*(x for x in parts if x), *marks(tc)]).strip()
 
     lines: list[str] = []
     for el in d.element.body.iterchildren():
         if el.tag == qn("w:p"):
-            text, inside = text_of(el), marks(el)
+            text, inside = numbers.text(el, text_of(el)), marks(el)
             if text.strip() or not inside:  # абзац из одной картинки не оставляет пустой строки
                 lines.append(text)
             lines.extend(inside)
         elif el.tag == qn("w:tbl"):
             for tr in el.iter(qn("w:tr")):
-                cells = [" ".join([text_of(tc).strip(), *marks(tc)]).strip() for tc in tr.iter(qn("w:tc"))]
-                lines.append(" | ".join(cells))
+                lines.append(" | ".join(cell(tc) for tc in tr.iter(qn("w:tc"))))
     return SourceText(normalize("\n".join(lines)), pictures=found)
 
 

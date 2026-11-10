@@ -17,9 +17,19 @@ MAX_SOURCE_CHARS = 200_000  # ~100 тыс. токенов: дальше доро
 
 class VariantPick(BaseModel):
     appendix: str = ""
-    basis: str = "journal"
+    basis: str = "journal"  # journal | workplace | other | all (приложение без вариантов: задания для всех)
     number: int | str | None = None
+    total: int | None = None  # сколько вариантов в таблице
+    asked: int | None = None  # номер студента, если он больше total и вариант взят по кругу (ставит разбор)
     text: str = ""
+
+    @field_validator("total", "asked", mode="before")
+    @classmethod
+    def _count(cls, v):
+        try:
+            return int(v) if v is not None and int(v) > 0 else None
+        except (TypeError, ValueError):
+            return None
 
     @field_validator("appendix", "text", mode="before")
     @classmethod
@@ -135,11 +145,84 @@ def variant_block(picks: list[VariantPick]) -> str | None:
     for v in picks:
         if not v.text.strip():
             continue
+        if v.basis == "all":  # приложение без вариантов: его задания выполняют все
+            lines.append(f"{v.appendix.strip() or 'Приложение'} (вариантов нет, выполняются все задания): "
+                         f"{one_line(v.text)}")
+            continue
         basis = _BASIS.get(v.basis, "")
-        meta = ", ".join(x for x in (basis, f"вариант {v.number}" if v.number not in (None, "") else "") if x)
+        number = f"вариант {v.number}" if v.number not in (None, "", 0, "0") else ""
+        if number and v.asked and v.total:
+            number += f": номер {v.asked} больше числа вариантов ({v.total}), взят по кругу"
+        meta = ", ".join(x for x in (basis, number) if x)
         head = (v.appendix.strip() or "Вариант") + (f" ({meta})" if meta else "")
         lines.append(f"{head}: {one_line(v.text)}")
     return "\n".join(lines) or None
+
+
+# признаки таблицы вариантов в методичке: без неё «вариантов нет» — правда, с ней — повод сказать студенту
+_HAS_VARIANTS = re.compile(r"№\s*вариант|номер\w*\s+вариант|вариант\w*\s*\||согласно\s+вариант|по\s+вариантам|"
+                           r"сво(?:его|ему|й)\s+вариант|вашего\s+вариант|в\s+соответствии\s+с\s+вариант",
+                           re.IGNORECASE)
+_ROW_NUMBER = re.compile(r"\s*(\d{1,3})\s*(?:[.)]\s*\|?|\|)\s*")
+_BARE_NUMBER = re.compile(r"\s*(\d{1,3})\s*[.)]?\s*\|?\s*")
+NO_VARIANT = ("Вариант не определён: в методичке есть варианты, но строку для номера {n} выбрать не удалось. Не "
+              "выбирай вариант сам и не называй его номер: впиши сюда условие своего варианта из методички.")
+
+
+def wrapped(n: int, total: int) -> int:
+    """Номер по журналу больше числа вариантов — вариант берётся по кругу: при 8 вариантах 9 → 1, 14 → 6."""
+    return (n - 1) % total + 1
+
+
+def _as_int(v) -> int | None:
+    try:
+        return int(str(v).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def row_number(source: str, text: str) -> int | None:
+    """Номер строки таблицы вариантов, из которой взят текст: число в начале той же строки методички («6. | Дано…»)
+    или на строке выше (PDF кладёт ячейки таблицы на разные строки). None — номера рядом нет."""
+    need = normalize_for_compare(text)[:40]
+    if len(need) < 8:
+        return None
+    lines = source.split("\n")
+    for i, line in enumerate(lines):
+        m = _ROW_NUMBER.match(line)
+        if m and normalize_for_compare(line[m.end():]).startswith(need):
+            return int(m.group(1))
+        if normalize_for_compare(line).startswith(need):
+            above = next((x for x in reversed(lines[:i]) if x.strip()), "")
+            alone = _BARE_NUMBER.fullmatch(above)
+            return int(alone.group(1)) if alone else None
+    return None
+
+
+def variant_problems(picks: list[VariantPick], source: str, variant: int, workplace: int) -> list[tuple[str, str]]:
+    """Что не так с выбранными вариантами: (приложение, что нужно). Пусто — строки взяты верно."""
+    hay = normalize_for_compare(source)
+    out = []
+    for v in picks:
+        name = v.appendix.strip() or "Приложение"
+        if not v.text.strip():
+            out.append((name, "нет текста варианта"))
+            continue
+        if normalize_for_compare(v.text) not in hay and normalize_for_compare(v.text).replace(" ", "") not in \
+                hay.replace(" ", ""):
+            out.append((name, "текст варианта должен быть дословно из методички"))
+            continue
+        if v.basis not in ("journal", "workplace"):
+            continue
+        asked = workplace if v.basis == "workplace" else variant
+        need = wrapped(asked, v.total) if v.total and asked > v.total else asked
+        got = _as_int(v.number)
+        row = row_number(source, v.text)
+        if got != need or (row is not None and row != need):
+            why = f"вариантов {v.total}, номер студента {asked}: " if v.total and asked > v.total else ""
+            out.append((name, f"{why}нужен вариант {need}" + (f", а текст взят из строки {row}"
+                                                               if row is not None and row != need else "")))
+    return out
 
 
 _NEXT_STEP = re.compile(r"(?:^|\s)2[.)]\s*\S")
@@ -177,7 +260,12 @@ def clean_field(s: str | None) -> str:
     return _LABEL.sub("", one_line(s or "")).strip()
 
 
+_PICTURE_WRAP = re.compile(r"\[Картинка в методичке:|^\][ \t]*$", re.MULTILINE)
+
+
 def verify_verbatim(spec: LabSpec, src: SourceText) -> list[Finding]:
+    # обёртка блока картинки — служебные слова: формулировка, которая продолжается на картинке, с ними не сверяется
+    src = SourceText(_PICTURE_WRAP.sub(" ", src.text))
     hay = normalize_for_compare(src.text)
     hay_tight = hay.replace(" ", "")  # PDF рвёт слова пробелами («Лич ные»): сверяем и без пробелов
     out = []
@@ -240,6 +328,29 @@ def extract_spec(src: SourceText, subject: Subject, enrollment: Enrollment, llm,
                 raw = second
         except Exception:  # noqa: BLE001 — второй ответ не получился: остаётся первый, студент увидит замечание
             pass
+    asked_variant = variant if isinstance(variant, int) else _as_int(variant) or 1
+    asked_place = workplace if isinstance(workplace, int) else _as_int(workplace) or asked_variant
+    has_variants = bool(_HAS_VARIANTS.search(text))
+    problems = variant_problems(raw.variants, src.text, asked_variant, asked_place)
+    if problems or (has_variants and not raw.variants and not raw.variant_text):
+        wrong = ("; ".join(f"«{name}»: {what}" for name, what in problems) if problems else
+                 f"в методичке есть таблица вариантов, а variants пуст: номер студента по журналу — {asked_variant}, "
+                 f"номер рабочего места — {asked_place}; если номер больше числа вариантов, вариант берётся по кругу")
+        again = [*messages, {"role": "user", "content":
+                 f"Варианты выбраны неверно — {wrong}. Верни JSON заново: в variants для каждого приложения с "
+                 "вариантами — номер взятой строки (number), число вариантов в таблице (total) и дословный текст "
+                 "именно этой строки."}]
+        try:
+            second: RawSpec = llm.json(again, RawSpec, temperature=0.0)
+            if str(second.kind).strip().lower() != "not_lab" and (second.variants or not raw.variants):
+                raw.variants, raw.variant_text = second.variants, second.variant_text
+        except Exception:  # noqa: BLE001 — остаётся первый ответ, студент увидит замечание
+            pass
+        problems = variant_problems(raw.variants, src.text, asked_variant, asked_place)
+    for v in raw.variants:  # номер больше таблицы: в тексте варианта и в замечании — и свой номер, и взятый
+        need = asked_place if v.basis == "workplace" else asked_variant
+        if v.basis in ("journal", "workplace") and v.total and need > v.total:
+            v.asked = need
     main = merge_subitems([t for t in raw.main_tasks if t.strip()])
     extra = merge_subitems([t for t in raw.extra_tasks if t.strip()])
     tasks = [Task(n=i, text=t, kind="main") for i, t in enumerate(main, start=1)]
@@ -265,6 +376,24 @@ def extract_spec(src: SourceText, subject: Subject, enrollment: Enrollment, llm,
         source_text=src.text,
     )
     findings = verify_verbatim(spec, src)
+    for v in raw.variants:
+        if v.asked and v.total and v.text.strip():
+            findings.append(Finding(
+                stage="spec", rule_id="spec.variant_wrapped", severity="warn", location="Вариант",
+                message=f"В «{v.appendix.strip() or 'приложении'}» вариантов {v.total}, а твой номер — {v.asked}: "
+                        f"взят вариант {v.number} (по кругу). Если преподаватель назначил другой — поправь условие "
+                        "варианта на этой вкладке"))
+    for name, what in problems:
+        findings.append(Finding(
+            stage="spec", rule_id="spec.variant_unsure", severity="warn", location="Вариант",
+            message=f"«{name}»: не уверен, что взята твоя строка ({what}). Сверь условие варианта с методичкой и "
+                    "поправь его на этой вкладке"))
+    if has_variants and not spec.variant_text:
+        spec.variant_text = NO_VARIANT.format(n=asked_variant)
+        findings.append(Finding(
+            stage="spec", rule_id="spec.variant_missing", severity="warn", location="Вариант",
+            message="В методичке есть варианты, но выбрать твой не получилось — впиши условие своего варианта "
+                    "в поле «Текст варианта», иначе отчёт выйдет без него"))
     if any(v.basis == "workplace" for v in raw.variants) and enrollment.workplace is None:
         findings.append(Finding(stage="spec", rule_id="spec.workplace_missing", severity="warn", location="Вариант",
                                 message="Методичка выбирает вариант по номеру рабочего места — укажи его в профиле "

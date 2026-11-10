@@ -65,6 +65,7 @@ def describe_images(paths: list[Path], llm) -> str:
 
 MAX_SOURCE_PICTURES = 16  # новых картинок за один разбор: дальше дорого, остаток помечается непрочитанным
 SOURCE_BATCH = 4
+SOURCE_WORKERS = 3  # пачек одновременно
 UNREAD_PICTURE = "[Картинка в методичке — прочитать не удалось]"
 
 SOURCE_SYSTEM = """Тебе дают картинки из методички лабораторной работы колледжа: снимки кода, запросов и команд,
@@ -121,21 +122,33 @@ def read_source_pictures(pictures: list, llm, known: dict[str, str] | None = Non
         except ValueError:  # формат, которого не знает Pillow (EMF, WMF), или битый файл
             error = error or "часть картинок в формате, который не читается"
     order = list(todo)
-    for start in range(0, len(order), SOURCE_BATCH):
-        batch = order[start:start + SOURCE_BATCH]
-        try:
-            texts = _ask_pictures([todo[k] for k in batch], llm)
-            if texts is None and len(batch) > 1:  # ответ не сошёлся по числу: спрашиваем по одной
-                texts = []
-                for k in batch:
-                    one = _ask_pictures([todo[k]], llm)
-                    texts.append(one[0] if one else None)
-            for k, t in zip(batch, texts or []):
-                if t is not None:
-                    known[k] = t.strip()
-        except Exception as e:  # noqa: BLE001 — сеть, лимит, модель без зрения: остальное не отправляем
-            error = str(getattr(e, "message_ru", None) or e)
-            break
+    batches = [order[i:i + SOURCE_BATCH] for i in range(0, len(order), SOURCE_BATCH)]
+
+    def read(batch: list[str]) -> list[str | None]:
+        texts = _ask_pictures([todo[k] for k in batch], llm)
+        if texts is None and len(batch) > 1:  # ответ не сошёлся по числу: спрашиваем по одной
+            texts = []
+            for k in batch:
+                one = _ask_pictures([todo[k]], llm)
+                texts.append(one[0] if one else None)
+        return texts or []
+
+    def keep(batch: list[str], texts: list[str | None]) -> None:
+        for k, t in zip(batch, texts):
+            if t is not None:
+                known[k] = t.strip()
+
+    try:
+        if batches:  # первая пачка — одна: модель без зрения или обрыв связи видны сразу, остальное не шлём
+            keep(batches[0], read(batches[0]))
+        if len(batches) > 1:  # остальные — одновременно: сервер читает картинку десятки секунд
+            from concurrent.futures import ThreadPoolExecutor
+
+            with ThreadPoolExecutor(max_workers=min(SOURCE_WORKERS, len(batches) - 1)) as pool:
+                for batch, texts in zip(batches[1:], pool.map(read, batches[1:])):
+                    keep(batch, texts)
+    except Exception as e:  # noqa: BLE001 — сеть, лимит, модель без зрения
+        error = str(getattr(e, "message_ru", None) or e)
     return [known.get(k) for k in keys], error
 
 

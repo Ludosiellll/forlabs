@@ -56,6 +56,28 @@ from forlabs.pipeline.images import (  # noqa: E402
 )
 
 
+class SlowEcho:
+    """Модель, которая отвечает по содержимому запроса и запоминает, сколько запросов шло одновременно."""
+
+    def __init__(self):
+        import threading
+
+        self.lock, self.now, self.peak, self.calls = threading.Lock(), 0, 0, 0
+
+    def json(self, messages, schema, repairs=3, temperature=None, max_tokens=None):
+        import time
+
+        with self.lock:
+            self.now += 1
+            self.calls += 1
+            self.peak = max(self.peak, self.now)
+        time.sleep(0.05)
+        parts = [c for c in messages[-1]["content"] if c["type"] == "image_url"]
+        with self.lock:
+            self.now -= 1
+        return schema.model_validate({"pictures": [f"текст {len(p['image_url']['url'])}" for p in parts]})
+
+
 def pics(n, page=False):
     return [Picture(png(400, 200, (200, 200, 200 - i)), page=page) for i in range(n)]
 
@@ -94,10 +116,9 @@ def test_source_pictures_failure_leaves_them_unread_with_a_reason():
 
 def test_source_pictures_over_the_limit_stay_unread():
     n = MAX_SOURCE_PICTURES + 2
-    batches = [{"pictures": [f"т{b * SOURCE_BATCH + i}" for i in range(SOURCE_BATCH)]}
-               for b in range(MAX_SOURCE_PICTURES // SOURCE_BATCH)]
-    texts, error = read_source_pictures(pics(n), FakeLLM(batches))
-    assert texts[:MAX_SOURCE_PICTURES] == [f"т{i}" for i in range(MAX_SOURCE_PICTURES)]
+    llm = SlowEcho()  # отвечает по содержимому запроса: порядок одновременных пачек не важен
+    texts, error = read_source_pictures(pics(n), llm)
+    assert all(texts[:MAX_SOURCE_PICTURES]) and llm.calls == MAX_SOURCE_PICTURES // SOURCE_BATCH
     assert texts[MAX_SOURCE_PICTURES:] == [None, None] and "больше" in error
 
 
@@ -119,3 +140,13 @@ def test_put_pictures_wraps_inline_ones_and_inlines_pages():
 def test_put_pictures_drops_decorative_ones():
     out = put_pictures(f"Тема\n{picture_mark(1)}\nЦель", [Picture(b"a")], [""])
     assert out == "Тема\nЦель"
+
+
+def test_source_picture_batches_go_to_the_model_at_once():
+    # десять картинок — три пачки: ждать их по очереди втрое дольше
+    many = [Picture(png(300 + 10 * i, 200, (200, 200, 200 - i))) for i in range(10)]
+    llm = SlowEcho()
+    texts, error = read_source_pictures(many, llm)
+    assert error == "" and all(t and t.startswith("текст ") for t in texts)
+    assert llm.calls == 3 and llm.peak >= 2
+    assert len(set(texts)) > 1  # тексты разошлись по своим картинкам, а не перепутались

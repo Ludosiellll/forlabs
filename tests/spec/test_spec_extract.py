@@ -143,9 +143,11 @@ def test_variants_by_workplace_and_journal():
 
 
 def test_workplace_missing_warns():
+    # рабочее место не указано — вариант по месту берётся по журналу (14), и об этом сказано студенту
     enr = Enrollment(subject_id="ssp", title_subject="ССП", variant=14)
-    spec, findings = extract_spec(SSP_SRC, SUBJECTS["ssp"], enr, FakeLLM([SSP_RAW]), lab_number="4",
-                                  date="16.09.2026")
+    src = SourceText(SSP_SRC.text.replace("2. Создать класс Payment", "14. Создать класс Payment"))
+    raw = {**SSP_RAW, "variants": [{**SSP_RAW["variants"][0], "number": 14}, SSP_RAW["variants"][1]]}
+    spec, findings = extract_spec(src, SUBJECTS["ssp"], enr, FakeLLM([raw]), lab_number="4", date="16.09.2026")
     assert [f.rule_id for f in findings] == ["spec.workplace_missing"]
 
 
@@ -256,3 +258,13 @@ def test_questions_section_without_questions_is_still_reported():
     raw = {**RAW, "questions": []}
     _, findings = extract_spec(SRC, SUBJECTS["psip"], ENR, FakeLLM([raw]), lab_number=None, date="24.09.2026")
     assert "spec.questions_missing" in [f.rule_id for f in findings]
+
+
+def test_wording_that_continues_into_a_picture_is_verbatim():
+    # вопрос «…и почему:» + код, который в методичке стоит картинкой сразу после него
+    src = SourceText(SRC.text + "\n5. Что будет выведено на консоль и почему:\n[Картинка в методичке:\n"
+                     "public class Program {\n    int a = 5;\n}\n]\n")
+    q = "Что будет выведено на консоль и почему: public class Program { int a = 5; }"
+    raw = {**RAW, "questions": [*RAW["questions"], q]}
+    _, findings = extract_spec(src, SUBJECTS["psip"], ENR, FakeLLM([raw]), lab_number=None, date="24.09.2026")
+    assert findings == []
