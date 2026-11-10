@@ -12,7 +12,7 @@
     {% for p in profiles %}
     <div class="card">
       <h3>{{ p.full_name }}</h3>
-      <div class="small muted">{{ p.title_name }} · {{ p.group }} · {{ 'женский' if p.gender == 'f' else 'мужской' }} род</div>
+      <div class="small muted">{{ p.group }}</div>
       <div class="small" style="margin:8px 0 10px">
         {% for e in p.enrollments %}{{ subjects[e.subject_id].short_name if e.subject_id in subjects else e.subject_id }}{% if e.variant %} (вар. {{ e.variant }}){% endif %}{{ ', ' if not loop.last }}{% else %}<span class="muted">Предметы не выбраны</span>{% endfor %}
       </div>
@@ -25,9 +25,9 @@
   <div class="empty">Профилей пока нет.</div>
   {% endif %}
 
-  <h2 style="margin-top:32px">Новый предмет</h2>
-  <p class="small muted">Добавленный предмет отметь в профиле. Оформление у всех предметов общее.</p>
-  <form method="post" action="/subjects/add" class="card" style="max-width:760px">
+  <details class="pane fold-pane" style="max-width:760px;margin-top:28px">
+    <summary><span>Добавить свой предмет</span><span class="muted small">если его нет в списке</span></summary>
+    <form method="post" action="/subjects/add">
     <div class="grid2">
       <div class="field"><label for="sname">Название</label><input id="sname" name="name" type="text" required placeholder="Объектно-ориентированное программирование"></div>
       <div class="field"><label for="sshort">Короткое название</label><input id="sshort" name="short_name" type="text" placeholder="ООП, необязательно"></div>
@@ -42,6 +42,7 @@
       <div class="field"><label for="svar">Вариант по умолчанию</label><input id="svar" name="variant" type="number" value="14" min="1"></div>
     </div>
     <div class="field"><button class="btn" type="submit">Добавить предмет</button></div>
-  </form>
+    </form>
+  </details>
 </main>
 {% endblock %}

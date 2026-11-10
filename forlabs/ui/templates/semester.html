@@ -4,7 +4,7 @@
 <main class="page narrow">
   {% include "_flash.html" %}
   <h1>Отчёт за семестр</h1>
-  <p class="muted">Один документ: титульный лист, содержание и выбранные лабы, каждая с новой страницы.</p>
+  <p class="muted">Все выбранные лабы одним документом: титул, содержание, каждая с новой страницы.</p>
   {% if not current %}
     <div class="empty">Сначала создай профиль и сделай хотя бы одну лабу.</div>
   {% else %}
@@ -24,7 +24,6 @@
           <td class="nowrap">ЛР {{ l.number }}</td><td>{{ l.spec.topic if l.spec else '' }}</td>
           <td><span class="status s-{{ l.status }}">{{ STATUS_RU[l.status] }}</span></td></tr>{% endfor %}</tbody></table>
     </div>
-    <p class="small muted">Номера страниц в содержании и «Продолжение листинга» расставит Word при сборке. Без Word номера посчитает LibreOffice.</p>
     <button class="btn primary" type="submit">Собрать и скачать</button>
   </form>
   {% else %}

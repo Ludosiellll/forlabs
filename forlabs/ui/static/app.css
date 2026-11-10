@@ -500,3 +500,42 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 table.t td.row-actions { width: 1%; text-align: right; }
 .btn.link.danger-link { color: var(--muted); }
 .btn.link.danger-link:hover, .btn.link.danger-link:focus-visible { color: var(--err); }
+
+/* свёрнутые разделы на страницах настроек и профиля: одна строка, пока не нужны */
+.fold-pane { padding: 0; margin-top: 14px; }
+.fold-pane > summary { cursor: pointer; list-style: none; display: flex; align-items: baseline; justify-content: space-between;
+  gap: 12px; padding: 12px 16px; font-weight: 600; }
+.fold-pane > summary::-webkit-details-marker { display: none; }
+.fold-pane > summary > span:first-child::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 10px;
+  border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); transform: translateY(-2px) rotate(-45deg);
+  transition: transform .12s; }
+.fold-pane[open] > summary > span:first-child::before { transform: translateY(-3px) rotate(45deg); }
+.fold-pane > summary .small { font-weight: 400; }
+.fold-pane > :not(summary) { margin-left: 16px; margin-right: 16px; }
+.fold-pane > :last-child:not(summary) { margin-bottom: 14px; }
+.row.wrap { flex-wrap: wrap; }
+.fold-pane { max-width: none; border: 1px solid var(--line); box-shadow: none; }
+
+/* профиль: предметы строками; поля предмета видны, только когда он отмечен */
+.sect { margin: 22px 0 2px; font-size: 16px; }
+.sect-hint { margin: 0 0 10px; }
+.label { display: block; font-weight: 500; margin-bottom: 4px; }
+.subjects { border: 1px solid var(--line); border-radius: var(--radius); }
+.subj { padding: 10px 14px; border-top: 1px solid var(--line-soft); }
+.subj:first-child { border-top: 0; }
+.subj-name { display: flex; align-items: center; gap: 8px; font-weight: 500; cursor: pointer; }
+.subj-fields { display: grid; grid-template-columns: minmax(0, 1fr) 110px; gap: 0 14px; margin: 10px 0 0 24px; }
+.subj-fields .field { margin-bottom: 8px; }
+.subj-more { grid-column: 1 / -1; }
+.subj-more > summary, .add-subject > summary { cursor: pointer; color: var(--muted); }
+.subj-more[open] > summary { margin-bottom: 8px; }
+.subj:has(.subj-on:not(:checked)) .subj-fields { display: none; }
+.subj:has(.subj-on:not(:checked)) .subj-name { font-weight: 400; color: var(--muted); }
+.add-subject > summary { font-weight: 500; }
+.add-subject[open] > summary { margin-bottom: 10px; }
+.form-end { margin-top: 18px; }
+.form-end .spacer { flex: 1; }
+.inline-more { margin-top: 6px; }
+.inline-more > summary { cursor: pointer; color: var(--accent); }
+.inline-more[open] > summary { margin-bottom: 6px; }
+.inline-more textarea { width: 100%; }

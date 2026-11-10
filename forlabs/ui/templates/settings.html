@@ -40,26 +40,36 @@
       {% endif %}
     </fieldset>
     {% endif %}
-    <fieldset><legend>Программы на этом ПК</legend>
-      <p class="small">Word: <b>{{ 'найден' if word else 'не найден' }}</b>{% if not word %}. Номера страниц посчитает LibreOffice, а «Продолжение листинга» появится после пересборки на ПК с Word.{% endif %}</p>
-      <div class="field"><label for="soffice_path">LibreOffice (soffice)</label>
-        <input id="soffice_path" name="soffice_path" type="text" value="{{ s.soffice_path or '' }}" placeholder="{{ soffice or 'не найден' }}"></div>
-      <div class="field"><label for="tesseract_path">Tesseract для фото методичек</label>
-        <input id="tesseract_path" name="tesseract_path" type="text" value="{{ s.tesseract_path or '' }}" placeholder="C:\Program Files\Tesseract-OCR\tesseract.exe"></div>
-    </fieldset>
-    <div class="row"><button class="btn primary" type="submit">Сохранить</button></div>
-  </form>
-  <form method="post" action="/settings/check" style="margin-top:14px">
-    <button class="btn" type="submit">Проверить подключение к модели</button></form>
-  <form method="post" action="/tour/restart" style="margin-top:8px">
-    <button class="btn" type="submit">Пройти обучение заново</button></form>
+    {% if show_mode or show_model %}<div class="row"><button class="btn primary" type="submit">Сохранить</button></div>{% endif %}
+
   {% if lab_tools %}{% from "_tools.html" import tool_box %}
-  <section class="pane sub-pane tools" aria-label="Программы для лаб" data-tools>
-    <div class="tools-head"><h2>Программы для лаб</h2>
-      <button class="btn small link" type="button" data-tools-recheck>Проверить снова</button></div>
-    <p class="small muted">Нужны, чтобы ForLabs сам запускал программы из лаб и делал скриншоты. Ставятся в папку ForLabs, без прав администратора.</p>
+  {% set found = lab_tools|selectattr('found')|list|length %}
+  <details class="pane fold-pane tools" data-tools>
+    <summary><span>Программы для лаб</span><span class="muted small">найдено {{ found }} из {{ lab_tools|length }}</span></summary>
+    <p class="small muted">Нужны, чтобы ForLabs сам запускал программы из лаб и снимал их окна.
+      <button class="btn small link" type="button" data-tools-recheck>Проверить снова</button></p>
     {% for t in lab_tools %}{{ tool_box(t) }}{% endfor %}
-  </section>
+  </details>
   {% endif %}
+
+  <details class="pane fold-pane">
+    <summary><span>Дополнительно</span></summary>
+    <p class="small">Word: <b>{{ 'найден' if word else 'не найден' }}</b>{% if not word %} — номера страниц посчитает LibreOffice, а «Продолжение листинга» появится после пересборки на ПК с Word{% endif %}.
+      LibreOffice: <b>{{ 'найден' if soffice else 'не найден' }}</b>.</p>
+    <div class="field"><label for="soffice_path">Путь к LibreOffice, если ForLabs не нашёл его сам</label>
+      <input id="soffice_path" name="soffice_path" type="text" value="{{ s.soffice_path or '' }}" placeholder="{{ soffice or 'C:\\Program Files\\LibreOffice\\program\\soffice.exe' }}"></div>
+    <div class="field"><label for="tesseract_path">Путь к Tesseract (читает методички-фото)</label>
+      <input id="tesseract_path" name="tesseract_path" type="text" value="{{ s.tesseract_path or '' }}" placeholder="C:\Program Files\Tesseract-OCR\tesseract.exe"></div>
+    <div class="row wrap">
+      <button class="btn small primary" type="submit">Сохранить пути</button>
+      <button class="btn small" type="submit" form="check-form">Проверить связь с моделью</button>
+      <button class="btn small" type="submit" form="tour-form">Пройти обучение заново</button>
+      {% if ctx.cloud and user_email %}<button class="btn small link danger-link" type="submit" form="wipe-form" title="Для чужого компьютера: в облаке всё останется">Выйти и стереть копию с этого ПК</button>{% endif %}
+    </div>
+  </details>
+  </form>
+  <form id="check-form" method="post" action="/settings/check" hidden></form>
+  <form id="tour-form" method="post" action="/tour/restart" hidden></form>
+  {% if ctx.cloud and user_email %}<form id="wipe-form" method="post" action="/logout" hidden onsubmit="return confirm('Выйти и стереть с этого компьютера копию своих лаб и профилей? В облаке всё останется.')"><input type="hidden" name="wipe" value="1"></form>{% endif %}
 </main>
 {% endblock %}

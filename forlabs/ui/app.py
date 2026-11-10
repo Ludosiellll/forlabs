@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 import json
 import os
 import re
@@ -107,6 +108,26 @@ def _same_origin(request: Request) -> bool:
     return urlparse(source).netloc == request.headers.get("host", "")
 
 
+MONTHS_SHORT = ("янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек")
+
+
+def when(stamp: str, now: datetime | None = None) -> str:
+    """Когда изменена лаба, по-человечески: «сегодня 13:27», «вчера 09:10», «10 ноя», «10.11.2025»."""
+    try:
+        t = datetime.fromisoformat((stamp or "").strip()[:19])
+    except ValueError:
+        return (stamp or "")[:16].replace("T", " ")
+    now = now or datetime.now()
+    days = (now.date() - t.date()).days
+    if days == 0:
+        return f"сегодня {t:%H:%M}"
+    if days == 1:
+        return f"вчера {t:%H:%M}"
+    if t.year == now.year:
+        return f"{t.day} {MONTHS_SHORT[t.month - 1]}"
+    return f"{t:%d.%m.%Y}"
+
+
 def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = None,
                token: str | None = None) -> FastAPI:
     """token — ключ этого запуска: без него (cookie или заголовок) сервер не отвечает. Порт 127.0.0.1 общий для
@@ -122,7 +143,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
     from forlabs.runner.languages import TOOL_TITLES
 
     tpl.env.filters["tool_title"] = lambda key: TOOL_TITLES.get(key, key)
-    tpl.env.globals.update(STATUS_RU=STATUS_RU, q=_q, finding_key=finding_key, date_ru=date_ru, ago=ago,
+    tpl.env.globals.update(STATUS_RU=STATUS_RU, q=_q, finding_key=finding_key, date_ru=date_ru, ago=ago, when=when,
                            fmt_tokens=fmt_tokens, access_text=access_text, labs_estimate=labs_estimate)
 
     def render(request: Request, name: str, **kw) -> HTMLResponse:
@@ -462,8 +483,11 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         profiles = ctx.store.list_profiles()
         if not profiles:
             return redirect("/profiles/new", err="Сначала создай профиль")
-        return render(request, "lab_new.html", profiles=profiles, profile_id=profile or profiles[0].id,
-                      subject_id=subject, nav="home", form_token=uuid.uuid4().hex,
+        current = next((p for p in profiles if p.id == profile), profiles[0])
+        mine = [e.subject_id for e in current.enrollments if e.subject_id in all_subjects()]
+        return render(request, "lab_new.html", profiles=profiles, profile_id=current.id, my_subjects=mine,
+                      subject_id=subject if subject in all_subjects() else (mine[0] if mine else None),
+                      nav="home", form_token=uuid.uuid4().hex,
                       materials_accept=MATERIALS_ACCEPT, materials_pages=MATERIALS_MAX // PAGE_CHARS)
 
     @app.post("/labs/new")

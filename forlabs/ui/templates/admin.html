@@ -6,35 +6,6 @@
   <div class="row"><h1>Админ</h1><span class="spacer"></span><a class="btn small" href="/admin/support">Поддержка</a></div>
   {% if telegram_ok is false %}<div class="notice warn">Telegram не подключён: сообщения студентов видны только в «Поддержке».
     <a href="/admin/support">Подключить</a></div>{% endif %}
-  <p class="muted">Цифры — за последние 30 дней.</p>
-
-  <div class="admin-setup">
-    <section class="box" aria-labelledby="b-shared">
-      <h2 id="b-shared">Общий ключ модели</h2>
-      {% if shared_key %}
-        <p class="small">Задан: <span class="mono">••••{{ shared_key[0] }}</span>{% if shared_set %} <span class="muted">· {{ shared_set }}</span>{% endif %}</p>
-      {% else %}
-        <p class="small muted">Не задан: модель работает только у тех, кому выдан свой ключ.</p>
-      {% endif %}
-      <form method="post" action="/admin/shared-key" class="row until">
-        <input type="hidden" name="action" value="set">
-        <label class="visually-hidden" for="shared_key">Общий ключ</label>
-        <input id="shared_key" name="api_key" type="password" autocomplete="off" spellcheck="false" placeholder="{{ 'Вставь новый, чтобы заменить' if shared_key else 'sk-…' }}" required>
-        <button class="btn small primary" type="submit">Сохранить</button>
-      </form>
-      {% if shared_key %}<form method="post" action="/admin/shared-key" style="margin-top:6px"><button class="btn small link" type="submit" name="action" value="clear" onclick="return confirm('Убрать общий ключ?')">Убрать общий ключ</button></form>{% endif %}
-      <p class="hint">Им работают участники без своего ключа, если в их карточке разрешён общий ключ. Хранится на сервере зашифрованным, участникам не виден.</p>
-    </section>
-    <section class="box" aria-labelledby="b-help">
-      <h2 id="b-help">Где что настраивается</h2>
-      <ul class="small help-list">
-        <li>Подписка, пробный доступ, ключ модели и лимит токенов — в карточке участника: нажми на его строку в «Участниках».</li>
-        <li>Telegram для поддержки подключается по кнопке «Поддержка» вверху.</li>
-        <li>Правила для модели — пункт «Правила» в меню, его видишь только ты.</li>
-      </ul>
-    </section>
-  </div>
-
   <dl class="figures">
     <div><dt>Участников</dt><dd>{{ rows|length }}</dd><span>с доступом: {{ active }}</span></div>
     <div><dt>Токенов</dt><dd>{{ fmt_tokens(total_30) }}</dd><span>за 30 дней</span></div>
@@ -42,12 +13,8 @@
     <div><dt>Общий ключ</dt><dd data-balance="shared">…</dd><span data-balance-labs="shared">остаток у провайдера</span></div>
   </dl>
 
-  <div class="admin-charts">
-    <section aria-labelledby="ch-usage"><h2 id="ch-usage">Расход токенов по дням</h2>{{ usage_chart }}</section>
-    <section aria-labelledby="ch-labs"><h2 id="ch-labs">Новые лабы по неделям</h2>{{ labs_chart }}</section>
-  </div>
-
   <h2>Участники</h2>
+  <p class="small muted" style="margin:-4px 0 8px">Подписка, ключ модели и лимит токенов — в карточке участника: нажми на строку.</p>
   <div class="table-wrap">
     <table class="t members">
       <thead><tr><th>Участник</th><th>Подписка</th><th>Ключ</th><th class="num">Остаток</th><th class="num">За 30 дней</th>
@@ -69,5 +36,26 @@
     </table>
   </div>
   <p class="hint">Остаток сообщает провайдер ключа. «≈ лаб» в подсказке — по 30 тыс. токенов на лабу.</p>
+  <div class="admin-charts">
+    <section aria-labelledby="ch-usage"><h2 id="ch-usage">Расход токенов по дням</h2>{{ usage_chart }}</section>
+    <section aria-labelledby="ch-labs"><h2 id="ch-labs">Новые лабы по неделям</h2>{{ labs_chart }}</section>
+  </div>
+
+  <details class="pane fold-pane">
+    <summary><span>Общий ключ модели</span><span class="muted small">{{ ('••••' ~ shared_key[0]) if shared_key else 'не задан' }}</span></summary>
+    {% if shared_key %}
+      <p class="small">Задан: <span class="mono">••••{{ shared_key[0] }}</span>{% if shared_set %} <span class="muted">· {{ shared_set }}</span>{% endif %}</p>
+    {% else %}
+      <p class="small muted">Не задан: модель работает только у тех, кому выдан свой ключ.</p>
+    {% endif %}
+    <form method="post" action="/admin/shared-key" class="row until">
+      <input type="hidden" name="action" value="set">
+      <label class="visually-hidden" for="shared_key">Общий ключ</label>
+      <input id="shared_key" name="api_key" type="password" autocomplete="off" spellcheck="false" placeholder="{{ 'Вставь новый, чтобы заменить' if shared_key else 'sk-…' }}" required>
+      <button class="btn small primary" type="submit">Сохранить</button>
+    </form>
+    {% if shared_key %}<form method="post" action="/admin/shared-key" style="margin-top:6px"><button class="btn small link" type="submit" name="action" value="clear" onclick="return confirm('Убрать общий ключ?')">Убрать общий ключ</button></form>{% endif %}
+    <p class="hint">Им работают участники без своего ключа, если в их карточке разрешён общий ключ. Хранится на сервере зашифрованным, участникам не виден.</p>
+  </details>
 </main>
 {% endblock %}
