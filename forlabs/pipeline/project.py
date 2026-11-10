@@ -19,7 +19,7 @@ import tempfile
 import uuid
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from forlabs.core.fs import remove_tree
 from forlabs.core.llm import LLMError
@@ -29,6 +29,7 @@ from forlabs.runner import plan as plan_rules
 from forlabs.runner.plan import (  # noqa: F401 (validate — для конвейера)
     DATA_EXT,
     ListingRef,
+    ProgramPlan,
     ProjectFile,
     ProjectPlan,
     ShotPlan,
@@ -36,6 +37,7 @@ from forlabs.runner.plan import (  # noqa: F401 (validate — для конве�
 )
 
 MAX_FIXES = 3
+BUILD_LOG_LIMIT = 4000  # ошибки сборки, которые остаются в лабе: их видят студент и чат правок
 CODE_LANGS = {"python", "py", "csharp", "cs", "c#", "cpp", "c++", "c", "java", "js", "javascript", "html", "css",
               "php", "go", "sql", "mysql"}
 
@@ -62,7 +64,16 @@ PROJECT_HEAD = """Ты собираешь из отчёта по лаборат�
    только если этого требует задание (запрос к сайту, API, загрузка страницы): ForLabs запустит её в песочнице.
 6. name — короткое название по-русски, 1–4 слова (это имя папки проекта): без двоеточий, кавычек, слэшей и
    названия языка. language — один из: csharp, cpp, python, java, javascript, web, php, go, mysql; kind — console,
-   winforms, wpf, web, script, sql или gui (окно Swing/tkinter); entry — главный файл (у сайта на PHP — файл .php)."""
+   winforms, wpf, web, script, sql или gui (окно Swing/tkinter); entry — главный файл (у сайта на PHP — файл .php).
+7. Несколько программ в одной лабе (у задания своя программа; библиотека классов и приложение, которое её
+   использует; приложение и программа для его проверки) в один проект не складывай: две точки входа вместе не
+   соберутся, и студент не сможет запустить их по отдельности. Опиши каждую в programs, а её файлы положи в папку
+   с её именем: "programs": [{"name": "ClassLibrary1", "kind": "library"}, {"name": "CalculatorApp",
+   "kind": "winforms", "entry": "CalculatorApp/Program.cs", "uses": ["ClassLibrary1"]}]. name — имя проекта, как в
+   отчёте или методичке, одно слово без пробелов; kind — как у плана. library (библиотека классов, DLL) и uses
+   (библиотеки плана, которые программа подключает) — только C#: ForLabs сам напишет каждой программе .csproj со
+   ссылками и общий .sln. В других языках общий код положи в папку каждой программы. У каждого снимка укажи
+   "program" — какую программу запустить. Программа одна — programs не пиши."""
 
 SHOT_RULES = """- mode "console": input — что набрать на клавиатуре, каждая строка с \\n, ровно столько строк, сколько программа
   прочитает (лишний Enter закроет окно консоли; программа ничего не читает — input пустой), в том формате, как
@@ -119,7 +130,9 @@ PROJECT_SYSTEM = (PROJECT_HEAD + """
  "listings": [{"section": 1, "block": 2, "file": "Form1.cs"}],
  "shots": [{"section": 1, "block": 3, "mode": "window", "steps": […], "expect": "Результат:"},
            {"section": 2, "block": 2, "mode": "app", "app": "visualstudio", "goal": "открыть Form1.cs в конструкторе",
-            "open": ["Form1.cs"], "expect": "конструктор формы Form1 с кнопкой «Вычислить»"}]}""")
+            "open": ["Form1.cs"], "expect": "конструктор формы Form1 с кнопкой «Вычислить»"}]}
+Несколько программ — добавь "programs": [{"name": "…", "kind": "…", "entry": "имя/главный файл", "uses": []}], пути
+файлов начинай с имени программы, у снимков пиши "program": "имя программы".""")
 
 PARTS_NOTE = """Прошлый ответ не поместился целиком: проект большой. Сейчас верни план без текста файлов — у каждого
 файла в files только path (content не пиши); listings и shots — полностью, как обычно. Тексты файлов я попрошу
@@ -131,13 +144,24 @@ FILE_SYSTEM = """Ты пишешь один файл проекта лабора
 Правила те же: русские надписи, без служебных пометок и отладочного вывода, без работы с файлами вне папки
 программы и процессами; в интернет — только если этого требует задание."""
 
+SPLIT_RULES = """Если в одном проекте оказалось несколько программ (ошибки «несколько точек входа», CS0017, multiple
+definition of main, main redeclared, duplicate class) или приложению нужна отдельная библиотека классов, раздели
+проект на программы: верни "programs" — все программы плана, например [{"name": "ClassLibrary1", "kind": "library"},
+{"name": "CalculatorApp", "kind": "console", "entry": "CalculatorApp/Program.cs", "uses": ["ClassLibrary1"]}]. Файлы
+каждой программы лежат в папке с её именем: перенесённый файл верни в files с новым путём, а старый путь назови в
+"remove". В "shots" скажи, какую программу запускает каждый снимок: [{"section": 1, "block": 3,
+"program": "CalculatorApp"}]. Код листингов при переносе не меняй. library и uses — только C#: файлы .csproj со
+ссылками и общий .sln ForLabs напишет сам."""
+
 FIX_SYSTEM = """Ты исправляешь проект лабораторной работы: сборка не прошла. Верни только JSON с изменёнными файлами
 целиком: {"files": [{"path": "…", "content": "…"}], "listings": [{"section": 1, "block": 2, "file": "…",
-"code": "новый текст листинга"}]}. Исправляй причину ошибки, меняй как можно меньше, тем же стилем. Если изменился
-код, который входит в листинг отчёта (список ниже), верни этот листинг в listings — так, как он теперь стоит в файле.
-Файлы сборки (csproj, go.mod, pom.xml, package.json, CMakeLists.txt) делает ForLabs — не пиши и не меняй их. Правила
-те же: русские надписи, без служебных пометок, без работы с файлами вне папки программы и процессами; в интернет —
-только если этого требует задание."""
+"code": "новый текст листинга"}], "remove": [], "programs": [], "shots": []}. Исправляй причину ошибки, меняй как можно
+меньше, тем же стилем. Если изменился код, который входит в листинг отчёта (список ниже), верни этот листинг в
+listings — так, как он теперь стоит в файле. Файлы сборки (csproj, sln, go.mod, pom.xml, package.json, CMakeLists.txt)
+делает ForLabs — не пиши и не меняй их; "remove" — пути файлов проекта, которые нужно убрать. Правила те же: русские
+надписи, без служебных пометок, без работы с файлами вне папки программы и процессами; в интернет — только если этого
+требует задание.
+""" + SPLIT_RULES
 
 SHOT_FIX_SYSTEM = """Ты чинишь проект лабораторной работы. ForLabs собрал программу, запустил её в Windows и
 прошёл сценарий снимка, но снимок не получился. Ниже по каждому рисунку — сценарий, что именно не вышло и что на
@@ -155,11 +179,13 @@ SHOT_FIX_SYSTEM = """Ты чинишь проект лабораторной р�
 только изменённые файлы и только исправленные снимки (снимок — целиком, со всеми шагами). Файлы сборки (csproj,
 go.mod, pom.xml, package.json, CMakeLists.txt) делает ForLabs — не пиши их. Правила те же: русские надписи, без
 служебных пометок, без работы с файлами вне папки программы и процессами; в интернет — только если этого требует
-задание.
+задание. Когда программ в проекте несколько, у снимка есть "program" — какую из них ForLabs запускает: запущена не
+та — исправь "program".
 
 Как ForLabs проходит сценарий:
 """ + SCENARIO_RULES
 
+REJECTED = "\n\nПрошлое исправление не принято: "
 MAX_SHOT_FIXES = 2  # кругов «снимок не вышел → модель чинит программу или сценарий → снимаю заново»
 SEEN_LIMIT = 2500  # экран консоли или окно программы в запросе на исправление
 PLAN_MAX_TOKENS = 8000
@@ -180,10 +206,23 @@ NAME_BAD = re.compile(r'[\\/:<>"|?*«»\x00-\x1f]+')
 class FixOut(BaseModel):
     files: list[ProjectFile] = Field(default_factory=list)
     listings: list[ListingRef] = Field(default_factory=list)
-
-
-class ShotFixOut(FixOut):
+    remove: list[str] = Field(default_factory=list)  # пути файлов, которых в проекте больше нет (перенос, слияние)
+    programs: list[ProgramPlan] = Field(default_factory=list)  # проект разделён на программы: все программы плана
+    entry: str = ""  # новый главный файл (если прежний переименован)
     shots: list[ShotPlan] = Field(default_factory=list)
+
+    @field_validator("files", "listings", "remove", "programs", "shots", mode="before")
+    @classmethod
+    def _lists(cls, v):
+        return v if isinstance(v, list) else []
+
+    @field_validator("entry", mode="before")
+    @classmethod
+    def _entry(cls, v):
+        return plan_rules.norm_path(v) if isinstance(v, str) else ""
+
+
+ShotFixOut = FixOut  # прежнее имя: ответ на исправление после снимка
 
 
 @dataclasses.dataclass
@@ -272,7 +311,44 @@ def _tidy(plan: ProjectPlan) -> ProjectPlan:
     файлы сборки, которые модель всё же написала (их всё равно пишет ForLabs по своим шаблонам)."""
     name = " ".join(NAME_BAD.sub(" ", plan.name).split()).strip(". ")[:60].strip(". ") or plan.name
     files = [f for f in plan.files if plan_rules._build_file_problem(f) is None]
-    return plan.model_copy(update={"name": name, "files": files})
+    plan = plan.model_copy(update={"name": name, "files": files})
+    return _assign_programs(plan_rules.split_programs(plan))
+
+
+def _assign_programs(plan: ProjectPlan) -> ProjectPlan:
+    """Какую программу запускает снимок, если модель этого не сказала (или назвала библиотеку): ту, чей листинг
+    стоит в отчёте над рисунком, затем любую из того же задания, иначе первую запускаемую."""
+    if not plan.programs:
+        return plan
+    main = plan.main_program()
+    refs: dict[int, list[tuple[int, str]]] = {}
+    for r in plan.listings:
+        prog = plan.program(r.file.partition("/")[0])
+        if prog is not None and prog.runs:
+            refs.setdefault(r.section, []).append((r.block, prog.name))
+    shots = []
+    for sh in plan.shots:
+        named = plan.program(sh.program) if sh.program.strip() else None
+        if named is not None and named.runs:
+            shots.append(sh if sh.program == named.name else sh.model_copy(update={"program": named.name}))
+            continue
+        near = sorted(refs.get(sh.section, []))
+        above = [name for block, name in near if block < sh.block]
+        pick = above[-1] if above else near[0][1] if near else (main.name if main else "")
+        shots.append(sh.model_copy(update={"program": pick}))
+    return plan.model_copy(update={"shots": shots})
+
+
+def programs_text(plan: ProjectPlan) -> str:
+    """Программы плана одной строкой — для запросов к модели."""
+    if not plan.programs:
+        return f"Программа одна (programs нет), главный файл: {plan.entry}."
+    parts = []
+    for prog in plan.programs:
+        bits = [prog.kind] + ([f"главный файл {prog.entry}"] if prog.runs else [])
+        bits += [f"подключает {', '.join(prog.uses)}"] if prog.uses else []
+        parts.append(f"{prog.name} ({'; '.join(bits)})")
+    return "Программы (у каждой своя папка): " + ", ".join(parts) + "."
 
 
 def _files_text(files) -> str:
@@ -289,7 +365,7 @@ def _plan_in_parts(user: str, llm) -> ProjectPlan:
     if len(todo) > MAX_PART_FILES:
         raise LLMError("bad_response", f"{len(todo)} файлов", "Проект программы слишком большой.")
     refs = "; ".join(f"[{r.section}.{r.block}] → {r.file}" for r in head.listings) or "нет"
-    manifest = (f"План проекта: язык {head.language}, вид {head.kind}, главный файл {head.entry}.\n"
+    manifest = (f"План проекта: язык {head.language}, вид {head.kind}. {programs_text(head)}\n"
                 f"Файлы: {', '.join(f.path for f in head.files)}.\nЛистинги отчёта: {refs}.")
     done: dict[str, ProjectFile] = {f.path: f for f in head.files if f.content.strip()}
     for f in todo:
@@ -330,11 +406,19 @@ def _quiet_console(plan: ProjectPlan) -> ProjectPlan:
     """Программа не читает клавиатуру, а сценарий что-то набирает: в Windows этот Enter закрыл бы «pause» — и окно
     консоли исчезло бы до снимка. Такой ввод убирается."""
     reads = KEYBOARD.get(plan.language)
-    code = "\n".join(f.content for f in plan.files if Path(f.path).suffix.lower() in plan_rules.CODE_EXT[plan.language])
-    if reads is None or re.search(reads, code):
+    if reads is None:
         return plan
+    ext = plan_rules.CODE_EXT[plan.language]
+
+    def reads_keyboard(sh: ShotPlan) -> bool:
+        prog = plan.program_of(sh)
+        files = plan.files
+        if prog is not None:  # своя программа и библиотеки, которые она подключает
+            files = [f for p in (prog, *(plan.program(u) for u in prog.uses)) if p is not None for f in plan.files_of(p)]
+        return bool(re.search(reads, "\n".join(f.content for f in files if Path(f.path).suffix.lower() in ext)))
+
     shots = [sh.model_copy(update={"input": "", "steps": [x for x in sh.steps if x.action not in ("type", "key")]})
-             if sh.mode == "console" else sh for sh in plan.shots]
+             if sh.mode == "console" and not reads_keyboard(sh) else sh for sh in plan.shots]
     return plan.model_copy(update={"shots": shots})
 
 
@@ -354,25 +438,71 @@ def fix_project(plan: ProjectPlan, log: str, llm) -> ProjectPlan:
     files = "\n\n".join(f"Файл {f.path}:\n<<<\n{f.content}\n>>>" for f in plan.files
                         if Path(f.path).suffix.lower() not in DATA_EXT)
     refs = "; ".join(f"[{r.section}.{r.block}] из {r.file}" for r in plan.listings) or "нет"
-    user = (f"Язык: {plan.language}, вид: {plan.kind}, главный файл: {plan.entry}.\n\nОшибки сборки:\n{log[-6000:]}"
-            f"\n\nЛистинги отчёта: {refs}.\n\nФайлы проекта:\n{files}")
+    shots = "; ".join(f"[{x.section}.{x.block}]" + (f" запускает {x.program}" if x.program else "")
+                      for x in plan.shots if x.mode in AUTO_MODES) or "нет"
+    user = (f"Язык: {plan.language}, вид: {plan.kind}. {programs_text(plan)}\n\nОшибки сборки:\n{log[-6000:]}"
+            f"\n\nЛистинги отчёта: {refs}.\nСнимки, которые ForLabs делает сам: {shots}.\n\nФайлы проекта:\n{files}")
     out = llm.json([{"role": "system", "content": FIX_SYSTEM}, {"role": "user", "content": user}], FixOut,
                    max_tokens=8000)
+    return _apply_fix(plan, out, scenarios=False)
+
+
+AUTO_MODES = ("window", "console", "browser")  # снимки, которые ForLabs проходит по сценарию сам
+
+
+def _apply_fix(plan: ProjectPlan, out: FixOut, scenarios: bool) -> ProjectPlan:
+    """Ответ модели на исправление — в план: изменённые и убранные файлы, листинги, деление на программы и то, какую
+    программу запускает снимок. scenarios — можно менять и сами сценарии снимков (исправление после снимка)."""
     by_path = {f.path: f for f in plan.files}
+    gone = {plan_rules.norm_path(x).lower() for x in out.remove}
+    moved: dict[str, list[str]] = {}  # имя убранного файла → куда он переехал
     for f in out.files:
         if plan_rules._build_file_problem(f) is None:  # go.mod, csproj и т.п. всё равно пишет ForLabs
             by_path[f.path] = f
+            moved.setdefault(Path(f.path).name.lower(), []).append(f.path)
+    new_paths = {f.path.lower() for f in out.files}
+    for path in [x for x in by_path if x.lower() in gone and x.lower() not in new_paths]:
+        del by_path[path]
     refs = {(r.section, r.block): r for r in plan.listings}
     for r in out.listings:
         refs[(r.section, r.block)] = r
-    return plan.model_copy(update={"files": list(by_path.values()), "listings": list(refs.values())})
+    listings = []
+    for r in refs.values():
+        if r.file not in by_path:  # файл листинга переехал в папку программы: листинг — по новому пути
+            new = moved.get(Path(r.file).name.lower(), [])
+            if len(new) != 1:
+                continue
+            r = r.model_copy(update={"file": new[0]})
+        listings.append(r)
+    given = {(x.section, x.block): x for x in out.shots}
+    shots = []
+    for x in plan.shots:
+        new = given.get((x.section, x.block))
+        if new is None or x.mode not in AUTO_MODES:
+            shots.append(x)
+        elif scenarios and new.mode in AUTO_MODES:  # сценарий целиком; «сними сам» — не починка
+            shots.append(new if new.program.strip() else new.model_copy(update={"program": x.program}))
+        else:
+            shots.append(x.model_copy(update={"program": new.program}) if new.program.strip() else x)
+    data = plan.model_dump() | {"files": [f.model_dump() for f in by_path.values()],
+                                "listings": [r.model_dump() for r in listings],
+                                "shots": [x.model_dump() for x in shots]}
+    if out.programs:
+        data["programs"] = [x.model_dump() for x in out.programs]
+    if out.entry and not data.get("programs"):
+        data["entry"] = out.entry
+    try:
+        return _assign_programs(ProjectPlan.model_validate(data))
+    except ValueError:
+        return plan  # ответ не складывается в план: остаётся прежний, причину покажет сборка
 
 
 def _with_materials(plan: ProjectPlan, st: LabState) -> ProjectPlan:
     """Файлы данных от преподавателя — рядом с программой (модель их не переписывает)."""
     have = {f.path.lower() for f in plan.files}
-    extra = [ProjectFile(path=m.name, content=m.text) for m in st.materials
-             if Path(m.name).suffix.lower() in DATA_EXT and m.name.lower() not in have and "/" not in m.name]
+    folders = [f"{p.name}/" for p in plan.programs if p.runs] or [""]  # у каждой программы своя рабочая папка
+    extra = [ProjectFile(path=d + m.name, content=m.text) for m in st.materials for d in folders
+             if Path(m.name).suffix.lower() in DATA_EXT and (d + m.name).lower() not in have and "/" not in m.name]
     return plan.model_copy(update={"files": [*plan.files, *extra]}) if extra else plan
 
 
@@ -542,23 +672,13 @@ def fix_shots(plan: ProjectPlan, failures: list[ShotFailure], llm, st: LabState 
     files = "\n\n".join(f"Файл {f.path}:\n<<<\n{f.content}\n>>>" for f in plan.files
                         if Path(f.path).suffix.lower() not in DATA_EXT)
     refs = "; ".join(f"[{r.section}.{r.block}] из {r.file}" for r in plan.listings) or "нет"
-    user = (f"Язык: {plan.language}, вид: {plan.kind}, главный файл: {plan.entry}.\n\n"
+    user = (f"Язык: {plan.language}, вид: {plan.kind}. {programs_text(plan)}\n\n"
             "Рисунки, которые не получилось снять:\n\n" + "\n\n".join(one(f) for f in failures)
             + f"\n\nЛистинги отчёта: {refs}.\n\nФайлы проекта:\n{files}")
     out = llm.json([{"role": "system", "content": SHOT_FIX_SYSTEM}, {"role": "user", "content": user}], ShotFixOut,
                    max_tokens=PLAN_MAX_TOKENS)
-    by_path = {f.path: f for f in plan.files}
-    for f in out.files:
-        if plan_rules._build_file_problem(f) is None:  # go.mod, csproj и т.п. всё равно пишет ForLabs
-            by_path[f.path] = f
-    refs = {(r.section, r.block): r for r in plan.listings}
-    for r in out.listings:
-        refs[(r.section, r.block)] = r
     # сценарий меняется только у рисунков, которые ForLabs снимает сам, и остаётся таким: «сними сам» — не починка
-    new = {(s.section, s.block): s for s in out.shots if s.mode in ("window", "console", "browser")}
-    shots = [new.get((s.section, s.block), s) if s.mode in ("window", "console", "browser") else s
-             for s in plan.shots]
-    fixed = plan.model_copy(update={"files": list(by_path.values()), "listings": list(refs.values()), "shots": shots})
+    fixed = _apply_fix(plan, out, scenarios=True)
     return _quiet_console(_trusted_expects(_tidy(fixed), st)) if st is not None else fixed
 
 
@@ -570,7 +690,9 @@ def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None, 
     lab = pipe.lab_dir(st)
     pdir = lab / "project"
     pdir.mkdir(parents=True, exist_ok=True)
-    plan = _with_materials(plan, st)
+    # план мог быть составлен до того, как ForLabs научился нескольким программам: папки со своей точкой входа
+    # становятся программами — иначе такая лаба не соберётся никогда
+    plan = _with_materials(_tidy(plan), st)
     info = ProjectInfo(name=plan.name, language=plan.language, kind=plan.kind)
     tools = languages.detect()
     info.missing = languages.missing(plan, tools)
@@ -596,8 +718,10 @@ def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None, 
                 info.fixes += 1
                 emit(f"Исправляю ошибки сборки ({info.fixes} из {MAX_FIXES})")
                 fixed = _with_materials(fix_project(candidate, res.log, llm), st)
-                if validate(fixed):
-                    break
+                if problems := validate(fixed):  # исправление не годится: в следующем круге модель узнает почему
+                    res = dataclasses.replace(res, log=res.log.split(REJECTED)[0].rstrip() + REJECTED
+                                              + "; ".join(problems[:5]))
+                    continue
                 candidate = fixed
                 shutil.rmtree(work, ignore_errors=True)
                 languages.materialize(candidate, work, tools)
@@ -641,7 +765,7 @@ def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None, 
     def shoot_all(hand_in: Path) -> list[ShotFailure]:
         shots = {(s.section, s.block): s for s in plan.shots}
         failures: list[ShotFailure] = []
-        spec = None
+        specs: dict[str, object] = {}  # чем запускать каждую программу плана
         db, db_error = None, None  # свой сервер MySQL: поднимается к первому снимку, гасится после последнего
         try:
             for n, bi, b in list(_blocks(st)):
@@ -681,14 +805,17 @@ def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None, 
                 if shooter is None:
                     b.auto_note = "Снимки окон ForLabs делает только в Windows."
                     continue
-                if spec is None:
-                    spec = languages.run_spec(plan, result.artifact if result else None, work, tools)
+                prog = plan.program_of(shot)
+                which = prog.name if prog is not None else ""
+                if which not in specs:
+                    specs[which] = languages.run_spec_for(plan, result, work, tools, which)
+                spec = specs[which]
                 if plan.language == "mysql":
                     if db is None and db_error is None:
                         emit("Запускаю отдельный сервер MySQL для снимков")
                         try:
                             db = start_mysql(tools["mysql"].path)
-                            spec = dataclasses.replace(spec, cmd=db.client())
+                            spec = specs[which] = dataclasses.replace(spec, cmd=db.client())
                         except Exception as e:  # noqa: BLE001 — сервер не поднялся: снимки студенту, отчёт собирается
                             db_error = str(e).rstrip(".") or "сервер MySQL не запустился"
                     if db_error:
@@ -739,8 +866,11 @@ def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None, 
                 b.image_path = None
     while True:
         info.built = bool(result is not None and result.ok) and not info.blocked
+        info.programs = [x.name for x in plan.programs]
+        info.build_log = ""
         if result is not None and not result.ok:
             info.note = "Программу не собрал: ошибки остались. Проект в папке сдачи, снимки сделай сам."
+            info.build_log = result.log.split(REJECTED)[0].strip()[:BUILD_LOG_LIMIT]
         if info.blocked:
             info.note = f"Сам не собирал и не запускал: {info.blocked[0]}"
         try:

@@ -13,6 +13,17 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 Language = Literal["csharp", "cpp", "python", "java", "javascript", "web", "php", "go", "mysql"]
 Kind = Literal["console", "winforms", "wpf", "web", "script", "sql", "gui"]
+LIBRARY = "library"  # вид программы-библиотеки (только C#): её не запускают, её подключают другие программы плана
+PROGRAM_LANGS = ("csharp", "cpp", "python", "java", "javascript", "php", "go")  # где в лабе бывает несколько программ
+NOT_PROGRAM_DIRS = {"bin", "obj", "out", "__pycache__", ".vs"}  # папки сборки: в копию для сдачи не попадают
+# Точка входа в коде: по ней видно, что в одном проекте лежит несколько программ
+ENTRY_POINT = {
+    "csharp": r"\bstatic\s+(?:async\s+)?(?:void|int|(?:System\.Threading\.Tasks\.)?Task(?:\s*<\s*int\s*>)?)\s+Main\s*\(",
+    "cpp": r"^\s*(?:int|void)\s+(?:w?main|_tmain)\s*\(", "go": r"^\s*func\s+main\s*\(\s*\)",
+    "java": r"\bpublic\s+static\s+void\s+main\s*\(",
+}
+WINDOW_CODE = {"csharp": r"System\.Windows\.Forms|Application\.Run\s*\(|:\s*Form\b",
+               "java": r"javax\.swing|java\.awt|javafx\."}
 ShotMode = Literal["window", "console", "browser", "manual", "app"]  # app — агент в программе студента
 SHOT_ACTIONS = ("set", "select", "click", "check", "type", "key", "wait", "scroll", "open")
 NEEDS_TARGET = {"set", "select", "click", "check"}
@@ -124,6 +135,7 @@ class ShotPlan(_Model):
     url: str = ""
     expect: str = ""
     reason: str = ""  # почему снимок делает студент (mode == "manual")
+    program: str = ""  # какую программу плана запускать (когда их несколько); пусто — первую запускаемую
     app: str = ""  # mode == "app": ключ программы (forlabs.agent.apps.APPS)
     goal: str = ""  # mode == "app": что сделать в программе
     open: list[str] = Field(default_factory=list)  # mode == "app": файлы проекта, которые открыть
@@ -133,13 +145,44 @@ class ShotPlan(_Model):
     def _mode(cls, v):
         return str(_text(v)).strip().lower() or "window"
 
-    _strings = field_validator("input", "url", "expect", "reason", "app", "goal", mode="before")(_text)
+    _strings = field_validator("input", "url", "expect", "reason", "app", "goal", "program", mode="before")(_text)
 
     @field_validator("open", mode="before")
     @classmethod
     def _open(cls, v):
         items = v if isinstance(v, list) else ([v] if v else [])
         return [str(x).replace("\\", "/").removeprefix("./") for x in items]
+
+
+class ProgramPlan(_Model):
+    """Одна из нескольких программ лабы: лежит в папке со своим именем, собирается и запускается отдельно."""
+    name: str  # имя программы = имя её папки и проекта (ClassLibrary1, CalculatorApp)
+    kind: str = "console"  # как у плана, плюс library (C#)
+    entry: str = ""  # главный файл, путь от корня проекта (CalculatorApp/Program.cs); у библиотеки пусто
+    uses: list[str] = Field(default_factory=list)  # библиотеки этого же плана, которые программа подключает
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _name(cls, v):
+        return str(_text(v)).strip().replace("\\", "/").strip("/")
+
+    @field_validator("kind", mode="before")
+    @classmethod
+    def _kind(cls, v):
+        v = str(_text(v)).strip().lower()
+        return {"lib": LIBRARY, "dll": LIBRARY, "classlib": LIBRARY, "classlibrary": LIBRARY}.get(v, v) or "console"
+
+    _entry = field_validator("entry", mode="before")(norm_path)
+
+    @field_validator("uses", mode="before")
+    @classmethod
+    def _uses(cls, v):
+        items = v if isinstance(v, list) else ([v] if v else [])
+        return [str(_text(x)).strip() for x in items if str(_text(x)).strip()]
+
+    @property
+    def runs(self) -> bool:
+        return self.kind != LIBRARY
 
 
 class ProjectPlan(_Model):
@@ -150,6 +193,7 @@ class ProjectPlan(_Model):
     entry: str
     listings: list[ListingRef] = Field(default_factory=list)
     shots: list[ShotPlan] = Field(default_factory=list)
+    programs: list[ProgramPlan] = Field(default_factory=list)  # несколько программ в лабе; пусто — одна, как раньше
 
     @field_validator("language", mode="before")
     @classmethod
@@ -160,7 +204,8 @@ class ProjectPlan(_Model):
     @field_validator("kind", mode="before")
     @classmethod
     def _kind(cls, v):
-        return str(_text(v)).strip().lower()
+        v = str(_text(v)).strip().lower()
+        return "console" if v == LIBRARY else v  # вид плана из нескольких программ — вид главной из них (ниже)
 
     @field_validator("name", mode="before")
     @classmethod
@@ -168,6 +213,11 @@ class ProjectPlan(_Model):
         return str(_text(v)).strip()
 
     _entry = field_validator("entry", mode="before")(norm_path)
+
+    @field_validator("programs", mode="before")
+    @classmethod
+    def _programs(cls, v):
+        return v if isinstance(v, list) else []
 
     @model_validator(mode="after")
     def _fix_case(self):
@@ -185,10 +235,34 @@ class ProjectPlan(_Model):
                 self.entry = best
         for ref in self.listings:
             ref.file = real.get(ref.file.lower(), ref.file) if ref.file not in real.values() else ref.file
+        for prog in self.programs:  # главный файл программы: «Program.cs» → «CalculatorApp/Program.cs»
+            if prog.runs and prog.entry not in real.values():
+                inside = f"{prog.name}/{prog.entry}".lower()
+                prog.entry = real.get(prog.entry.lower()) or real.get(inside) or prog.entry
+        main = self.main_program()
+        if main is not None:  # вид и точка входа плана — от программы, которая запускается первой
+            self.entry = main.entry or self.entry
+            if main.kind in Kind.__args__:
+                self.kind = main.kind
         return self
 
     def file(self, path: str) -> ProjectFile | None:
         return next((f for f in self.files if f.path == path), None)
+
+    def main_program(self) -> ProgramPlan | None:
+        """Программа, которая запускается, если не сказано иное: первая не библиотека."""
+        return next((p for p in self.programs if p.runs), None)
+
+    def program(self, name: str) -> ProgramPlan | None:
+        return next((p for p in self.programs if p.name.lower() == (name or "").strip().lower()), None)
+
+    def program_of(self, shot: ShotPlan) -> ProgramPlan | None:
+        """Какую программу запускает снимок. None — программ в плане нет (один проект)."""
+        found = self.program(shot.program) if shot.program.strip() else None
+        return found if found is not None and found.runs else self.main_program()
+
+    def files_of(self, prog: ProgramPlan) -> list[ProjectFile]:
+        return [f for f in self.files if f.path.lower().startswith(prog.name.lower() + "/")]
 
 
 def _url_problem(url: str) -> str | None:
@@ -249,10 +323,131 @@ def _name_problem(name: str) -> str | None:
     return None
 
 
+def _program_problems(plan: ProjectPlan) -> list[str]:
+    """Несколько программ в плане: у каждой своя папка, главный файл в ней, библиотеки — только C#."""
+    out: list[str] = []
+    lang = plan.language
+    if lang not in PROGRAM_LANGS:
+        return [f"programs не подходят для языка {lang}: у сайта и SQL один проект"]
+    kinds = KINDS[lang] + ((LIBRARY,) if lang == "csharp" else ())
+    paths = {f.path for f in plan.files}
+    seen: dict[str, str] = {}
+    for p in plan.programs:
+        title = f"Программа «{p.name}»"
+        why = _path_problem(p.name) if p.name else "пустое имя"
+        if why or "/" in p.name or " " in p.name or p.name.lower() in NOT_PROGRAM_DIRS:
+            out.append(f"{title}: имя программы — это имя её папки: одно слово без пробелов и слэшей, не bin, obj, out"
+                       + (f" ({why})" if why else ""))
+            continue
+        if p.name.lower() in seen:
+            out.append(f"{title}: такая программа уже есть — «{seen[p.name.lower()]}»")
+            continue
+        seen[p.name.lower()] = p.name
+        if p.kind not in kinds:
+            extra = " (library — только в C#)" if p.kind == LIBRARY else ""
+            out.append(f"{title}: вид «{p.kind}» не подходит для языка {lang} (можно: {', '.join(kinds)}){extra}")
+        if not plan.files_of(p):
+            out.append(f"{title}: в папке «{p.name}/» нет ни одного файла")
+        if p.runs:
+            if p.entry not in paths:
+                out.append(f"{title}: главного файла «{p.entry}» нет в проекте")
+            elif not p.entry.lower().startswith(p.name.lower() + "/"):
+                out.append(f"{title}: главный файл «{p.entry}» должен лежать в её папке «{p.name}/»")
+            elif PurePosixPath(p.entry).suffix.lower() not in CODE_EXT[lang]:
+                out.append(f"{title}: главный файл «{p.entry}» должен быть исходником {lang}")
+    if not any(p.runs for p in plan.programs):
+        out.append("В programs нет ни одной программы, которую можно запустить (одни библиотеки)")
+    by = {p.name.lower(): p for p in plan.programs}
+    for p in plan.programs:
+        for u in p.uses:
+            lib = by.get(u.lower())
+            if lib is None:
+                out.append(f"Программа «{p.name}» подключает «{u}», а в programs нет программы «{u}»")
+            elif lib.runs:
+                out.append(f"Программа «{p.name}» подключает «{u}», а это не библиотека (kind не library)")
+
+    def loops(name: str, trail: tuple[str, ...]) -> bool:
+        if name in trail:
+            return True
+        node = by.get(name)
+        return node is not None and any(loops(u.lower(), (*trail, name)) for u in node.uses)
+
+    if any(loops(p.name.lower(), ()) for p in plan.programs):
+        out.append("Библиотеки подключают друг друга по кругу (uses)")
+    folders = [p.name.lower() + "/" for p in plan.programs]
+    for f in plan.files:
+        if not any(f.path.lower().startswith(d) for d in folders):
+            out.append(f"«{f.path}»: файл не лежит в папке ни одной программы из programs")
+    for shot in plan.shots:
+        if not shot.program.strip():
+            continue
+        prog = plan.program(shot.program)
+        where = f"Снимок {shot.section}.{shot.block}"
+        if prog is None:
+            out.append(f"{where}: в programs нет программы «{shot.program}»")
+        elif not prog.runs:
+            out.append(f"{where}: «{shot.program}» — библиотека, её нельзя запустить; укажи программу, которая "
+                       "её использует")
+    return out
+
+
+def split_programs(plan: ProjectPlan) -> ProjectPlan:
+    """План без programs, где у нескольких папок своя точка входа (библиотека и приложения, сложенные в один
+    проект: такая сборка падает с «несколько точек входа»), — папки становятся программами. Делится только то, что
+    делится однозначно: весь код лежит по папкам верхнего уровня и в каждой не больше одной точки входа."""
+    lang = plan.language
+    if plan.programs or lang not in ENTRY_POINT:
+        return plan
+    pat = re.compile(ENTRY_POINT[lang], re.M)
+    code = CODE_EXT[lang]
+    tops: dict[str, list[ProjectFile]] = {}
+    loose: list[ProjectFile] = []
+    for f in plan.files:
+        top, _, rest = f.path.partition("/")
+        if rest:
+            tops.setdefault(top, []).append(f)
+        elif PurePosixPath(f.path).suffix.lower() in DATA_EXT:
+            loose.append(f)  # данные из корня получит каждая программа
+        else:
+            return plan
+    entries = {t: [f for f in fs if PurePosixPath(f.path).suffix.lower() in code and pat.search(f.content)]
+               for t, fs in tops.items()}
+    if sum(1 for t in tops if entries[t]) < 2 or any(len(e) > 1 for e in entries.values()):
+        return plan
+    libs = [t for t in tops if not entries[t]]
+    if libs and lang != "csharp":
+        return plan  # общий код без точки входа в других языках к программам не подключить
+    programs = []
+    for t, fs in tops.items():
+        if not entries[t]:
+            programs.append(ProgramPlan(name=t, kind=LIBRARY))
+            continue
+        text = "\n".join(f.content for f in fs)
+        kind = "console"
+        if lang == "csharp" and any(f.path.lower().endswith(".xaml") for f in fs):
+            kind = "wpf"
+        elif lang in WINDOW_CODE and re.search(WINDOW_CODE[lang], text):
+            kind = "winforms" if lang == "csharp" else "gui"
+        programs.append(ProgramPlan(name=t, kind=kind, entry=entries[t][0].path, uses=list(libs)))
+    first = plan.entry.partition("/")[0]
+    programs.sort(key=lambda p: not (p.runs and p.name == first))  # прежняя точка входа остаётся главной
+    files = [f for f in plan.files if "/" in f.path]
+    have = {f.path.lower() for f in files}
+    for f in loose:
+        files += [ProjectFile(path=f"{p.name}/{f.path}", content=f.content) for p in programs
+                  if p.runs and f"{p.name}/{f.path}".lower() not in have]
+    data = plan.model_dump() | {"programs": [p.model_dump() for p in programs],
+                                "files": [f.model_dump() for f in files]}
+    out = ProjectPlan.model_validate(data)
+    return plan if _program_problems(out) else out
+
+
 def validate(plan: ProjectPlan) -> list[str]:
     """Что не так с планом (по-русски, для модели и журнала). Пустой список — план можно писать на диск."""
     out: list[str] = []
     lang = plan.language
+    if plan.programs:
+        out += _program_problems(plan)
     if (p := _name_problem(plan.name)) is not None:
         out.append(p)
     if plan.kind not in KINDS[lang]:

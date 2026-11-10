@@ -15,6 +15,7 @@ import socket
 import subprocess
 import sys
 import threading
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -23,7 +24,7 @@ from urllib.parse import quote
 
 from forlabs import version
 from forlabs.core import paths
-from forlabs.runner.plan import CODE_EXT, ProjectPlan, validate
+from forlabs.runner.plan import CODE_EXT, ProjectFile, ProjectPlan, validate
 
 WINDOWS = sys.platform == "win32"
 NO_WINDOW = 0x08000000  # CREATE_NO_WINDOW
@@ -100,6 +101,7 @@ class BuildResult:
     ok: bool
     log: str = ""                # ошибки сборки — коротко, пути внутри проекта; уходят модели на исправление
     artifact: Path | None = None  # exe/dll, папка классов Java или главный файл (Python, PHP, сайт, SQL)
+    artifacts: dict[str, Path] = field(default_factory=dict)  # несколько программ: имя программы → её artifact
 
 
 @dataclass
@@ -283,7 +285,8 @@ def missing(plan: ProjectPlan, tools: Mapping[str, Toolchain]) -> list[str]:
     if plan.language == "cpp":
         return [] if any(k in tools for k in CPP_COMPILERS) else ["gpp"]
     need = list(NEEDS[plan.language])
-    if plan.kind == "web" and plan.language in ("php", "javascript"):
+    kinds = {p.kind for p in plan.programs} or {plan.kind}
+    if "web" in kinds and plan.language in ("php", "javascript"):
         need.append("edge")
     return [k for k in need if k not in tools]
 
@@ -336,15 +339,113 @@ def _is_esm(plan: ProjectPlan) -> bool:
                for f in plan.files if f.path.lower().endswith(".js"))
 
 
+def sub_plan(plan: ProjectPlan, prog) -> ProjectPlan:
+    """Одна из программ плана как самостоятельный проект в своей папке: файлы — без имени папки, свой вид и
+    главный файл. Так каждая программа собирается и запускается тем же кодом, что и единственная."""
+    cut = len(prog.name) + 1
+    files = [ProjectFile(path=f.path[cut:], content=f.content) for f in plan.files_of(prog)]
+    code = CODE_EXT.get(plan.language, set())
+    first = next((f.path for f in files if PurePosixPath(f.path).suffix.lower() in code), files[0].path if files else "")
+    return ProjectPlan.model_construct(language=plan.language, kind=prog.kind if prog.runs else "console",
+                                       name=prog.name, files=files, entry=prog.entry[cut:] if prog.runs else first,
+                                       listings=[], shots=[], programs=[])
+
+
+def _asm(name: str) -> str:
+    """Имя сборки C#: буквы (и русские), цифры, «_», «-», «.»."""
+    return re.sub(r"[^\w.-]+", "_", name).strip("._") or "Lab"
+
+
+def _ns(name: str) -> str:
+    s = re.sub(r"\W+", "_", name).strip("_")
+    return s if s[:1].isalpha() else f"Lab_{s}".strip("_")
+
+
+_GUI_PROPS = {"winforms": "\n    <UseWindowsForms>true</UseWindowsForms>", "wpf": "\n    <UseWPF>true</UseWPF>"}
+WINDOWS_TARGETING = "\n    <EnableWindowsTargeting>true</EnableWindowsTargeting>"
+
+
+def _window_flavor(plan: ProjectPlan, prog) -> str:
+    """Какие оконные типы нужны программе: у приложения — по виду, у библиотеки — по её коду."""
+    if prog.runs:
+        return prog.kind if prog.kind in _GUI_PROPS else ""
+    files = plan.files_of(prog)
+    text = "\n".join(f.content for f in files if f.path.lower().endswith(".cs"))
+    if any(f.path.lower().endswith(".xaml") for f in files) or re.search(r"System\.Windows\.(?:Controls|Media)\b", text):
+        return "wpf"
+    return "winforms" if re.search(r"System\.Windows\.Forms\b", text) else ""
+
+
+def _program_csprojs(plan: ProjectPlan, tools: Mapping[str, Toolchain]) -> dict[str, str]:
+    """По .csproj на программу: библиотека — Library, ссылки на библиотеки — ProjectReference. Кто подключает
+    библиотеку с оконными типами, сам собирается под Windows: иначе ссылка не сойдётся по платформе."""
+    flavor = {p.name.lower(): _window_flavor(plan, p) for p in plan.programs}
+    by = {p.name.lower(): p for p in plan.programs}
+
+    def for_windows(name: str, seen: tuple[str, ...] = ()) -> bool:
+        p = by.get(name)
+        if p is None or name in seen:
+            return False
+        return bool(flavor[name]) or any(for_windows(u.lower(), (*seen, name)) for u in p.uses)
+
+    out = {}
+    for p in plan.programs:
+        gui = _GUI_PROPS.get(flavor[p.name.lower()], "")
+        win = for_windows(p.name.lower())
+        tfm = _tfm(tools) + ("-windows" if win else "")
+        output = "Library" if not p.runs else "WinExe" if gui else "Exe"
+        text = CSPROJ.format(output=output, tfm=tfm, gui=gui + (WINDOWS_TARGETING if win else ""), ns=_ns(p.name),
+                             asm=_asm(p.name))
+        refs = [by[u.lower()].name for u in p.uses if u.lower() in by]
+        if refs:
+            items = "".join(f'    <ProjectReference Include="..\\{r}\\{r}.csproj" />\n' for r in refs)
+            text = text.replace("\n</Project>", f"\n  <ItemGroup>\n{items}  </ItemGroup>\n\n</Project>")
+        out[f"{p.name}/{p.name}.csproj"] = text
+    return out
+
+
+CS_PROJECT_TYPE = "{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}"
+
+
+def solution(plan: ProjectPlan) -> str:
+    """Решение Visual Studio со всеми программами лабы. Первой идёт запускаемая: без своих настроек студента
+    Visual Studio делает запускаемым первый проект решения."""
+    main = plan.main_program()
+    order = ([main] if main else []) + [p for p in plan.programs if p is not main]
+
+    def guid(name: str) -> str:
+        return "{" + str(uuid.uuid5(uuid.NAMESPACE_URL, f"forlabs/{plan.name}/{name}")).upper() + "}"
+
+    lines = ["", "Microsoft Visual Studio Solution File, Format Version 12.00", "# Visual Studio Version 17",
+             "VisualStudioVersion = 17.0.31903.59", "MinimumVisualStudioVersion = 10.0.40219.1"]
+    for p in order:
+        lines += [f'Project("{CS_PROJECT_TYPE}") = "{p.name}", "{p.name}\\{p.name}.csproj", "{guid(p.name)}"',
+                  "EndProject"]
+    lines += ["Global", "\tGlobalSection(SolutionConfigurationPlatforms) = preSolution",
+              "\t\tDebug|Any CPU = Debug|Any CPU", "\t\tRelease|Any CPU = Release|Any CPU", "\tEndGlobalSection",
+              "\tGlobalSection(ProjectConfigurationPlatforms) = postSolution"]
+    for p in order:
+        for cfg in ("Debug", "Release"):
+            lines += [f"\t\t{guid(p.name)}.{cfg}|Any CPU.ActiveCfg = {cfg}|Any CPU",
+                      f"\t\t{guid(p.name)}.{cfg}|Any CPU.Build.0 = {cfg}|Any CPU"]
+    lines += ["\tEndGlobalSection", "\tGlobalSection(SolutionProperties) = preSolution",
+              "\t\tHideSolutionNode = FALSE", "\tEndGlobalSection", "EndGlobal", ""]
+    return "\r\n".join(lines)
+
+
 def templates(plan: ProjectPlan, tools: Mapping[str, Toolchain] | None = None) -> dict[str, str]:
-    """Файлы сборки ForLabs: .csproj (C#), go.mod (Go), package.json (Node, если модель не дала свой)."""
+    """Файлы сборки ForLabs: .csproj (C#), go.mod (Go), package.json (Node, если модель не дала свой). Несколько
+    программ — у каждой свои файлы сборки в её папке, у C# ещё общий .sln."""
     tools = tools or {}
+    if plan.programs and plan.language == "csharp":
+        return _program_csprojs(plan, tools) | {f"{project_name(plan)}.sln": solution(plan)}
+    if plan.programs:
+        return {f"{p.name}/{k}": v for p in plan.programs for k, v in templates(sub_plan(plan, p), tools).items()}
     if plan.language == "csharp":
-        gui = {"winforms": "\n    <UseWindowsForms>true</UseWindowsForms>",
-               "wpf": "\n    <UseWPF>true</UseWPF>"}.get(plan.kind, "")
+        gui = _GUI_PROPS.get(plan.kind, "")
         tfm = _tfm(tools) + ("-windows" if gui else "")
         if gui:
-            gui += "\n    <EnableWindowsTargeting>true</EnableWindowsTargeting>"
+            gui += WINDOWS_TARGETING
         text = CSPROJ.format(output="WinExe" if gui else "Exe", tfm=tfm, gui=gui, ns=_namespace(plan),
                              asm=project_name(plan))
         return {f"{project_name(plan)}.csproj": text}
@@ -375,7 +476,8 @@ def materialize(plan: ProjectPlan, project_dir: Path | str, tools: Mapping[str, 
         p = d.joinpath(*rel.split("/"))
         p.parent.mkdir(parents=True, exist_ok=True)
         data = text.encode("utf-8")
-        if PurePosixPath(rel).suffix.lower() in BOM_EXT and not text.startswith("\ufeff"):
+        # .sln без метки Visual Studio читает в кодировке Windows: русские имена проектов превратились бы в мусор
+        if PurePosixPath(rel).suffix.lower() in BOM_EXT | {".sln"} and not text.startswith("\ufeff"):
             data = b"\xef\xbb\xbf" + data
         p.write_bytes(data)
     return d
@@ -612,7 +714,46 @@ def build(project_dir: Path | str, plan: ProjectPlan, tools: Mapping[str, Toolch
         return BuildResult(True, "", d / plan.entry)
     if lack := [k for k in missing(plan, tools) if k != "edge"]:
         return BuildResult(False, "Нет инструмента для сборки: " + ", ".join(TOOL_TITLES[k] for k in lack), None)
+    if plan.programs:
+        return _build_programs(d, plan, tools, timeout)
     return BUILDERS[plan.language](d, plan, tools, timeout)
+
+
+def _build_solution(d: Path, plan: ProjectPlan, tools, timeout) -> BuildResult:
+    """Все программы C# одной командой — тем же .sln, который откроет студент."""
+    code, log = _run([tools["dotnet"].path, "build", f"{project_name(plan)}.sln", "-c", "Debug", "-nologo", "-v", "q",
+                      "-clp:NoSummary;ErrorsOnly", "-nodeReuse:false", "-p:UseSharedCompilation=false"],
+                     d, DOTNET_ENV, timeout)
+    if code != 0:
+        return _failed(code, log, d)
+    found: dict[str, Path] = {}
+    for p in plan.programs:
+        asm = _asm(p.name)
+        hits = [h for ext in ((".exe", ".dll") if p.runs else (".dll",))
+                for h in sorted((d / p.name).glob(f"bin/Debug/*/{asm}{ext}"))]
+        if not hits:
+            return BuildResult(False, f"Сборка прошла, но {asm} не найден в {p.name}/bin/Debug", None)
+        found[p.name] = hits[0]
+    main = plan.main_program()
+    return BuildResult(True, trim_log(log, d), found.get(main.name) if main else None, found)
+
+
+def _build_programs(d: Path, plan: ProjectPlan, tools, timeout) -> BuildResult:
+    """Каждая программа собирается в своей папке; ошибки — с именем программы."""
+    if plan.language == "csharp":
+        return _build_solution(d, plan, tools, timeout)
+    found: dict[str, Path] = {}
+    logs = []
+    for p in plan.programs:
+        r = BUILDERS[plan.language](d / p.name, sub_plan(plan, p), tools, timeout)
+        if r.ok and r.artifact is not None:
+            found[p.name] = r.artifact
+        else:
+            logs.append(f"Программа «{p.name}» (пути — от папки {p.name}/):\n{r.log}")
+    if logs:
+        return BuildResult(False, "\n\n".join(logs)[:6000], None)
+    main = plan.main_program()
+    return BuildResult(True, "", found.get(main.name) if main else None, found)
 
 
 # ---------- запуск ----------
@@ -641,6 +782,20 @@ def _free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
+
+
+def run_spec_for(plan: ProjectPlan, result: BuildResult | None, project_dir: Path | str,
+                 tools: Mapping[str, Toolchain], program: str = "") -> RunSpec:
+    """Чем запускать программу плана: единственную или названную (не названа, либо названа библиотека — первую
+    запускаемую). Каждая из нескольких программ запускается из своей папки."""
+    d = Path(project_dir)
+    if not plan.programs:
+        return run_spec(plan, result.artifact if result else None, d, tools)
+    prog = plan.program(program) if program else None
+    if prog is None or not prog.runs:
+        prog = plan.main_program()
+    artifact = result.artifacts.get(prog.name) if result else None
+    return run_spec(sub_plan(plan, prog), artifact, d / prog.name, tools)
 
 
 def run_spec(plan: ProjectPlan, artifact: Path | str | None, project_dir: Path | str,
