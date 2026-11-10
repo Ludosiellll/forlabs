@@ -69,16 +69,20 @@ def _enabled() -> bool:
 
 
 def spawn_detached(cmd: list[str]) -> None:
-    """Установщик живёт дольше ForLabs: отдельный процесс вне задания (job) приложения."""
+    """Установщик живёт дольше ForLabs: отдельный процесс вне задания (job) приложения. Рабочая папка — не папка
+    программы (её задаёт ярлык ForLabs): Windows не даёт заменить папку, которая для процесса рабочая."""
+    import tempfile
+
+    cwd = tempfile.gettempdir()
     flags = 0
     if sys.platform == "win32":
         flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_BREAKAWAY_FROM_JOB
     try:
-        subprocess.Popen(cmd, close_fds=True, creationflags=flags)  # noqa: S603
+        subprocess.Popen(cmd, close_fds=True, creationflags=flags, cwd=cwd)  # noqa: S603
     except OSError:
         if not flags:
             raise
-        subprocess.Popen(cmd, close_fds=True,  # noqa: S603
+        subprocess.Popen(cmd, close_fds=True, cwd=cwd,  # noqa: S603
                          creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
 
 

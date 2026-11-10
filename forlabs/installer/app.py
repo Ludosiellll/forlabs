@@ -32,16 +32,49 @@ WAIT_STEP = 0.5  # секунд между проверками, закрылс�
 WAIT_LIMIT = 120.0  # секунд ждать, пока ForLabs закроется после «Обновить»
 
 
-def wait_for_forlabs_exit() -> bool:
-    """Обновление из приложения: ForLabs закрывается сам, установщик ждёт, пока он отпустит папку."""
+def _alive(pid: int) -> bool:
+    """Процесс ещё работает (завершившийся, но не прибранный родителем в Linux — уже нет)."""
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        import ctypes
+
+        k = ctypes.windll.kernel32
+        h = k.OpenProcess(0x00100000 | 0x1000, False, int(pid))  # SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return False
+        try:
+            return k.WaitForSingleObject(h, 0) == 0x102  # WAIT_TIMEOUT: ещё работает
+        finally:
+            k.CloseHandle(h)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    try:
+        return Path(f"/proc/{pid}/stat").read_text().split(")")[-1].split()[0] != "Z"
+    except OSError:
+        return True
+
+
+def wait_for_forlabs_exit(pid: int | None = None) -> bool:
+    """Обновление из приложения: ForLabs закрывается сам, установщик ждёт, пока он отпустит блокировку и пока сам
+    процесс (pid — из --wait-pid) завершится: до этого его файлы ещё заняты."""
     import time
 
     end = time.monotonic() + WAIT_LIMIT
-    while forlabs_running():
+    while forlabs_running() or (pid and _alive(pid)):
         if time.monotonic() > end:
             return False
         time.sleep(WAIT_STEP)
     return True
+
+
+def _wait_pid(argv: list[str]) -> int | None:
+    raw = _arg(argv, "--wait-pid")
+    return int(raw) if raw and raw.isdigit() else None
 
 
 WAIT_ERROR = ("ForLabs не закрылся — закрой его окно (и дождись конца работы над лабой), потом нажми «Повторить».")
@@ -68,9 +101,11 @@ class SetupApi:
     """Методы, которые вызывает страница установщика (pywebview.api.*). Каждый — короткий; установка — в потоке."""
 
     def __init__(self, payload: Path, shell, *, launcher: Callable[[Path], None] = launch,
-                 folder_picker: Callable[[str], str | None] | None = None, auto: bool = False):
+                 folder_picker: Callable[[str], str | None] | None = None, auto: bool = False,
+                 wait_pid: int | None = None):
         self._payload, self._shell = Path(payload), shell
         self._auto = auto  # обновление из приложения: без вопросов, после установки — сразу открыть
+        self._wait_pid = wait_pid  # процесс ForLabs, который запустил обновление
         self._launcher, self._picker = launcher, folder_picker
         self._lock = threading.Lock()
         self._cancel = threading.Event()
@@ -131,7 +166,7 @@ class SetupApi:
 
     def _work(self, target: Path, desktop: bool) -> None:
         try:
-            if self._auto and not wait_for_forlabs_exit():
+            if self._auto and not wait_for_forlabs_exit(self._wait_pid):
                 raise InstallError(WAIT_ERROR)
             self._result = install(self._payload, target, shell=self._shell, desktop=desktop,
                                    progress=self._on_progress, cancelled=self._cancel.is_set)
@@ -189,7 +224,7 @@ def silent(payload: Path, argv: list[str], *, shell=None) -> int:
     try:
         inst = installed(shell)
         target = Path(_arg(argv, "--target") or (inst.location if inst else default_target()))
-        if "--update" in argv and not wait_for_forlabs_exit():
+        if "--update" in argv and not wait_for_forlabs_exit(_wait_pid(argv)):
             raise InstallError(WAIT_ERROR)
         res = install(payload, target, shell=shell, desktop="--no-desktop" not in argv)
         out.write_text(f"ForLabs {__version__} установлен в {res.target} ({res.files} файлов)\n"
@@ -296,7 +331,7 @@ def run(payload: Path, bundle: Path, argv: list[str] | None = None) -> int:
         res = window.create_file_dialog(kind, directory=start_dir if os.path.isdir(start_dir) else "")
         return res[0] if res else None
 
-    api = SetupApi(payload, shell, folder_picker=pick, auto=update)
+    api = SetupApi(payload, shell, folder_picker=pick, auto=update, wait_pid=_wait_pid(argv))
     window = webview.create_window("Установка ForLabs", html=(WEB / "setup.html").read_text("utf-8"), js_api=api,
                                    width=760, height=480, resizable=False, frameless=True, easy_drag=False,
                                    background_color="#202020")

@@ -26,6 +26,7 @@ EXE_NAME = "ForLabs.exe"
 PUBLISHER = "ForLabs"
 UNINSTALL_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\ForLabs"
 CHUNK = 1 << 20
+SWAP_RETRY = 5.0  # секунд ждать файл, который ещё держит закрывающийся процесс (окно WebView2, антивирус)
 MARKER = ".forlabs-install"  # метка папки, которую создал установщик: только такую он заменяет и удаляет
 
 # (название в окне установщика, с чего начинаются пути файлов) — в этом порядке и ставятся
@@ -264,21 +265,85 @@ def _clean_leftovers(target: Path) -> None:
 
 
 def _swap(staging: Path, target: Path) -> None:
+    """Новая версия на место старой. Обычно — переименованием папки целиком. Если Windows папку не отдаёт (это
+    рабочая папка другого процесса: установщика, запущенного из ForLabs, или окна WebView2, которое закрывается
+    позже ForLabs), — по файлам: файлы внутри такой папки переносить можно."""
     old = _sibling(target, "old")
     _rmtree(old) if old.exists() else None
-    had_old = target.exists()
-    try:
-        if had_old:
+    if target.exists():
+        try:
             os.rename(target, old)
-    except PermissionError as e:
-        raise InstallError("ForLabs сейчас открыт — закрой его и нажми «Повторить».") from e
+        except PermissionError:
+            _swap_files(staging, target, old)
+            return
+        except OSError as e:
+            raise _os_error(e, target) from e
     try:
         os.rename(staging, target)
     except OSError as e:
-        if had_old:
+        if old.exists() and not target.exists():
             os.rename(old, target)  # вернуть старую версию на место
         raise _os_error(e, target) from e
     _rmtree(old)  # не удалось (антивирус) — уберётся при следующей установке
+
+
+def _move(src: Path, dst: Path) -> None:
+    """Перенос с повторами: файл может ещё держать процесс, который вот-вот закроется."""
+    end = time.monotonic() + SWAP_RETRY
+    while True:
+        try:
+            os.rename(src, dst)
+            return
+        except PermissionError:
+            if time.monotonic() >= end:
+                raise
+            time.sleep(0.2)
+
+
+def _undo(moved: list[str], src: Path, dst: Path) -> list[str]:
+    """Вернуть перенесённое назад; → то, что вернуть не вышло."""
+    lost = []
+    for name in reversed(moved):
+        try:
+            os.rename(src / name, dst / name)
+        except OSError:
+            lost.append(name)
+    return lost
+
+
+def _swap_files(staging: Path, target: Path, old: Path) -> None:
+    old.mkdir(parents=True, exist_ok=True)
+    moved: list[str] = []
+    for item in sorted(target.iterdir(), key=lambda x: x.name != MARKER):  # метка первой: папка old — «наша»
+        try:
+            _move(item, old / item.name)
+        except OSError as e:
+            lost = _undo(moved, old, target)
+            if not lost:
+                _rmtree(old)
+            if lost:
+                raise InstallError(f"Обновление прервалось, и часть файлов ForLabs осталась в {old}. Переустанови "
+                                   f"ForLabs с сайта.") from e
+            if isinstance(e, PermissionError):
+                raise InstallError(f"Файл {item.name} в папке ForLabs занят другой программой: ForLabs ещё "
+                                   "закрывается или этот файл открыт. Подожди несколько секунд и нажми "
+                                   "«Повторить».") from e
+            raise _os_error(e, target) from e
+        moved.append(item.name)
+    placed: list[str] = []
+    for item in sorted(staging.iterdir(), key=lambda x: x.name == MARKER):  # метка — последней: версия целиком
+        try:
+            os.rename(item, target / item.name)
+        except OSError as e:
+            lost = _undo(placed, target, staging) + _undo(moved, old, target)
+            if lost:
+                raise InstallError(f"Обновление прервалось, и часть файлов ForLabs осталась в {old}. Переустанови "
+                                   f"ForLabs с сайта.") from e
+            _rmtree(old)
+            raise _os_error(e, target) from e
+        placed.append(item.name)
+    _rmtree(staging)
+    _rmtree(old)  # не удалось (файл ещё занят) — уберётся при следующей установке
 
 
 def install(payload: Path, target: Path, *, shell: Shell, desktop: bool = True,

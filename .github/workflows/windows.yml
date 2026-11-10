@@ -233,19 +233,24 @@ jobs:
           # повторная установка поверх (обновление)
           $p = Start-Process build/ForLabsSetup.exe -ArgumentList "--silent --log `"$log`"" -Wait -PassThru
           if ($p.ExitCode -ne 0) { Fail "update" $log }
-          # обновление из приложения: ForLabs открыт, установщик ждёт, пока он закроется, и только потом ставит
-          $app = Start-Process "$target\ForLabs.exe" -ArgumentList "--browser" -PassThru
+          # обновление из приложения, как у студента: ForLabs запущен из своей папки (так его открывает ярлык),
+          # установщик стартует из ForLabs и наследует эту папку как рабочую, ждёт, пока ForLabs закроется, и ставит
+          $app = Start-Process "$target\ForLabs.exe" -ArgumentList "--browser" -WorkingDirectory $target -PassThru
           Start-Sleep -Seconds 10
           if ($app.HasExited) { Fail "update-from-app" "ForLabs --browser закрылся сам (код $($app.ExitCode))" }
           Remove-Item $log -ErrorAction SilentlyContinue
-          $setup = Start-Process build/ForLabsSetup.exe -ArgumentList "--silent --update --log `"$log`"" -PassThru
+          Copy-Item build/ForLabsSetup.exe "$env:RUNNER_TEMP\ForLabsSetup-update.exe"
+          $setup = Start-Process "$env:RUNNER_TEMP\ForLabsSetup-update.exe" -ArgumentList "--silent --update --wait-pid $($app.Id) --log `"$log`"" -WorkingDirectory $target -PassThru
           Start-Sleep -Seconds 6
           if ($setup.HasExited) { Fail "update-from-app" "установщик не дождался закрытия ForLabs (код $($setup.ExitCode))" }
           Stop-Process -Id $app.Id -Force
           if (-not $setup.WaitForExit(150000)) { Fail "update-from-app" "установщик не закончил за 150 с" }
           if ($setup.ExitCode -ne 0) { Fail "update-from-app" $log }
           Get-Content $log -Encoding utf8
-          Write-Output "Обновление из приложения: установщик дождался закрытия ForLabs и поставил новую версию"
+          if (Get-ChildItem (Split-Path $target) -Directory -Filter "ForLabs.new*") { Fail "update-from-app" "осталась папка ForLabs.new" }
+          $p = Start-Process "$target\ForLabs.exe" -ArgumentList "--selfcheck --offline --out `"$out`"" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Fail "selfcheck after update" $out }
+          Write-Output "Обновление из приложения: установщик из папки программы дождался закрытия ForLabs и поставил новую версию"
           # удаление, как из «Параметры → Приложения»
           $p = Start-Process "$target\ForLabs.exe" -ArgumentList "--uninstall --silent" -Wait -PassThru
           if ($p.ExitCode -ne 0) { Fail "uninstall" "код $($p.ExitCode)" }

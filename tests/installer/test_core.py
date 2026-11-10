@@ -80,22 +80,6 @@ def test_running_program_blocks_update_early(tmp_path, payload, shell, monkeypat
     assert (target / "ForLabs.exe").exists() and not list(tmp_path.glob("ForLabs.new*"))
 
 
-def test_locked_folder_during_swap_keeps_old_version(tmp_path, payload, shell, monkeypatch):
-    target = tmp_path / "ForLabs"
-    _install(payload, target, shell)
-    real_rename = os.rename
-
-    def locked(src, dst):
-        if Path(src) == target:
-            raise PermissionError(13, "used by another process", str(src))
-        return real_rename(src, dst)
-
-    monkeypatch.setattr(core.os, "rename", locked)
-    with pytest.raises(InstallError, match="ForLabs сейчас открыт"):
-        _install(payload, target, shell)
-    assert (target / "ForLabs.exe").exists() and not list(tmp_path.glob("ForLabs.new*"))
-
-
 def test_running_check_uses_instance_lock(tmp_path, monkeypatch):
     monkeypatch.setenv("FORLABS_HOME", str(tmp_path / "data"))
     assert core.forlabs_running() is False
