@@ -116,6 +116,7 @@ class Pipeline:
         self.app_paths: dict[str, str] = {}  # программы, которые студент указал сам (ключ → путь)
         self.app_hooks: tuple = (None, None)  # свернуть и вернуть окно ForLabs на время работы агента
         self.fix_outcome: dict[str, str] = {}  # лаба → чем кончилась просьба чата исправить программу
+        self.fix_reason: dict[str, str] = {}  # лаба → почему исправить не вышло (для ответа в чате)
         self._locks: dict[str, threading.Lock] = {}
         self.renamed: dict[str, str] = {}
         self.background: set[str] = set()  # фоновая работа после «Сдать» (память предмета): окно спросит при закрытии
@@ -805,6 +806,7 @@ class Pipeline:
             return st
         emit = lambda text, kind="info": self._emit(st, text, kind, step="check")  # noqa: E731
         outcome = ""  # чем кончилась просьба исправить: applied, rejected (не сложилось в план), broke (не собралось)
+        why = ""  # почему не вышло — словами для студента
         before, was_built = None, st.project is not None and st.project.built
         try:
             if plan is not None and fix:
@@ -817,9 +819,9 @@ class Pipeline:
                     problems = proj.validate(fixed)
                 if problems:
                     emit("Исправление не принято: " + "; ".join(problems[:3]), "warn")
-                    outcome = "rejected"
+                    outcome, why = "rejected", "; ".join(problems[:2])
                 elif fixed == plan:
-                    outcome = "rejected"  # модель ничего не поменяла
+                    outcome, why = "rejected", "модель не предложила изменений в файлах"
                 else:
                     before, plan, outcome = plan, fixed, "applied"
             if plan is None:
@@ -828,9 +830,20 @@ class Pipeline:
                 outcome = "applied" if fix else ""
                 if st.project is not None and st.project.name:  # план составлен заново: проект остаётся в своей папке
                     plan = plan.model_copy(update={"name": st.project.name})
-                problems = proj.validate(plan)
-                if problems and all(p.startswith("Снимок ") for p in problems):
-                    plan, problems = proj.drop_bad_shots(plan), []
+                def checked(candidate):
+                    found = proj.validate(candidate)
+                    if found and all(p.startswith("Снимок ") for p in found):
+                        return proj.drop_bad_shots(candidate), []
+                    return candidate, found
+
+                plan, problems = checked(plan)
+                if problems:  # модель узнаёт, что не так, и составляет план ещё раз
+                    emit("План проекта не прошёл проверку — составляю заново", "warn")
+                    plan = proj.plan_project(st, llm, self._memory_text(st), wish=fix,
+                                             rejected="; ".join(problems[:5]))
+                    if st.project is not None and st.project.name:
+                        plan = plan.model_copy(update={"name": st.project.name})
+                    plan, problems = checked(plan)
                 if problems:
                     raise PipelineError("план проекта не прошёл проверку: " + "; ".join(problems[:3]))
             st = proj.build_and_shoot(self, st, plan, llm, emit, retake=retake)
@@ -844,9 +857,12 @@ class Pipeline:
                  + (f", нужно от тебя: {len(left)}" if left else ""), "done" if st.project.built else "warn")
         except Exception as e:  # проект — помощь, а не условие: лаба собирается и без него
             logging.getLogger("forlabs").warning("Этап «Проект»: %s", e, exc_info=True)
-            emit(f"Программу собрать не получилось ({getattr(e, 'message_ru', None) or e}). Снимки сделай сам.", "warn")
-            outcome = "rejected" if fix else ""
+            reason = str(getattr(e, "message_ru", None) or e)
+            emit(f"Программу собрать не получилось ({reason}). Снимки сделай сам.", "warn")
+            proj.mark_unmade(st, reason)
+            outcome, why = ("rejected", reason) if fix else ("", "")
         self.fix_outcome[self.key(st)] = outcome
+        self.fix_reason[self.key(st)] = why
         return self._save(st)
 
     def _plan_app_shots(self, st: LabState, llm) -> LabState:
@@ -941,8 +957,8 @@ class Pipeline:
         elif outcome == "broke":
             lines.append("Исправление не собралось, поэтому я вернул прежнюю программу. Напиши точнее, что поменять.")
         elif fix and outcome != "applied":
-            lines.append("Исправить не получилось: правка не сложилась в рабочий проект. Напиши точнее, что "
-                         "поменять.")
+            why = self.fix_reason.get(self.key(st), "").strip().rstrip(".") or "правка не сложилась в рабочий проект"
+            lines.append(f"Исправить не получилось: {why}. Попробуй ещё раз или напиши точнее, что поменять.")
         elif outdated and built:
             lines.append("Программу пересобрал под новый код.")
         if st.project is not None and st.project.missing:  # чего нет, зачем оно и как поставить — со ссылкой

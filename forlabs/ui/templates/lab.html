@@ -21,7 +21,7 @@
     {% if st.project %}{% set pr = st.project %}
     <details class="fold program-box"{{ ' open' if pr.missing or pr.blocked or not pr.built }}>
       <summary>Программа · {% if pr.built %}<span class="ok">собрана</span>{% elif pr.missing %}<span class="bad">не собрана</span>{% else %}<span class="bad">не собралась</span>{% endif %}</summary>
-      <p class="small"><b>{{ pr.name }}</b> · {{ {'csharp': 'C#', 'cpp': 'C++', 'python': 'Python', 'java': 'Java', 'javascript': 'JavaScript', 'web': 'HTML/CSS', 'php': 'PHP', 'go': 'Go', 'mysql': 'MySQL'}.get(pr.language, pr.language) }}</p>
+      {% if pr.name %}<p class="small"><b>{{ pr.name }}</b> · {{ {'csharp': 'C#', 'cpp': 'C++', 'python': 'Python', 'java': 'Java', 'javascript': 'JavaScript', 'web': 'HTML/CSS', 'php': 'PHP', 'go': 'Go', 'mysql': 'MySQL'}.get(pr.language, pr.language) }}</p>{% endif %}
       {% if pr.missing %}<p class="small">Не хватает: {{ pr.missing|map('tool_title')|join(', ') }}. Установи и нажми «Повторить».</p>
         {% for key in pr.missing %}{% if key in ctx.tools.tools %}{% with tool=ctx.tools.tool_status(key) %}{% include "_tool_missing.html" %}{% endwith %}{% endif %}{% endfor %}
       {% endif %}

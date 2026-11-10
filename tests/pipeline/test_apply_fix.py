@@ -150,3 +150,11 @@ def test_data_file_from_the_root_goes_to_every_program_when_the_project_is_split
     assert {"CalculatorApp/числа.txt", "LibraryTestApp/числа.txt"} <= paths(fixed) and "числа.txt" not in paths(fixed)
     assert "ClassLibrary1/числа.txt" not in paths(fixed)  # библиотеку не запускают, данные ей не нужны
     assert fixed.listings[-1].file == "CalculatorApp/числа.txt"
+
+
+def test_one_program_named_in_the_answer_does_not_turn_a_plain_project_into_folders():
+    # модель «на всякий случай» описала единственную программу в programs: проект остаётся как был
+    one = [{"name": "Библиотека_калькулятора", "kind": "console", "entry": "Program.cs"}]
+    fixed = apply(programs=one, files=[{"path": "Program.cs", "content": APP + "// правка\n"}])
+    assert fixed.programs == [] and validate(fixed) == []
+    assert fixed.file("Program.cs").content.endswith("// правка\n")

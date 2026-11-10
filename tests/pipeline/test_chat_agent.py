@@ -202,7 +202,17 @@ def test_reply_does_not_claim_a_fix_that_was_not_applied(tmp_home, tmp_path):
     st = pipe.chat(st, "исправь программу")
     reply = st.chat[-1].text
     assert "Программу исправил" not in reply and "Исправить не получилось" in reply
+    assert "выводит за папку проекта" in reply  # настоящая причина, а не общие слова
     assert len(st.versions) == versions  # откатывать нечего
+
+
+def test_reply_names_the_reason_when_the_model_could_not_be_reached(tmp_home, tmp_path):
+    from forlabs.core.llm import LLMError
+
+    pipe, fake, st = make(tmp_home, tmp_path, [PLAN, FIX_IT, LLMError("network", "нет связи с моделью")],
+                          shooter=ScriptShooter(True, True))
+    st = pipe.chat(pipe.execute(st), "исправь программу")
+    assert "Исправить не получилось" in st.chat[-1].text and "связ" in st.chat[-1].text.lower()
 
 
 def test_fix_that_breaks_a_working_program_is_rolled_back(tmp_home, tmp_path):

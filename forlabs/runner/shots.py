@@ -75,7 +75,7 @@ class FakeShooter:
 
         out.parent.mkdir(parents=True, exist_ok=True)
         Image.new("RGB", (320, 200), (240, 240, 240)).save(out)
-        return ShotResult(True, image=out, seen=str(_get(shot, "expect", "") or ""))
+        return ShotResult(True, image=out)  # заглушка ничего не запускала: экрана нет, проверять результат не по чему
 
 
 # мышь и клавиатура одни на компьютер: снимки окон (этап «Проект») и агент в программах — по очереди, даже из

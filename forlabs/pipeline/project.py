@@ -187,6 +187,24 @@ go.mod, pom.xml, package.json, CMakeLists.txt) делает ForLabs — не п�
 Как ForLabs проходит сценарий:
 """ + SCENARIO_RULES
 
+REVIEW_SYSTEM = """Ты проверяешь, правильно ли работает программа лабораторной работы. ForLabs собрал её, запустил и
+прошёл сценарий каждого снимка. Ниже — задания, что сказано в отчёте рядом с рисунком, код программы и то, что
+программа на самом деле показала: экран консоли или текст окна. Для каждого рисунка реши, годится ли такой результат
+в отчёт.
+Не годится, если:
+- вместо данных пусто или нули: пустые названия, «: 0», 0,00 там, где данные заданы в коде или введены;
+- результат противоречит вводу, коду или тексту отчёта (в отчёте сказано одно, на экране другое);
+- на экране ошибка, исключение, трассировка, «NaN», «Infinity», «null», «undefined», необработанный шаблон («{0}»,
+  «System.String[]», «[object Object]»);
+- программа завершилась, не дойдя до результата, или показано не то задание;
+- русский текст превратился в «????» или в коды вида «\\u041D».
+Годится, если результат осмысленный и следует из кода и ввода. Мелочи оформления — лишний пробел, другой порядок
+строк, запятая или точка в дробном числе — не ошибка. Сам пересчитывай только простое; не уверен — считай результат
+правильным.
+Ответ — только JSON: {"shots": [{"section": 1, "block": 3, "ok": true}, {"section": 2, "block": 2, "ok": false,
+"problem": "что именно не так, одной фразой по-русски"}]} — по записи на каждый рисунок."""
+REVIEW_FILES_LIMIT = 24_000  # знаков кода в запросе на проверку результата
+
 REJECTED = "\n\nПрошлое исправление не принято: "
 REPAIR_SYSTEM = """Ты чинишь проект лабораторной работы по просьбе студента. Ниже — что нужно исправить, ошибки
 последней сборки (если она не прошла) и все файлы проекта. Найди причину и исправь её в файлах; меняй как можно
@@ -201,6 +219,13 @@ CMakeLists.txt) делает ForLabs — не пиши их; "remove" — пут
 Если из-за исправления меняется то, что видно на снимке, верни в shots исправленный сценарий этого снимка целиком.
 Как ForLabs проходит сценарий:
 """ + SCENARIO_RULES
+
+SHOTS_SYSTEM = """Ты дописываешь сценарии снимков к готовому проекту лабораторной работы. Программа уже написана (файлы
+ниже), но для перечисленных рисунков сценария нет. Составь его для каждого: ForLabs запустит программу в Windows
+студента, пройдёт сценарий и проверит, что на экране есть expect. Код не меняй. Ответ — только JSON:
+{"shots": [{"section": 2, "block": 4, "mode": "console", "program": "…", "input": "…", "expect": "…"}]} — по записи на
+каждый рисунок из списка, section и block — его номера из квадратных скобок.
+""" + SHOT_RULES
 
 MAX_SHOT_FIXES = 2  # кругов «снимок не вышел → модель чинит программу или сценарий → снимаю заново»
 SEEN_LIMIT = 2500  # экран консоли или окно программы в запросе на исправление
@@ -257,6 +282,28 @@ class FixOut(BaseModel):
 
 
 ShotFixOut = FixOut  # прежнее имя: ответ на исправление после снимка
+
+
+class ShotVerdict(BaseModel):
+    """Годится ли в отчёт то, что программа показала на снимке."""
+    section: int
+    block: int
+    ok: bool = True
+    problem: str = ""
+
+    @field_validator("problem", mode="before")
+    @classmethod
+    def _problem(cls, v):
+        return v if isinstance(v, str) else ""
+
+
+class ReviewOut(BaseModel):
+    shots: list[ShotVerdict] = Field(default_factory=list)
+
+    @field_validator("shots", mode="before")
+    @classmethod
+    def _shots(cls, v):
+        return [x for x in v if isinstance(x, dict)] if isinstance(v, list) else []
 
 
 @dataclasses.dataclass
@@ -346,7 +393,107 @@ def _tidy(plan: ProjectPlan) -> ProjectPlan:
     name = " ".join(NAME_BAD.sub(" ", plan.name).split()).strip(". ")[:60].strip(". ") or plan.name
     files = [f for f in plan.files if plan_rules._build_file_problem(f) is None]
     plan = plan.model_copy(update={"name": name, "files": files})
-    return _assign_programs(plan_rules.split_programs(plan))
+    return _assign_programs(_place_loose(plan_rules.split_programs(plan)))
+
+
+def _place_loose(plan: ProjectPlan) -> ProjectPlan:
+    """Программ несколько, а файл лежит мимо их папок. Данные нужны каждой программе, которую запускают; исходник
+    C# идёт в программу с именем его namespace. Листинги и открываемые файлы — за ними. Остальное покажет проверка."""
+    if not plan.programs:
+        return plan
+    folders = {p.name.lower(): p.name for p in plan.programs}
+    runs = [p.name for p in plan.programs if p.runs]
+    have = {f.path.lower() for f in plan.files}
+    files: list[ProjectFile] = []
+    moved: dict[str, str] = {}
+    for f in plan.files:
+        top, _, rest = f.path.partition("/")
+        if rest and top.lower() in folders:
+            files.append(f)
+            continue
+        name, ext = Path(f.path).name, Path(f.path).suffix.lower()
+        m = re.search(r"^\s*namespace\s+([\w.]+)", f.content, re.M) if ext == ".cs" else None
+        home = folders.get(m[1].split(".")[0].lower()) if m else None
+        if ext in DATA_EXT and runs:
+            files += [ProjectFile(path=f"{r}/{name}", content=f.content) for r in runs
+                      if f"{r}/{name}".lower() not in have]
+            moved[f.path.lower()] = f"{runs[0]}/{name}"
+        elif home and f"{home}/{name}".lower() not in have:
+            files.append(ProjectFile(path=f"{home}/{name}", content=f.content))
+            moved[f.path.lower()] = f"{home}/{name}"
+        else:
+            files.append(f)
+    if not moved:
+        return plan
+    data = plan.model_dump() | {"files": [f.model_dump() for f in files]}
+    for ref in data["listings"]:
+        ref["file"] = moved.get(ref["file"].lower(), ref["file"])
+    for shot in data["shots"]:
+        shot["open"] = [moved.get(x.lower(), x) for x in shot["open"]]
+    try:
+        return ProjectPlan.model_validate(data)
+    except ValueError:
+        return plan
+
+
+def _is_scheme(b) -> bool:
+    return bool(b.image_path) and Path(b.image_path).name.startswith("scheme_")
+
+
+def match_shots(plan: ProjectPlan, st: LabState) -> ProjectPlan:
+    """Модель ошиблась номером блока у снимка: сценарий отдаётся рисунку того же задания, у которого сценария нет
+    (по порядку). Так рисунок не остаётся без съёмки из-за сдвига на единицу."""
+    figs = sorted((n, bi) for n, bi, b in _blocks(st) if isinstance(b, Figure) and not _is_scheme(b))
+    have = {(x.section, x.block) for x in plan.shots}
+    fixed: dict[int, int] = {}  # место снимка в списке → верный номер блока
+    for n in sorted({k[0] for k in figs}):
+        free = [k for k in figs if k[0] == n and k not in have]
+        stray = sorted((i for i, x in enumerate(plan.shots) if x.section == n and (x.section, x.block) not in figs),
+                       key=lambda i: plan.shots[i].block)
+        fixed.update({i: key[1] for key, i in zip(free, stray)})
+    if not fixed:
+        return plan
+    shots = [x.model_copy(update={"block": fixed[i]}) if i in fixed else x for i, x in enumerate(plan.shots)]
+    return plan.model_copy(update={"shots": shots})
+
+
+def shot_gaps(plan: ProjectPlan, st: LabState) -> list[tuple[int, int, Figure]]:
+    """Рисунки-скриншоты без снимка, для которых в плане нет сценария."""
+    have = {(x.section, x.block) for x in plan.shots}
+    return [(n, bi, b) for n, bi, b in _blocks(st)
+            if isinstance(b, Figure) and not b.image_path and (n, bi) not in have]
+
+
+NO_SCENARIO = ("Сам не снял: для этого рисунка не составлен сценарий съёмки. Напиши в «Правках»: «сними рисунки "
+               "сам» — ForLabs составит сценарий и попробует ещё раз.")
+
+
+def complete_shots(plan: ProjectPlan, st: LabState, gaps: list, llm) -> ProjectPlan:
+    """Для части рисунков модель не дала сценарий: просим только его, по готовым файлам проекта."""
+    wanted = {(n, bi) for n, bi, _ in gaps}
+    figures = "\n".join(f"[{n}.{bi}] {b.topic}. Что в кадре: {b.slot or '—'}" for n, bi, b in gaps)
+    refs = "; ".join(f"[{r.section}.{r.block}] из {r.file}" for r in plan.listings) or "нет"
+    user = (f"Язык: {plan.language}, вид: {plan.kind}. {programs_text(plan)}\n\nРисунки без сценария:\n{figures}\n\n"
+            f"Листинги отчёта: {refs}.\n\nФайлы проекта:\n{_files_text(plan.files)}")
+    out = llm.json([{"role": "system", "content": SHOTS_SYSTEM}, {"role": "user", "content": user}], FixOut,
+                   max_tokens=3000)
+    added = [x for x in out.shots if (x.section, x.block) in wanted]
+    if not added:
+        return plan
+    new = plan.model_copy(update={"shots": [*plan.shots, *added]})
+    return drop_bad_shots(_quiet_console(_trusted_expects(_assign_programs(new), st)))
+
+
+def mark_unmade(st: LabState, reason: str) -> None:
+    """Программу собрать не получилось: причина остаётся у каждого рисунка и у проекта, а не только в журнале."""
+    why = f"программу собрать не получилось ({reason.strip().rstrip('.')[:300]})"
+    for _, _, b in _blocks(st):
+        if isinstance(b, Figure) and not b.image_path and not b.auto_note and b.app_task is None:
+            b.auto_note = f"Сам не снял: {why}."
+    if st.project is None:
+        st.project = ProjectInfo(name="", language="", kind="")
+    if not st.project.built:
+        st.project.note = why[:1].upper() + why[1:] + ". Снимки сделай сам или напиши в «Правках»: «попробуй ещё раз»."
 
 
 def _assign_programs(plan: ProjectPlan) -> ProjectPlan:
@@ -456,10 +603,12 @@ def _quiet_console(plan: ProjectPlan) -> ProjectPlan:
     return plan.model_copy(update={"shots": shots})
 
 
-def plan_project(st: LabState, llm, memory: str = "", wish: str = "") -> ProjectPlan:
+def plan_project(st: LabState, llm, memory: str = "", wish: str = "", rejected: str = "") -> ProjectPlan:
     user = lab_text(st) + (f"\n\nПамять предмета и требования:\n{memory[:6000]}" if memory.strip() else "")
     if wish.strip():  # просьба из чата правок: что в прежнем проекте было не так
         user += f"\n\nСтудент просит о программе: {wish.strip()}"
+    if rejected.strip():  # прошлый план не прошёл проверку: модель узнаёт почему
+        user += f"\n\nПрошлый план не принят: {rejected.strip()}. Составь план заново без этих ошибок."
     try:
         plan = llm.json([{"role": "system", "content": PROJECT_SYSTEM}, {"role": "user", "content": user}],
                         ProjectPlan, max_tokens=PLAN_MAX_TOKENS)
@@ -535,7 +684,7 @@ def _apply_fix(plan: ProjectPlan, out: FixOut, scenarios: bool) -> ProjectPlan:
         same = same or [n for n in cands if _alike(gone.content, by_path[n].content)]
         if len(same) == 1:
             where[path.lower()] = same[0]
-    programs = out.programs or plan.programs
+    programs = plan.programs if (not plan.programs and len(out.programs) == 1) else (out.programs or plan.programs)
     folders = {p.name.lower(): p.name for p in programs}
 
     def outside(path: str) -> bool:
@@ -588,7 +737,8 @@ def _apply_fix(plan: ProjectPlan, out: FixOut, scenarios: bool) -> ProjectPlan:
     data = plan.model_dump() | {"files": [f.model_dump() for f in by_path.values()],
                                 "listings": [r.model_dump() for r in listings],
                                 "shots": [x.model_dump() for x in shots]}
-    if out.programs:
+    alone = not plan.programs and len(out.programs) == 1  # одна программа — это обычный проект, папки не нужны
+    if out.programs and not alone:
         data["programs"] = [x.model_dump() for x in out.programs]
     if out.entry and not data.get("programs"):
         data["entry"] = out.entry
@@ -617,6 +767,33 @@ def repair_project(plan: ProjectPlan, wish: str, log: str, llm, st: LabState | N
                    max_tokens=PLAN_MAX_TOKENS)
     fixed = _apply_fix(plan, out, scenarios=True)
     return _quiet_console(_trusted_expects(_tidy(fixed), st)) if st is not None else fixed
+
+
+def review_results(plan: ProjectPlan, st: LabState, shown: list, llm) -> dict[tuple[int, int], str]:
+    """Что программа на самом деле показала на снятых рисунках — годится ли это в отчёт. shown — записи
+    (раздел, блок, рисунок, сценарий, текст экрана). → {(раздел, блок): что не так} только для неверных."""
+    sections = {sec.n: sec for sec in st.report.sections} if st.report else {}
+
+    def near(n: int) -> str:
+        sec = sections.get(n)
+        parts = [getattr(b, "text", "") or " ".join(getattr(b, "items", None) or []) for b in (sec.blocks if sec else [])]
+        return " ".join(x for x in parts if x)[:1500] or "—"
+
+    def one(n: int, bi: int, b, shot, screen: str) -> str:
+        how = shot.model_dump_json(exclude={"section", "block", "reason", "app", "goal", "open"}, exclude_defaults=True)
+        return (f"[{n}.{bi}] {b.topic}. Что должно быть в кадре: {b.slot or '—'}\nСценарий: {how}\n"
+                f"В отчёте рядом с рисунком сказано: {near(n)}\nНа экране было:\n<<<\n{screen.strip()[-SEEN_LIMIT:]}\n>>>")
+
+    spec = st.spec
+    tasks = "\n".join(f"{t.n}. {t.text}" for t in spec.tasks) if spec else ""
+    files = _files_text(plan.files)[:REVIEW_FILES_LIMIT]
+    user = (f"Тема: {spec.topic if spec else ''}\nЗадания:\n{tasks}\n\nРисунки:\n\n"
+            + "\n\n".join(one(*x) for x in shown) + f"\n\nФайлы проекта:\n{files}")
+    out = llm.json([{"role": "system", "content": REVIEW_SYSTEM}, {"role": "user", "content": user}], ReviewOut,
+                   max_tokens=1500)
+    known = {(n, bi) for n, bi, *_ in shown}
+    return {(v.section, v.block): (" ".join(v.problem.split()) or "результат на экране неверный")
+            for v in out.shots if not v.ok and (v.section, v.block) in known}
 
 
 def first_error(log: str, limit: int = 300) -> str:
@@ -821,7 +998,13 @@ def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None, 
     pdir.mkdir(parents=True, exist_ok=True)
     # план мог быть составлен до того, как ForLabs научился нескольким программам: папки со своей точкой входа
     # становятся программами — иначе такая лаба не соберётся никогда
-    plan = _with_materials(_tidy(plan), st)
+    plan = match_shots(_with_materials(_tidy(plan), st), st)
+    if llm is not None and (gaps := shot_gaps(plan, st)):
+        emit("Составляю сценарии для рисунков, у которых их нет")
+        try:
+            plan = complete_shots(plan, st, gaps, llm)
+        except Exception as e:  # noqa: BLE001 — нет связи, кривой ответ: рисунки останутся студенту с причиной
+            emit(f"Сценарии составить не получилось ({getattr(e, 'message_ru', None) or e})", "warn")
     info = ProjectInfo(name=plan.name, language=plan.language, kind=plan.kind)
     tools = languages.detect()
     info.missing = languages.missing(plan, tools)
@@ -880,6 +1063,7 @@ def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None, 
         return folder
 
     mine: set[tuple[int, int]] = set()  # рисунки, снятые в этом запуске (после правки программы снимаются заново)
+    shown: list = []  # снятое в этом круге: (раздел, блок, рисунок, сценарий, что было на экране)
     kept: dict[tuple[int, int], str] = {}  # их прежние снимки: вернутся, если пересъёмка не выйдет
 
     def shoot_all(hand_in: Path) -> list[ShotFailure]:
@@ -908,8 +1092,12 @@ def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None, 
                     b.auto_note = appshots.note_for(b, agent_apps.installed(getattr(pipe, "app_paths", {}))
                                                     if sys.platform == "win32" else {})
                     continue
-                if shot is None or shot.mode == "manual":
-                    b.auto_note = f"Этот снимок делаешь ты: {shot.reason}." if shot and shot.reason else None
+                if shot is None:  # сценария нет: не молчим — причина видна студенту и чату
+                    b.auto_note = NO_SCENARIO
+                    continue
+                if shot.mode == "manual":
+                    why = shot.reason.strip().rstrip(".")
+                    b.auto_note = f"Этот снимок делаешь ты: {why}." if why else "Этот снимок делаешь ты."
                     continue
                 if info.missing:
                     b.need_tool = info.missing[0]
@@ -955,6 +1143,9 @@ def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None, 
                 if res.ok:
                     b.image_path, b.auto_note = rel, None
                     mine.add((n, bi))
+                    screen = (res.seen or getattr(res, "ui", "") or "").strip()
+                    if screen:
+                        shown.append((n, bi, b, shots[(n, bi)], screen))
                     old = kept.pop((n, bi), None)
                     if old and old != rel and not in_versions(old):  # снимок прежней программы больше не нужен
                         (lab / old).unlink(missing_ok=True)
@@ -975,6 +1166,31 @@ def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None, 
         """Снимок ещё нужен: на него ссылается сохранённая версия отчёта (к ней можно откатиться)."""
         return any(isinstance(b, Figure) and b.image_path == rel
                    for v in st.versions for sec in v.report.sections for b in sec.blocks)
+
+    def judge() -> list[ShotFailure]:
+        """Снимок получился — но что на нём? Неверный результат (нули вместо данных, ошибка на экране) в отчёт не
+        идёт: рисунок снимается с отчёта с причиной, а дальше программу чинит модель."""
+        if llm is None or not shown:
+            return []
+        emit("Проверяю, что программа показала на снимках")
+        try:
+            wrong = review_results(plan, st, shown, llm)
+        except Exception as e:  # noqa: BLE001 — нет связи, кривой ответ: снимки остаются, как без проверки
+            emit(f"Результат на снимках проверить не получилось ({getattr(e, 'message_ru', None) or e})", "warn")
+            return []
+        out = []
+        for n, bi, b, shot, screen in shown:
+            problem = wrong.get((n, bi))
+            if not problem:
+                continue
+            rel, b.image_path = b.image_path, None
+            b.auto_note = f"Сам не снял: программа выводит неверный результат — {problem.rstrip('.')}."
+            if rel and not in_versions(rel):
+                (lab / rel).unlink(missing_ok=True)
+            mine.discard((n, bi))
+            out.append(ShotFailure(n, bi, b.topic, b.slot or "", shot,
+                                   f"программа выводит неверный результат: {problem}", screen))
+        return out
 
     def restore_kept() -> None:
         for n, bi, b in _blocks(st):
@@ -998,10 +1214,12 @@ def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None, 
             info.build_log = result.log.split(REJECTED)[0].strip()[:BUILD_LOG_LIMIT]
         if info.blocked:
             info.note = f"Сам не собирал и не запускал: {info.blocked[0]}"
+        shown.clear()
         try:
             failures = shoot_all(settle())
         finally:
             restore_kept()
+        failures += judge()
         if not failures or llm is None or info.shot_fixes >= MAX_SHOT_FIXES:
             break
         info.shot_fixes += 1
