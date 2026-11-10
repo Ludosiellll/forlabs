@@ -577,7 +577,11 @@ def trim_log(text: str, project_dir: Path, drop: set[str] = frozenset(), max_lin
     lines: list[str] = []
     seen: set[str] = set()
     for line in text.split("\n"):
-        line = re.sub(r"\s*\[[^\]\n]*\.csproj\]\s*$", "", line.rstrip())
+        line = line.rstrip()
+        if m := re.search(r"\s*\[([^\]\n]*)\.csproj\]\s*$", line):
+            # у ошибки без файла (нет Main и т.п.) остаётся имя проекта: иначе не понять, о какой программе речь
+            named = LOG_PATH.match(line) or re.match(r"\s*[^\s:()]+\.\w+[(:]", line)
+            line = line[:m.start()] + ("" if named else f" [проект {re.split(r'[\\/]', m[1])[-1]}]")
         # путь файла в начале сообщения — как в проекте, с «/»: по нему модель и чат находят файл
         line = LOG_PATH.sub(lambda m: m[1] + m[2].replace("\\", "/"), line)
         if NOISE.match(line) or line.strip() in drop:

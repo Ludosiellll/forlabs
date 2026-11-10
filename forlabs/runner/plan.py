@@ -20,8 +20,8 @@ NOT_PROGRAM_DIRS = {"bin", "obj", "out", "__pycache__", ".vs"}  # папки с�
 ENTRY_POINT = {
     "csharp": r"\bstatic\s+(?:async\s+)?(?:void|int|(?:System\.Threading\.Tasks\.)?Task(?:\s*<\s*int\s*>)?)\s+Main\s*\(",
     "cpp": r"^\s*(?:int|void)\s+(?:w?main|_tmain)\s*\(", "go": r"^\s*func\s+main\s*\(\s*\)",
-    "java": r"\bpublic\s+static\s+void\s+main\s*\(",
-}
+}  # Java здесь нет: пакеты со своими main собираются вместе и видят друг друга — это обычный единый проект
+PROGRAM_NAME = re.compile(r"[^\W_][\w.\-]*")  # имя программы — и папка, и имя проекта в .csproj и .sln
 WINDOW_CODE = {"csharp": r"System\.Windows\.Forms|Application\.Run\s*\(|:\s*Form\b",
                "java": r"javax\.swing|java\.awt|javafx\."}
 ShotMode = Literal["window", "console", "browser", "manual", "app"]  # app — агент в программе студента
@@ -335,8 +335,9 @@ def _program_problems(plan: ProjectPlan) -> list[str]:
     for p in plan.programs:
         title = f"Программа «{p.name}»"
         why = _path_problem(p.name) if p.name else "пустое имя"
-        if why or "/" in p.name or " " in p.name or p.name.lower() in NOT_PROGRAM_DIRS:
-            out.append(f"{title}: имя программы — это имя её папки: одно слово без пробелов и слэшей, не bin, obj, out"
+        if why or not PROGRAM_NAME.fullmatch(p.name) or p.name.lower() in NOT_PROGRAM_DIRS:
+            out.append(f"{title}: имя программы — это имя её папки: одно слово из букв, цифр, «_», «-» и «.», "
+                       "не bin, obj, out"
                        + (f" ({why})" if why else ""))
             continue
         if p.name.lower() in seen:
@@ -417,6 +418,8 @@ def split_programs(plan: ProjectPlan) -> ProjectPlan:
     libs = [t for t in tops if not entries[t]]
     if libs and lang != "csharp":
         return plan  # общий код без точки входа в других языках к программам не подключить
+    if any(not any(PurePosixPath(f.path).suffix.lower() in code for f in tops[t]) for t in libs):
+        return plan  # папка без кода (одни данные) — не библиотека: чья она, по файлам не понять
     programs = []
     for t, fs in tops.items():
         if not entries[t]:
@@ -436,10 +439,17 @@ def split_programs(plan: ProjectPlan) -> ProjectPlan:
     for f in loose:
         files += [ProjectFile(path=f"{p.name}/{f.path}", content=f.content) for p in programs
                   if p.runs and f"{p.name}/{f.path}".lower() not in have]
+    # данные из корня теперь лежат у каждой программы: листинги и открываемые файлы — на копию у главной
+    home = next(p.name for p in programs if p.runs)
+    gone = {f.path.lower(): f"{home}/{f.path}" for f in loose}
     data = plan.model_dump() | {"programs": [p.model_dump() for p in programs],
                                 "files": [f.model_dump() for f in files]}
+    for ref in data["listings"]:
+        ref["file"] = gone.get(ref["file"].lower(), ref["file"])
+    for shot in data["shots"]:
+        shot["open"] = [gone.get(x.lower(), x) for x in shot["open"]]
     out = ProjectPlan.model_validate(data)
-    return plan if _program_problems(out) else out
+    return out if set(validate(out)) <= set(validate(plan)) else plan  # деление не должно добавить замечаний
 
 
 def validate(plan: ProjectPlan) -> list[str]:

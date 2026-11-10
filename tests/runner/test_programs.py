@@ -332,3 +332,51 @@ def test_build_log_names_files_the_way_the_project_does(tmp_path):
     kept = L.trim_log("a\\b.cs(1,1): error CS1010: Newline in constant '\\n'", tmp_path)
     assert kept.startswith("a/b.cs(1,1)") and "'\\n'" in kept  # текст сообщения не трогаем
     assert L.trim_log("main.py:3: SyntaxError", tmp_path) == "main.py:3: SyntaxError"
+
+
+# ---------- по замечаниям проверки ----------
+
+def test_java_packages_with_their_own_main_stay_one_project():
+    # пакеты Java со своими main — обычный единый проект: классы одного пакета видят другой
+    files = {"task1/Main.java": "package task1;\npublic class Main {\n  public static void main(String[] a) {}\n}\n",
+             "task1/Matrix.java": "package task1;\npublic class Matrix {}\n",
+             "task2/Main.java": ("package task2;\nimport task1.Matrix;\npublic class Main {\n"
+                                 "  public static void main(String[] a) { new Matrix(); }\n}\n")}
+    assert split_programs(plan(programs=[], language="java", files=files)).programs == []
+
+
+CPP_MAIN = "#include <iostream>\nint main() { std::cout << 1; return 0; }\n"
+
+
+def test_split_moves_listings_and_opened_files_together_with_root_data():
+    raw = {"language": "cpp", "kind": "console", "name": "Два задания", "entry": "first/main.cpp",
+           "files": [{"path": "first/main.cpp", "content": CPP_MAIN}, {"path": "second/main.cpp", "content": CPP_MAIN},
+                     {"path": "data.txt", "content": "1 2 3\n"}],
+           "listings": [{"section": 1, "block": 2, "file": "first/main.cpp"}, {"section": 1, "block": 4, "file": "data.txt"}],
+           "shots": [{"section": 1, "block": 5, "mode": "app", "app": "notepad", "goal": "открыть файл данных",
+                      "open": ["data.txt"]}]}
+    out = split_programs(ProjectPlan.model_validate(raw))
+    assert [p.name for p in out.programs] == ["first", "second"] and validate(out) == []
+    assert out.listings[1].file == "first/data.txt" and out.shots[0].open == ["first/data.txt"]
+    assert {f.path for f in out.files} == {"first/main.cpp", "second/main.cpp", "first/data.txt", "second/data.txt"}
+
+
+def test_folder_with_only_data_is_not_turned_into_a_library():
+    files = {"App1/Program.cs": APP, "App2/Program.cs": TEST.replace("LibraryTestApp", "App2"),
+             "data/список.txt": "1\n"}
+    assert split_programs(plan(programs=[], files=files)).programs == []
+
+
+def test_program_name_is_a_plain_word():
+    for bad in ("A&B", "App<1>", "My App", "a/b", "bin"):
+        text = problems(programs=[PROGRAMS[0], PROGRAMS[1] | {"name": bad, "entry": f"{bad}/Program.cs"}, PROGRAMS[2]],
+                        files=FILES | {f"{bad}/Program.cs": APP})
+        assert "имя программы" in text, bad
+
+
+def test_error_without_a_file_says_which_program(tmp_path):
+    log = (f"CSC : error CS5001: Program does not contain a static 'Main' method suitable for an entry point "
+           f"[{tmp_path}\\LibraryTestApp\\LibraryTestApp.csproj]")
+    assert L.trim_log(log, tmp_path).endswith("entry point [проект LibraryTestApp]")
+    with_file = f"{tmp_path}/App/Program.cs(3,1): error CS1002: ; expected [{tmp_path}/App/App.csproj]"
+    assert L.trim_log(with_file, tmp_path) == "App/Program.cs(3,1): error CS1002: ; expected"

@@ -93,3 +93,60 @@ def test_plain_fix_still_works():
     fixed = apply(files=[{"path": "Calculator.cs", "content": LIB + "// правка\n"}])
     assert fixed.file("Calculator.cs").content.endswith("// правка\n") and fixed.programs == []
     assert [s.input for s in fixed.shots] == ["12\n5\n", "2\n"]
+
+
+# ---------- по замечаниям проверки ----------
+
+SPLIT = ProjectPlan.model_validate({
+    "language": "csharp", "kind": "console", "name": "Библиотека калькулятора", "entry": "CalculatorApp/Program.cs",
+    "programs": PROGRAMS[:2] + [PROGRAMS[2] | {"entry": "LibraryTestApp/Program.cs"}],
+    "files": [{"path": "ClassLibrary1/Calculator.cs", "content": LIB}, {"path": "CalculatorApp/Program.cs", "content": APP},
+              {"path": "LibraryTestApp/Program.cs", "content": TEST}],
+    "listings": [{"section": 1, "block": 5, "file": "CalculatorApp/Program.cs"},
+                 {"section": 2, "block": 4, "file": "LibraryTestApp/Program.cs"}],
+    "shots": [{"section": 1, "block": 6, "mode": "console", "expect": "Сумма:", "program": "CalculatorApp"}]})
+
+
+def test_empty_fields_of_the_answer_are_just_empty():
+    for junk in (None, 5, "нет", {}):
+        out = proj.FixOut.model_validate({"files": [{"path": "Calculator.cs", "content": LIB}], "move": junk,
+                                          "remove": junk, "programs": junk, "shots": junk, "listings": junk})
+        assert (out.move, out.remove, out.programs, out.shots, out.listings) == ([], [], [], [], [])
+    assert proj.FixOut.model_validate({"move": [{"from": "a.cs"}, "мусор", {"from": "a.cs", "to": "b/a.cs"}]}).move[0].to == "b/a.cs"
+
+
+def test_listing_of_a_removed_file_does_not_jump_to_a_namesake_in_another_program():
+    out = proj.FixOut.model_validate({"remove": ["LibraryTestApp/Program.cs"],
+                                      "files": [{"path": "CalculatorApp/Program.cs", "content": APP + "// правка\n"}]})
+    fixed = proj._apply_fix(SPLIT, out, scenarios=False)
+    assert [(r.section, r.block, r.file) for r in fixed.listings] == [(1, 5, "CalculatorApp/Program.cs")]
+
+
+def test_listing_that_names_an_unknown_file_keeps_the_old_reference():
+    out = proj.FixOut.model_validate({"listings": [{"section": 2, "block": 4, "file": "LibraryTestApp/Progam.cs",
+                                                    "code": "совсем другой код"}]})
+    fixed = proj._apply_fix(SPLIT, out, scenarios=False)
+    assert [(r.file, r.code) for r in fixed.listings if r.block == 4] == [("LibraryTestApp/Program.cs", "")]
+
+
+def test_explicit_move_decides_where_the_listing_goes():
+    # Program.cs переезжает в CalculatorApp, а в ответе есть ещё один новый Program.cs — для другой программы
+    answer = {"programs": PROGRAMS[:2] + [PROGRAMS[2] | {"entry": "LibraryTestApp/Program.cs"}],
+              "move": [MOVES[0], MOVES[1]], "remove": ["TestProgram.cs"],
+              "files": [{"path": "LibraryTestApp/Program.cs", "content": TEST}]}
+    fixed = apply(**answer)
+    assert validate(fixed) == []
+    assert {(r.section, r.block): r.file for r in fixed.listings}[(1, 5)] == "CalculatorApp/Program.cs"
+    assert {(r.section, r.block): r.file for r in fixed.listings}[(2, 4)] == "LibraryTestApp/Program.cs"  # тот же текст
+
+
+def test_data_file_from_the_root_goes_to_every_program_when_the_project_is_split():
+    old = ProjectPlan.model_validate(OLD.model_dump() | {
+        "files": [*(f.model_dump() for f in OLD.files), {"path": "числа.txt", "content": "1 2 3\n"}],
+        "listings": [*(r.model_dump() for r in OLD.listings), {"section": 2, "block": 6, "file": "числа.txt"}]})
+    fixed = proj._apply_fix(old, proj.FixOut.model_validate({"programs": PROGRAMS, "move": MOVES, "shots": WHO}),
+                            scenarios=False)
+    assert validate(fixed) == []
+    assert {"CalculatorApp/числа.txt", "LibraryTestApp/числа.txt"} <= paths(fixed) and "числа.txt" not in paths(fixed)
+    assert "ClassLibrary1/числа.txt" not in paths(fixed)  # библиотеку не запускают, данные ей не нужны
+    assert fixed.listings[-1].file == "CalculatorApp/числа.txt"

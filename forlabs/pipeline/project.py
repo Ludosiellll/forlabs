@@ -248,7 +248,7 @@ class FixOut(BaseModel):
     @field_validator("move", mode="before")
     @classmethod
     def _moves(cls, v):
-        return [x for x in v if isinstance(x, dict) and x.get("from") and x.get("to")]
+        return [x for x in v if isinstance(x, dict) and x.get("from") and x.get("to")] if isinstance(v, list) else []
 
     @field_validator("entry", mode="before")
     @classmethod
@@ -486,11 +486,18 @@ def fix_project(plan: ProjectPlan, log: str, llm) -> ProjectPlan:
 AUTO_MODES = ("window", "console", "browser")  # снимки, которые ForLabs проходит по сценарию сам
 
 
+def _alike(a: str, b: str) -> bool:
+    """Один и тот же файл до и после правки (а не тёзка из другой программы)."""
+    a, b = _squash(a)[:6000], _squash(b)[:6000]
+    return bool(a) and bool(b) and difflib.SequenceMatcher(None, a, b, autojunk=False).ratio() >= 0.6
+
+
 def _apply_fix(plan: ProjectPlan, out: FixOut, scenarios: bool) -> ProjectPlan:
     """Ответ модели на исправление — в план: изменённые, перенесённые и убранные файлы, листинги, деление на
     программы и то, какую программу запускает снимок. scenarios — можно менять и сами сценарии снимков (исправление
     после снимка). Модель экономит слова, поэтому перенос понимается и без повторной отправки текста файла."""
     by_path = {f.path: f for f in plan.files}
+    before = {f.path.lower(): f.content for f in plan.files}
     where: dict[str, str] = {}  # прежний путь (в нижнем регистре) → новый: по нему переезжают листинги
 
     def find(path: str) -> str | None:
@@ -514,13 +521,20 @@ def _apply_fix(plan: ProjectPlan, out: FixOut, scenarios: bool) -> ProjectPlan:
             if old is not None and old != f.path:
                 del by_path[old]
             by_path[f.path] = f
-            fresh.setdefault(Path(f.path).name.lower(), []).append(f.path)
+            if f.path.lower() not in before:
+                fresh.setdefault(Path(f.path).name.lower(), []).append(f.path)
     new_paths = {f.path.lower() for f in out.files} | {v.lower() for v in where.values()}
     for path in [x for x in by_path if x.lower() in {plan_rules.norm_path(r).lower() for r in out.remove}
                  and x.lower() not in new_paths]:
-        del by_path[path]
-        if len(fresh.get(Path(path).name.lower(), [])) == 1:  # убран и прислан заново в другом месте — тоже перенос
-            where[path.lower()] = fresh[Path(path).name.lower()][0]
+        gone = by_path.pop(path)
+        # убран и прислан заново в другом месте (и, может быть, под другим именем) — тоже перенос, если это тот же
+        # файл, а не тёзка из другой программы: сначала ищем точную копию, затем единственный похожий
+        taken = set(where.values())
+        cands = [n for names in fresh.values() for n in names if n not in taken]
+        same = [n for n in cands if _squash(by_path[n].content) == _squash(gone.content)]
+        same = same or [n for n in cands if _alike(gone.content, by_path[n].content)]
+        if len(same) == 1:
+            where[path.lower()] = same[0]
     programs = out.programs or plan.programs
     folders = {p.name.lower(): p.name for p in programs}
 
@@ -529,22 +543,30 @@ def _apply_fix(plan: ProjectPlan, out: FixOut, scenarios: bool) -> ProjectPlan:
 
     refs = {(r.section, r.block): r for r in plan.listings}
     for r in out.listings:
-        refs[(r.section, r.block)] = r
+        if find(r.file) is None and programs and (src := find(Path(r.file).name)) is not None and outside(src):
+            move(src, r.file)  # листинг назван по новому месту, а сам файл остался на старом: переносим файл
+        if find(r.file) is not None:  # листинг про файл, которого нет, — описка: остаётся прежняя ссылка
+            refs[(r.section, r.block)] = r
     if programs:
-        for r in refs.values():  # листинг назван по новому месту, а сам файл остался на старом: переносим файл
-            if find(r.file) is None and (src := find(Path(r.file).name)) is not None and outside(src):
-                move(src, r.file)
         if plan.language == "csharp":  # файл остался вне программ: его место — программа с именем его namespace
             for path in [x for x in by_path if outside(x) and x.lower().endswith(".cs")]:
                 m = re.search(r"^\s*namespace\s+([\w.]+)", by_path[path].content, re.M)
                 home = folders.get((m[1].split(".")[0] if m else "").lower())
                 if home:
                     move(path, f"{home}/{Path(path).name}")
+        runs = [p.name for p in programs if p.runs]
+        for path in [x for x in by_path if outside(x) and "/" not in x and Path(x).suffix.lower() in DATA_EXT]:
+            data = by_path.pop(path)  # данные из корня нужны каждой программе, которую запускают
+            for name in runs:
+                if find(f"{name}/{path}") is None:
+                    by_path[f"{name}/{path}"] = ProjectFile(path=f"{name}/{path}", content=data.content)
+            if runs:
+                where[path.lower()] = f"{runs[0]}/{path}"
     listings = []
     for r in refs.values():
-        if find(r.file) is None:  # файл листинга переехал: листинг — по новому пути
-            new = where.get(r.file.lower()) or next(iter(fresh.get(Path(r.file).name.lower(), [])[:1]), None)
-            if new is None or len(fresh.get(Path(r.file).name.lower(), [new])) > 1:
+        if find(r.file) is None:  # файл листинга переехал: листинг — по новому пути; пропал совсем — ссылки нет
+            new = where.get(r.file.lower())
+            if new is None or find(new) is None:
                 continue
             r = r.model_copy(update={"file": new})
         listings.append(r)
@@ -552,6 +574,9 @@ def _apply_fix(plan: ProjectPlan, out: FixOut, scenarios: bool) -> ProjectPlan:
     shots = []
     for x in plan.shots:
         new = given.get((x.section, x.block))
+        opened = [where.get(o.lower(), o) for o in x.open]
+        if opened != x.open:
+            x = x.model_copy(update={"open": opened})
         if new is None or x.mode not in AUTO_MODES:
             shots.append(x)
             continue
