@@ -557,50 +557,51 @@ class WindowsShooter:
             time.sleep(2.5)
             from forlabs.runner import webdrive
 
-            seen = None
+            # страница остаётся подключённой до самого снимка: наведение и прокрутка должны дожить до кадра
             with webdrive.attach(port, url) as page:
+                seen = None
                 if page is not None:  # шаги на самой странице: поля, кнопки, наведение, прокрутка
                     try:
                         webdrive.perform(page, steps)
                     except webdrive.StepError as e:
-                        return ShotResult(False, reason=str(e), seen=webdrive.page_state(page)[-4000:], kind="ui",
-                                          ui=webdrive.page_state(page)[-4000:])
+                        state = webdrive.page_state(page)[-4000:]
+                        return ShotResult(False, reason=str(e), seen=state, kind="ui", ui=state)
                     if expect:
                         webdrive.reveal(page, expect)  # ожидаемое ниже экрана — прокрутить к нему
                     seen = webdrive.page_state(page)
-            if seen is None and needs_page_driver(steps):
-                return ShotResult(False, reason="не получилось управлять страницей в браузере (наведение и "
-                                                "прокрутка): сделай этот снимок сам")
-            if seen is None and steps:  # запасной путь: поля по id из HTML, кнопки по тексту; клавиши — в окно
-                from forlabs.runner import uia
+                if seen is None and needs_page_driver(steps):
+                    return ShotResult(False, reason="не получилось управлять страницей в браузере (наведение и "
+                                                    "прокрутка): сделай этот снимок сам")
+                if seen is None and steps:  # запасной путь: поля по id из HTML, кнопки по тексту; клавиши — в окно
+                    from forlabs.runner import uia
 
-                ui = []
-                for step in steps:
-                    action, name, value = _get(step, "action"), _get(step, "target") or "", _get(step, "value") or ""
-                    if action in ("set", "select", "click", "check", "uncheck", "wait"):
-                        ui.append({"action": action, "target": name, "value": value})
-                        continue
+                    ui = []
+                    for step in steps:
+                        action, name, value = _get(step, "action"), _get(step, "target") or "", _get(step, "value") or ""
+                        if action in ("set", "select", "click", "check", "uncheck", "wait"):
+                            ui.append({"action": action, "target": name, "value": value})
+                            continue
+                        if ui:
+                            uia.perform(w.hwnd, ui, timeout=8)
+                            ui = []
+                        if action == "type":
+                            winapi.type_text(w.hwnd, value)
+                        elif action == "key":
+                            winapi.press(w.hwnd, value)
                     if ui:
                         uia.perform(w.hwnd, ui, timeout=8)
-                        ui = []
-                    if action == "type":
-                        winapi.type_text(w.hwnd, value)
-                    elif action == "key":
-                        winapi.press(w.hwnd, value)
-                if ui:
-                    uia.perform(w.hwnd, ui, timeout=8)
-                time.sleep(2.0)  # страница после отправки формы
-            if seen is None:
-                seen = _texts_with_timeout(w.hwnd) if (steps or expect) else w.title
-            if expect and seen and not shown(expect, seen, typed_text(shot)):
-                return ShotResult(False, reason=f"на странице нет ожидаемого «{expect}»", seen=seen[-4000:],
-                                  kind="expect")
-            img = winapi.capture(w.hwnd)
-            if winapi.blank(img):
-                return ShotResult(False, reason="снимок окна браузера получился пустым")
-            out.parent.mkdir(parents=True, exist_ok=True)
-            img.save(out)
-            return ShotResult(True, image=out, seen=seen)
+                    time.sleep(2.0)  # страница после отправки формы
+                if seen is None:
+                    seen = _texts_with_timeout(w.hwnd) if (steps or expect) else w.title
+                if expect and seen and not shown(expect, seen, typed_text(shot)):
+                    return ShotResult(False, reason=f"на странице нет ожидаемого «{expect}»", seen=seen[-4000:],
+                                      kind="expect")
+                img = winapi.capture(w.hwnd)
+                if winapi.blank(img):
+                    return ShotResult(False, reason="снимок окна браузера получился пустым")
+                out.parent.mkdir(parents=True, exist_ok=True)
+                img.save(out)
+                return ShotResult(True, image=out, seen=seen)
         finally:
             app.close()
             if server is not None:
