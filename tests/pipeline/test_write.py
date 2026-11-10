@@ -191,3 +191,42 @@ def test_markdown_rule_ignores_python_dunder_names():
     assert not [f for f in check_standard(doc, SPEC, "f") if f.rule_id == "text.markdown"]
     doc.sections[0].blocks[0] = Paragraph(text="Это **важно** для работы.")
     assert [f for f in check_standard(doc, SPEC, "f") if f.rule_id == "text.markdown"]
+
+
+# ---------- своя фамилия вместо «Фамилия» из методички ----------
+
+def _asked_for(spec, tmp_path, profile=PROFILE) -> str:
+    fake = FakeLLM([SECTION1, SECTION2, {"answers": ["Именованный блок кода."]}])
+    write_report(spec, profile, profile.enrollment("ssp"), SUBJECTS["ssp"], fake, RuleBook(), tmp_path,
+                 render_diagrams=False)
+    return "\n".join(m["content"] for m in fake.calls[0])
+
+
+def test_students_surname_is_given_when_the_methodology_asks_to_use_it(tmp_path):
+    spec = SPEC.model_copy(update={"tasks": [Task(n=1, text="Создать базу данных World_Фамилия."), SPEC.tasks[1]]})
+    asked = _asked_for(spec, tmp_path)
+    assert "Фамилия студента: Иванова" in asked and "Ivanova" in asked and "не придумывай" in asked
+
+
+def test_placeholder_in_the_methodology_text_is_enough(tmp_path):
+    spec = SPEC.model_copy(update={"source_text": "Назовите проект своей фамилией и сохраните его."})
+    assert "Фамилия студента: Иванова" in _asked_for(spec, tmp_path)
+
+
+def test_surname_is_not_sent_when_nobody_asks_for_it(tmp_path):
+    asked = _asked_for(SPEC, tmp_path)
+    assert "Иванова" not in asked and "Фамилия студента" not in asked
+
+
+# ---------- картинки методички в запросе на текст ----------
+
+def test_writer_is_told_what_picture_blocks_are(tmp_path):
+    spec = SPEC.model_copy(update={"source_text": "Выполните запросы с рисунков.\n[Картинка в методичке: SELECT 1;]\n"
+                                                  "[Картинка в методичке — прочитать не удалось]"})
+    asked = _asked_for(spec, tmp_path)
+    assert "содержание картинок методички" in asked and "не выдумывай" in asked
+
+
+def test_no_picture_note_when_the_methodology_has_no_pictures(tmp_path):
+    spec = SPEC.model_copy(update={"source_text": "Выполните запросы."})
+    assert "содержание картинок методички" not in _asked_for(spec, tmp_path)

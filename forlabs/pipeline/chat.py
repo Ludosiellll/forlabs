@@ -37,6 +37,7 @@ from forlabs.pipeline.write import (
     SectionDraft,
     _gender_ru,
     draft_to_blocks,
+    student_block,
     wishes_text,
 )
 
@@ -318,7 +319,7 @@ def revise_section(spec: LabSpec, section: TaskSection, instruction: str, profil
     user = (f"Предмет: {subject.name}. Пол студента: {_gender_ru(profile.gender)}.\n"
             f"Тема работы: {spec.topic}\nВариант: {spec.variant or '—'}\n"
             f"Текст варианта: {spec.variant_text or 'нет'}\n"
-            f"{memory_block}{wishes_text(spec)}"
+            f"{memory_block}{wishes_text(spec)}{student_block(spec, profile)}"
             f"Задание {section.n}: «{section.title}»\n\nБлоки сейчас:\n{blocks_text}\n\n"
             f"Что поменять по замечанию преподавателя:\n{instruction}")
     draft = llm.json([{"role": "system", "content": CHAT_REVISE_SYSTEM.format(rules=rules.load("write", subject.id))},

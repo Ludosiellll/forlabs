@@ -76,7 +76,7 @@ def test_tesseract_setting_is_used(tmp_home, tmp_path, monkeypatch):
 
     seen = {}
 
-    def fake_extract(files, tesseract=None):
+    def fake_extract(files, tesseract=None, pictures=False):
         seen["t"] = tesseract
         from forlabs.ingest.extract import SourceText
         return SourceText("")

@@ -64,12 +64,16 @@ def performed_word(gender: Gender) -> str:
     return "Выполнил" if gender == "m" else "Выполнила"
 
 
-def goal_to_conclusion(goal: str, gender: Gender) -> ConclusionResult:
-    text = _PREFIX.sub("", goal.strip()).strip().rstrip(".").strip()
+_GOAL_SENTENCE = re.compile(r"(?<=[.!?])\s+(?=[А-ЯЁ][а-яё])")  # новое предложение: точка, пробел, слово с заглавной
+NOT_A_GOAL = "Цель не начинается с инфинитива — проверь вывод ниже и исправь его, если нужно."
+
+
+def _sentence_to_past(text: str, gender: Gender) -> str | None:
+    """Одно предложение цели в прошедшем времени: первый инфинитив и однородные с ним (через «и», запятую, точку с
+    запятой). None — предложение не начинается с инфинитива."""
     words = list(_WORD.finditer(text))
     if not words or _infn_parse(words[0].group()) is None:
-        return ConclusionResult(text=f"{text}.", needs_confirm=True,
-                                note="Цель не начинается с инфинитива — проверь вывод ниже и исправь его, если нужно.")
+        return None
     replacements: list[tuple[int, int, str]] = []
     first = words[0].group()
     main = _TEACHER_VERBS.get(first.lower(), first)
@@ -88,7 +92,24 @@ def goal_to_conclusion(goal: str, gender: Gender) -> ConclusionResult:
     out = text
     for start, end, new in sorted(replacements, reverse=True):
         out = out[:start] + new + out[end:]
-    return ConclusionResult(text=f"{out}.")
+    return out
+
+
+def goal_to_conclusion(goal: str, gender: Gender) -> ConclusionResult:
+    """Вывод из цели: каждое предложение цели — в прошедшем времени и в роде студента («Сформировать умения… Изучить
+    команду…» → «Сформировала умения… Изучила команду…»). Предложение, которое не начинается с инфинитива, остаётся
+    как есть, а студента просят проверить вывод."""
+    text = _PREFIX.sub("", goal.strip()).strip().rstrip(".").strip()
+    parts = [x.strip().rstrip(".").strip() for x in _GOAL_SENTENCE.split(text)]
+    parts = [x for x in parts if x]
+    done = [_sentence_to_past(x, gender) for x in parts]
+    if not parts or done[0] is None:
+        return ConclusionResult(text=f"{text}.", needs_confirm=True, note=NOT_A_GOAL)
+    out = ". ".join(new if new is not None else old for old, new in zip(parts, done)) + "."
+    if any(x is None for x in done):
+        return ConclusionResult(text=out, needs_confirm=True,
+                                note="В цели есть предложение не с инфинитива — проверь вывод ниже и исправь его.")
+    return ConclusionResult(text=out)
 
 
 def agree_short_participle(base: str, topic: str) -> str:

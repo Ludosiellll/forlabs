@@ -4,10 +4,13 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
+import re
 from pathlib import Path
 
 from PIL import Image, ImageOps, UnidentifiedImageError
+from pydantic import BaseModel, field_validator
 
 MAX_SIDE = 1600
 MAX_BYTES = 15 * 1024 * 1024
@@ -58,6 +61,111 @@ def describe_images(paths: list[Path], llm) -> str:
     content += [image_part(p) for p in paths]
     return llm.chat([{"role": "system", "content": DESCRIBE_SYSTEM}, {"role": "user", "content": content}],
                     temperature=0.1).strip()
+
+
+MAX_SOURCE_PICTURES = 16  # новых картинок за один разбор: дальше дорого, остаток помечается непрочитанным
+SOURCE_BATCH = 4
+UNREAD_PICTURE = "[Картинка в методичке — прочитать не удалось]"
+
+SOURCE_SYSTEM = """Тебе дают картинки из методички лабораторной работы колледжа: снимки кода, запросов и команд,
+таблицы, схемы, окна программ, страницы целиком. Для каждой картинки верни её содержание текстом:
+- текст, код, запросы и команды перепиши дословно и полностью, построчно, с теми же именами, числами и знаками;
+  ничего не исправляй, не сокращай и не дополняй;
+- таблицу перепиши по строкам, ячейки через « | »;
+- окно программы, форму, схему или диаграмму опиши коротко и точно: что это и какие на ней элементы, поля, кнопки,
+  подписи, значения и связи (у схемы базы данных — таблицы, их поля, ключи и связи);
+- если на картинке нет ничего нужного для выполнения работы (эмблема, украшение, фотография без текста) —
+  пустая строка.
+Задание не решай и от себя ничего не добавляй. Ответ — только JSON {"pictures": ["содержание первой",
+"содержание второй", …]}: столько элементов, сколько картинок, в том же порядке."""
+
+
+class SourcePictures(BaseModel):
+    pictures: list[str] = []
+
+    @field_validator("pictures", mode="before")
+    @classmethod
+    def _strings(cls, v):
+        return ["" if x is None else str(x) for x in v] if isinstance(v, list) else []
+
+
+def _jpeg_part(jpeg: bytes) -> dict:
+    return {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + base64.b64encode(jpeg).decode("ascii")}}
+
+
+def _ask_pictures(jpegs: list[bytes], llm) -> list[str] | None:
+    """Содержание картинок по порядку; None — модель ответила не на все (или лишнее)."""
+    content = [{"type": "text", "text": f"Картинок: {len(jpegs)}. Верни содержание каждой."}]
+    content += [_jpeg_part(j) for j in jpegs]
+    got: SourcePictures = llm.json([{"role": "system", "content": SOURCE_SYSTEM}, {"role": "user", "content": content}],
+                                   SourcePictures, repairs=1, temperature=0.0)
+    return got.pictures if len(got.pictures) == len(jpegs) else None
+
+
+def read_source_pictures(pictures: list, llm, known: dict[str, str] | None = None) -> tuple[list[str | None], str]:
+    """Текст каждой картинки методички (None — не прочитана) и причина, если прочитаны не все.
+
+    known — уже прочитанное (ключ — отпечаток картинки): повторный разбор не платит за те же картинки."""
+    known = known if known is not None else {}
+    keys = [hashlib.sha256(p.data).hexdigest() for p in pictures]
+    todo: dict[str, bytes] = {}
+    error = ""
+    for key, pic in zip(keys, pictures):
+        if key in known or key in todo:
+            continue
+        if len(todo) >= MAX_SOURCE_PICTURES:
+            error = f"картинок больше {MAX_SOURCE_PICTURES} — прочитаны первые"
+            continue
+        try:
+            todo[key] = prepare_image(pic.data)
+        except ValueError:  # формат, которого не знает Pillow (EMF, WMF), или битый файл
+            error = error or "часть картинок в формате, который не читается"
+    order = list(todo)
+    for start in range(0, len(order), SOURCE_BATCH):
+        batch = order[start:start + SOURCE_BATCH]
+        try:
+            texts = _ask_pictures([todo[k] for k in batch], llm)
+            if texts is None and len(batch) > 1:  # ответ не сошёлся по числу: спрашиваем по одной
+                texts = []
+                for k in batch:
+                    one = _ask_pictures([todo[k]], llm)
+                    texts.append(one[0] if one else None)
+            for k, t in zip(batch, texts or []):
+                if t is not None:
+                    known[k] = t.strip()
+        except Exception as e:  # noqa: BLE001 — сеть, лимит, модель без зрения: остальное не отправляем
+            error = str(getattr(e, "message_ru", None) or e)
+            break
+    return [known.get(k) for k in keys], error
+
+
+_BLANK_LINES = re.compile(r"\n{3,}")
+
+
+def put_pictures(text: str, pictures: list, texts: list[str | None]) -> str:
+    """Ставит прочитанное на место меток. Страница целиком (скан, фото) — обычным текстом методички; картинка
+    внутри текста — блоком «[Картинка в методичке: …]»; пустая (украшение) убирается вместе со своей строкой."""
+    from forlabs.ingest.extract import CONTROL_CHARS, PICTURE_RE
+
+    def one(m: re.Match) -> str:
+        i = int(m.group(1)) - 1
+        if not 0 <= i < len(texts) or texts[i] is None:
+            return UNREAD_PICTURE
+        got = CONTROL_CHARS.sub("", texts[i].replace("\r\n", "\n").replace("\r", "\n")).strip()
+        if not got:
+            return ""
+        if pictures[i].page:
+            return got
+        return f"[Картинка в методичке:\n{got}\n]" if "\n" in got else f"[Картинка в методичке: {got}]"
+
+    out = []
+    for line in text.split("\n"):
+        alone = PICTURE_RE.fullmatch(line.strip())
+        if alone is None:
+            out.append(PICTURE_RE.sub(one, line))
+        elif got := one(alone):
+            out.append(got)
+    return _BLANK_LINES.sub("\n\n", "\n".join(out)).strip()
 
 
 def normalize_screenshot(data: bytes) -> tuple[bytes, str]:

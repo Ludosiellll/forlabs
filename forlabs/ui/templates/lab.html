@@ -259,7 +259,8 @@
   </section>
 
   <aside class="lab-right" aria-label="Отчёт и правки">
-    {% set shown = st.findings|rejectattr('stage', 'equalto', 'spec')|list %}
+    {# замечания разбора тоже здесь: ошибка разбора мешает сдать, и её должно быть видно и можно принять #}
+    {% set shown = st.findings|list %}
     {% set chat_ready = st.report and complete %}
     {% set side = 'shots' if slot_items and not st.chat else 'chat' %}
     <div class="actions">

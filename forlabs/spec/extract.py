@@ -142,8 +142,35 @@ def variant_block(picks: list[VariantPick]) -> str | None:
     return "\n".join(lines) or None
 
 
+_NEXT_STEP = re.compile(r"(?:^|\s)2[.)]\s*\S")
+_STEP_MARK = re.compile(r"(?<![\w.,])\d{1,2}[.)](?=\s|[^\W\d])")  # «2.», «3)» — номер шага внутри задания
+_TASK_HEADING = re.compile(r"^\s*Задание\s*(?:№\s*)?(\d{1,2})\s*[.:)]?(?=\s|$)", re.IGNORECASE | re.MULTILINE)
+
+
+# раздел вопросов — отдельная строка-заголовок; «…и ответить на контрольные вопросы» в задании разделом не считается
+_QUESTIONS_HEADING = re.compile(r"^[ \t]*(?:\d+[.)]?[ \t]*)?контрольные[ \t]+вопросы(?:[ \t]+(?:и|к)[ \t]+[^\n]{0,40})?"
+                                r"[ \t]*[:.]?[ \t]*$", re.IGNORECASE | re.MULTILINE)
+
+
 def clean_item(s: str) -> str:
-    return _LEADING_NUMBER.sub("", one_line(s)).strip()
+    """Задание одной строкой, без своего номера в списке. Если задание — это нумерованные шаги («1. … 2. … 3. …»),
+    первый номер остаётся: без него шаги читались бы как «… 2. … 3. …»."""
+    line = one_line(s)
+    m = _LEADING_NUMBER.match(line) or re.match(r"\s*\d+[.)]", line)
+    if m and re.match(r"\s*1[.)]", line) and _NEXT_STEP.search(line[m.end():]):
+        return line.strip()
+    return _LEADING_NUMBER.sub("", line).strip()
+
+
+def task_headings(text: str) -> int:
+    """Сколько заданий в методичке по заголовкам «Задание 1», «Задание 2»… (подряд с первого). 0 — заголовков нет
+    или они не по порядку: тогда число заданий определяет модель."""
+    seen: list[int] = []
+    for m in _TASK_HEADING.finditer(text):
+        n = int(m[1])
+        if n not in seen:
+            seen.append(n)
+    return len(seen) if len(seen) >= 2 and seen == list(range(1, len(seen) + 1)) else 0
 
 
 def clean_field(s: str | None) -> str:
@@ -157,9 +184,16 @@ def verify_verbatim(spec: LabSpec, src: SourceText) -> list[Finding]:
     checks = [(f"Задание {t.n}", t.text, "error") for t in spec.tasks]
     checks += [(f"Вопрос {i}", q, "error") for i, q in enumerate(spec.questions, start=1)]
     checks += [("Тема", spec.topic, "warn"), ("Цель", spec.goal, "warn")]
+    bare = normalize_for_compare(_STEP_MARK.sub(" ", src.text)).replace(" ", "")  # без номеров шагов
+
+    def same_but_numbers(text: str) -> bool:
+        """Текст тот же, выпали или сдвинулись только номера шагов внутри задания — это не другая формулировка."""
+        mine = normalize_for_compare(_STEP_MARK.sub(" ", text)).replace(" ", "")
+        return bool(mine) and mine in bare
+
     for loc, text, severity in checks:
         n = normalize_for_compare(text)
-        if n and n not in hay and n.replace(" ", "") not in hay_tight:
+        if n and n not in hay and n.replace(" ", "") not in hay_tight and not same_but_numbers(text):
             out.append(Finding(stage="spec", rule_id="spec.not_verbatim", severity=severity, location=loc, text=text,
                                message="Формулировки нет в методичке дословно — проверь и поправь"))
     return out
@@ -179,6 +213,11 @@ def extract_spec(src: SourceText, subject: Subject, enrollment: Enrollment, llm,
     hint = (f" Номер работы: {lab_number}. Если в тексте несколько работ — разбирай только работу №{lab_number}."
             if lab_number else "")
     text, truncated = _cut_source(src.text, lab_number)
+    headed = task_headings(text)  # заголовки «Задание 1», «Задание 2»… — столько и заданий
+    if headed:
+        hint += (f" В методичке есть заголовки «Задание 1» … «Задание {headed}»: основных заданий ровно {headed}. "
+                 "Нумерованные шаги под заголовком — части этого задания, а не отдельные задания: запиши их в текст "
+                 "задания одной строкой с их номерами, включая первый («1. … 2. … 3. …»).")
     messages = [
         {"role": "system", "content": SPEC_SYSTEM.format(variant=variant, workplace=workplace)},
         {"role": "user", "content": SPEC_USER.format(subject=subject.name, variant=variant, number_hint=hint,
@@ -189,6 +228,18 @@ def extract_spec(src: SourceText, subject: Subject, enrollment: Enrollment, llm,
     raw: RawSpec = llm.json(messages, RawSpec, temperature=0.0)
     if str(raw.kind).strip().lower() == "not_lab":
         raise NotALab(clean_field(raw.not_lab_reason))
+    got = len([t for t in raw.main_tasks if t.strip()])
+    if headed and got != headed:  # шаги одного задания разошлись по отдельным (или задания слиплись): ещё раз
+        again = [*messages, {"role": "user", "content":
+                 f"В твоём ответе основных заданий {got}, а в методичке их ровно {headed} — по заголовкам «Задание 1» "
+                 f"… «Задание {headed}». Верни JSON заново: в main_tasks {headed} строк, в каждой — всё задание "
+                 "целиком со всеми его нумерованными шагами."}]
+        try:
+            second: RawSpec = llm.json(again, RawSpec, temperature=0.0)
+            if str(second.kind).strip().lower() != "not_lab" and second.main_tasks:
+                raw = second
+        except Exception:  # noqa: BLE001 — второй ответ не получился: остаётся первый, студент увидит замечание
+            pass
     main = merge_subitems([t for t in raw.main_tasks if t.strip()])
     extra = merge_subitems([t for t in raw.extra_tasks if t.strip()])
     tasks = [Task(n=i, text=t, kind="main") for i, t in enumerate(main, start=1)]
@@ -218,6 +269,10 @@ def extract_spec(src: SourceText, subject: Subject, enrollment: Enrollment, llm,
         findings.append(Finding(stage="spec", rule_id="spec.workplace_missing", severity="warn", location="Вариант",
                                 message="Методичка выбирает вариант по номеру рабочего места — укажи его в профиле "
                                         "(пока взят вариант по журналу)"))
+    if headed and len(main) != headed:
+        findings.append(Finding(stage="spec", rule_id="spec.tasks_count", severity="warn", location="Задания",
+                                message=f"В методичке заданий по заголовкам: {headed}, а разобрано: {len(main)}. "
+                                        "Проверь, не разошлись ли шаги одного задания по разным строкам"))
     if not spec.tasks:
         findings.append(Finding(stage="spec", rule_id="spec.no_tasks", location="Задания",
                                 message="В методичке не нашлось заданий — добавь их вручную"))
@@ -225,7 +280,7 @@ def extract_spec(src: SourceText, subject: Subject, enrollment: Enrollment, llm,
         findings.append(Finding(stage="spec", rule_id="spec.truncated", severity="warn", location="Методичка",
                                 message="Методичка очень длинная — модели отдана только часть рядом с этой работой. "
                                         "Проверь, что задания и вопросы — из нужной лабы"))
-    if not spec.questions and re.search(r"контрольные\s+вопросы", src.text, re.I):
+    if not spec.questions and _QUESTIONS_HEADING.search(src.text):
         findings.append(Finding(stage="spec", rule_id="spec.questions_missing", severity="warn", location="Вопросы",
                                 message="В методичке есть «Контрольные вопросы», но прочитать их не удалось "
                                         "(возможно, они картинкой) — впиши вопросы на этой вкладке"))

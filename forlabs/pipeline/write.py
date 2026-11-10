@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from pathlib import Path
 from typing import Callable, Literal
@@ -163,6 +164,23 @@ def wishes_text(spec: LabSpec) -> str:
     return f"Пожелания и отклонения от методички — обязательно учти, они важнее методички:\n{spec.wishes.strip()}\n"
 
 
+_OWN_DATA = re.compile(r"фамили|\bФИО\b|Ф\.\s*И\.\s*О|сво(?:ю|ей|им|ими|и|ё|е)\s+(?:им[яе]н?|данны)", re.IGNORECASE)
+
+
+def student_block(spec: LabSpec, profile: Profile) -> str:
+    """Методичка просит подставить свою фамилию («World_Фамилия», «проект назвать своей фамилией»): модели даётся
+    фамилия студента — иначе она придумает чужую. Без такой просьбы данные студента в запрос не идут."""
+    text = " ".join([spec.source_text or "", spec.assignment or "", spec.variant_text or "", *(t.text for t in spec.tasks)])
+    surname = (profile.full_name or "").split()[0] if (profile.full_name or "").strip() else ""
+    if not surname or not _OWN_DATA.search(text):
+        return ""
+    from forlabs.runner.languages import _translit
+
+    return (f"Фамилия студента: {surname} (латиницей: {_translit(surname)}). Там, где методичка просит подставить "
+            "свою фамилию («Фамилия», «ФИО», «свои данные» — в именах баз, файлов, проектов, в данных), подставляй "
+            "именно её; чужих фамилий не придумывай.\n")
+
+
 SOURCE_FOR_WRITING = 20_000  # символов методички в запросе на текст задания и ответы
 
 
@@ -174,6 +192,10 @@ def source_block(spec: LabSpec) -> str:
         cut = src[:SOURCE_FOR_WRITING]
         out += ("Текст методички (имена объектов, файлов, значения, адреса и порядок действий бери отсюда, "
                 f"ничего не придумывай вместо них):\n<<<\n{cut}\n>>>\n")
+        if "[Картинка в методичке" in cut:
+            out += ("Блоки «[Картинка в методичке: …]» — содержание картинок методички (код, запросы, таблицы, схемы "
+                    "с её рисунков): выполняй задание по ним так же, как по тексту. «Прочитать не удалось» — "
+                    "картинка не распознана: что на ней было, не выдумывай.\n")
     return out
 
 
@@ -182,7 +204,7 @@ def _context(spec: LabSpec, profile: Profile, subject: Subject, memory: str, pre
     variant_block = (f"Варианты из методички:\n{spec.variant_text}\n" if spec.variant_text else
                      "В этой работе нет вариантов и приложений с вариантами: не упоминай вариант и приложение.\n")
     memory_block = f"Память предмета:\n{memory}\n" if memory.strip() else ""
-    wishes_block = wishes_text(spec)
+    wishes_block = wishes_text(spec) + student_block(spec, profile)
     prev = "\n\n".join(f"Задание {s.n} (уже написано):\n{section_brief(s)}" for s in previous)
     previous_block = f"Уже написанные задания этой работы — не повторяйся и будь последователен:\n{prev}\n" if prev else ""
     return dict(subject=subject.name, gender=_gender_ru(profile.gender), variant=spec.variant or "—",

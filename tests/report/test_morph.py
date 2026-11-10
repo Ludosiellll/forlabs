@@ -82,3 +82,29 @@ def test_wrong_gender_verbs():
 ])
 def test_wrong_gender_verbs_precision(text, gender, expected):
     assert wrong_gender_verbs(text, gender) == expected
+
+
+# ---------- цель из нескольких предложений ----------
+
+def test_every_sentence_of_the_goal_is_turned_into_the_past():
+    goal = ("Сформировать умения использовать операцию добавления данных в таблицы. Изучить команду для вставки "
+            "данных в таблицу.")
+    assert goal_to_conclusion(goal, "f").text == ("Сформировала умения использовать операцию добавления данных в "
+                                                  "таблицы. Изучила команду для вставки данных в таблицу.")
+    assert goal_to_conclusion(goal, "m").text.endswith("Изучил команду для вставки данных в таблицу.")
+    assert not goal_to_conclusion(goal, "f").needs_confirm
+
+
+def test_second_sentence_keeps_its_own_coordinated_verbs():
+    out = goal_to_conclusion("Изучить команду INSERT. Научиться заполнять таблицы и проверять результат", "m")
+    assert out.text == "Изучил команду INSERT. Научился заполнять таблицы и проверять результат."
+
+
+def test_sentence_that_is_not_a_goal_asks_the_student_to_check():
+    out = goal_to_conclusion("Изучить команду INSERT. Работа выполняется в MySQL Workbench.", "f")
+    assert out.text.startswith("Изучила команду INSERT. Работа выполняется") and out.needs_confirm
+
+
+def test_dots_inside_a_sentence_do_not_split_it():
+    out = goal_to_conclusion("Изучить возможности платформы 1С:Предприятие 8.3 и т.д. для учёта", "m")
+    assert out.text == "Изучил возможности платформы 1С:Предприятие 8.3 и т.д. для учёта."

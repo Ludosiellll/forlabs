@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
@@ -16,6 +17,7 @@ from forlabs.core.fs import atomic_write_bytes, durable_replace, os_error_text
 from forlabs.core.models import (
     ChatMessage,
     Figure,
+    Finding,
     Listing,
     LabSpec,
     LabState,
@@ -36,6 +38,8 @@ from forlabs.pipeline.images import (
     image_ok,
     normalize_screenshot,
     prepare_image,
+    put_pictures,
+    read_source_pictures,
 )
 from forlabs.pipeline.repair import check_all, check_and_repair, report_text
 from forlabs.pipeline.write import refresh_derived, section_has_content, write_report
@@ -348,7 +352,7 @@ class Pipeline:
             src_dir = self.lab_dir(st) / "source"
             files = sorted(f for f in src_dir.iterdir() if f.is_file()) if src_dir.exists() else []
             if files:
-                src = extract_many(files, tesseract=self.tesseract)
+                src = extract_many(files, tesseract=self.tesseract, pictures=True)
             elif st.spec and st.spec.source_text.strip():
                 # методичка осталась на другом компьютере — её текст сохранён в разборе
                 src = SourceText(st.spec.source_text)
@@ -356,6 +360,9 @@ class Pipeline:
                 raise PipelineError("Файлы методички не найдены. Создай лабу заново.")
             for w in src.warnings:
                 self._emit(st, w, "warn")
+            unread = 0
+            if src.pictures:
+                src, unread = self._read_pictures(st, src)
             if not src.text.strip():
                 raise PipelineError("В методичке не нашлось текста. Вставь текст вручную.")
             profile = self._profile(st)
@@ -383,6 +390,11 @@ class Pipeline:
             spec.number = normalize_number(spec.number) or "1"
             if known is None:
                 findings += _several_labs(src.text, spec.number)
+            if unread:
+                findings.append(Finding(
+                    stage="spec", rule_id="spec.pictures_unread", severity="warn", location="Методичка",
+                    message=f"Картинок в методичке, которые не удалось прочитать: {unread}. Если на них задание, код, "
+                            "запрос или таблица — впиши их текст в пожелания к лабе, иначе отчёт выйдет без них"))
             old_dir = self.lab_dir(st)
             old_key = moved_from = None
             if renumber:
@@ -421,6 +433,38 @@ class Pipeline:
             return self._save(st)
         except Exception as e:  # любая ошибка — в статус лабы, а не в никуда
             return self._fail(st, e)
+
+    def _read_pictures(self, st: LabState, src: SourceText) -> tuple[SourceText, int]:
+        """Картинки методички читает модель: текст встаёт на место картинки. Прочитанное хранится рядом с лабой —
+        повторный разбор за те же картинки не платит. Возвращает методичку и число непрочитанных картинок."""
+        from forlabs.ingest.extract import PICTURE_RE
+
+        total = len(src.pictures)
+        self._emit(st, f"Читаю картинки в методичке: {total}", step="parse")
+        cache = self.lab_dir(st) / "source_pictures.json"
+        try:
+            known = json.loads(cache.read_text(encoding="utf-8"))
+            known = {str(k): str(v) for k, v in known.items()} if isinstance(known, dict) else {}
+        except (OSError, ValueError):
+            known = {}
+        before = dict(known)
+        texts, error = read_source_pictures(src.pictures, self._llm(st), known)
+        if known != before:
+            try:
+                atomic_write_bytes(cache, json.dumps(known, ensure_ascii=False).encode("utf-8"))
+            except OSError:
+                pass
+        unread = sum(1 for t in texts if t is None)
+        if unread:
+            self._emit(st, f"Не прочитал картинок в методичке: {unread} из {total}"
+                           + (f" ({error})" if error else "") + " — текст с них можно вписать в пожелания", "warn",
+                       step="parse")
+        plain = PICTURE_RE.sub("", src.text).strip()
+        if not plain and unread == total:  # методичка целиком картинкой, и прочитать её не получилось
+            why = f": {error.rstrip('. ')}" if error else ""
+            raise PipelineError(f"Методичка — это картинка, а прочитать её не получилось{why}. Попробуй ещё раз "
+                                "или вставь текст вручную.")
+        return SourceText(put_pictures(src.text, src.pictures, texts), src.pages, src.warnings), unread
 
     def _renumber(self, st: LabState, number: str, old_dir: Path) -> LabState:
         """Переносит черновик под номер из методички. Чужие лабы не трогает: занятый номер → «N-2», «N-3»…

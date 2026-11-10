@@ -40,3 +40,24 @@ def test_several_programs_are_named_with_what_to_open(tmp_home, tmp_path, monkey
     st.project.language = "python"
     ctx.store.save_lab(st)
     assert ".sln" not in c.get(url).text  # файл решения — только у C#
+
+
+def test_parse_finding_that_blocks_hand_in_can_be_seen_and_accepted(tmp_home, tmp_path, monkeypatch):
+    from forlabs.core.models import Finding
+
+    c, ctx, url = lab(tmp_home, tmp_path, monkeypatch)
+    st = state(ctx, url)
+    st.status = "rendered"
+    for sec in st.report.sections:  # все рисунки на месте: мешать сдаче может только замечание
+        for b in sec.blocks:
+            if b.type == "figure" and not b.image_path:
+                b.image_path = "assets/x.png"
+    st.findings = [Finding(stage="spec", rule_id="spec.not_verbatim", severity="error", location="Задание 1",
+                           text="Создать базу данных.", message="Формулировки нет в методичке дословно — проверь и поправь")]
+    ctx.store.save_lab(st)
+    page = c.get(url).text
+    assert 'href="#notes"' in page and 'id="notes"' in page  # ссылка «с замечаниями» ведёт туда, где они есть
+    notes = page[page.index('id="notes"'):]
+    assert "Формулировки нет в методичке дословно" in notes and "Оставить как есть" in notes
+    r = c.post(url + "/accept", data={"rule": "spec.not_verbatim|Задание 1"}, follow_redirects=False)
+    assert r.status_code == 303

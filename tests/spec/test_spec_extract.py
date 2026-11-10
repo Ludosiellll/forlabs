@@ -147,3 +147,112 @@ def test_workplace_missing_warns():
     spec, findings = extract_spec(SSP_SRC, SUBJECTS["ssp"], enr, FakeLLM([SSP_RAW]), lab_number="4",
                                   date="16.09.2026")
     assert [f.rule_id for f in findings] == ["spec.workplace_missing"]
+
+
+# ---------- задания под заголовками «Задание N» с нумерованными шагами ----------
+
+from forlabs.spec.extract import clean_item, task_headings  # noqa: E402
+
+DB = SourceText(normalize("""Лабораторная работа №7
+Тема работы: Добавление данных в таблицы
+Цель работы: Сформировать умения использовать операцию добавления данных в таблицы.
+Задание: Изучить основные теоретические сведения, выполнить задания 1-2, ответить на контрольные вопросы.
+Порядок выполнения работы
+Задание 1
+1.Заполнить таблицы БД Forum информацией.
+2. Представить скриншоты скриптов заполнения таблиц.
+3. Представить скриншоты заполненных таблиц.
+Задание 2
+1. Заполнить таблицы БД Store данными.
+2. Привести скриншоты заполнения таблиц.
+Контрольные вопросы и задания:
+Опишите синтаксис команды INSERT?
+"""))
+ENR_DB = Enrollment(subject_id="ssp", title_subject="СУБД", variant=7, header_style="long")
+T1 = ("1.Заполнить таблицы БД Forum информацией. 2. Представить скриншоты скриптов заполнения таблиц. "
+      "3. Представить скриншоты заполненных таблиц.")
+T2 = "1. Заполнить таблицы БД Store данными. 2. Привести скриншоты заполнения таблиц."
+RAW_DB = {"number": "7", "topic": "Добавление данных в таблицы",
+          "goal": "Сформировать умения использовать операцию добавления данных в таблицы.", "equipment": None,
+          "assignment": "Изучить основные теоретические сведения, выполнить задания 1-2, ответить на контрольные вопросы.",
+          "main_tasks": [T1, T2], "extra_tasks": [], "variant_text": None,
+          "questions": ["Опишите синтаксис команды INSERT?"]}
+
+
+def parse(*raws):
+    fake = FakeLLM(list(raws))
+    spec, findings = extract_spec(DB, SUBJECTS["ssp"], ENR_DB, fake, lab_number=None, date="10.11.2026")
+    return spec, findings, fake
+
+
+def test_task_headings_are_counted():
+    assert task_headings(DB.text) == 2
+    assert task_headings("Задание: Изучите методические указания.\n1. Сделать одно.\n2. Сделать другое.") == 0
+    assert task_headings("Задание №1. Написать программу\nЗадание №2. Нарисовать схему\nЗадание №3: Вывод") == 3
+    assert task_headings("Задание 1. Одно\nЗадание 3. Не по порядку") == 0  # не подряд — это не список заданий
+
+
+def test_steps_of_a_task_keep_all_their_numbers():
+    assert clean_item(T1).startswith("1.Заполнить") and " 2. Представить" in clean_item(T1)
+    assert clean_item("1. Создайте 2 простых анимации к выбранной тематике.").startswith("Создайте 2 простых")
+    spec, findings, _ = parse(RAW_DB)
+    assert [t.text for t in spec.tasks] == [T1, T2] and findings == []
+
+
+def test_dropped_step_numbers_are_not_a_different_wording():
+    bare = ("Заполнить таблицы БД Forum информацией. Представить скриншоты скриптов заполнения таблиц. "
+            "Представить скриншоты заполненных таблиц.")
+    spec, findings, _ = parse(dict(RAW_DB, main_tasks=[bare, T2]))
+    assert [f.rule_id for f in findings] == []  # текст тот же, выпали только номера шагов
+    reworded = bare.replace("Заполнить таблицы", "Наполнить все таблицы")
+    assert [f.rule_id for f in parse(dict(RAW_DB, main_tasks=[reworded, T2]))[1]] == ["spec.not_verbatim"]
+
+
+def test_model_is_told_how_many_tasks_the_methodology_has():
+    _, _, fake = parse(RAW_DB)
+    asked = fake.calls[0][-1]["content"]
+    assert "«Задание 1»" in asked and "ровно 2" in asked and "шаги" in asked
+
+
+def test_steps_split_into_separate_tasks_are_asked_again():
+    split = dict(RAW_DB, main_tasks=["Заполнить таблицы БД Forum информацией.",
+                                     "Представить скриншоты скриптов заполнения таблиц.",
+                                     "Представить скриншоты заполненных таблиц.", "Заполнить таблицы БД Store данными.",
+                                     "Привести скриншоты заполнения таблиц."])
+    spec, findings, fake = parse(split, RAW_DB)
+    assert len(fake.calls) == 2 and [t.text for t in spec.tasks] == [T1, T2]
+    assert "5" in fake.calls[1][-1]["content"] and "ровно 2" in fake.calls[1][-1]["content"]
+
+
+def test_still_wrong_number_of_tasks_is_told_to_the_student():
+    split = dict(RAW_DB, main_tasks=["Заполнить таблицы БД Forum информацией.", "Заполнить таблицы БД Store данными.",
+                                     "Привести скриншоты заполнения таблиц."])
+    spec, findings, fake = parse(split, split)
+    assert len(spec.tasks) == 3 and len(fake.calls) == 2
+    note = next(f for f in findings if f.rule_id == "spec.tasks_count")
+    assert note.severity == "warn" and "2" in note.message and "3" in note.message
+
+
+# ---------- картинки методички и раздел «Контрольные вопросы» ----------
+
+def test_prompt_explains_picture_blocks():
+    fake = FakeLLM([RAW])
+    extract_spec(SRC, SUBJECTS["psip"], ENR, fake, lab_number=None, date="24.09.2026")
+    system = fake.calls[0][0]["content"]
+    assert "[Картинка в методичке" in system and "прочитать не удалось" in system
+
+
+def test_questions_only_mentioned_in_the_assignment_are_not_missing():
+    # «…ответить на контрольные вопросы» в строке «Задание» — не раздел вопросов
+    src = SourceText(SRC.text.replace("Контрольные вопросы", "Вопросы для защиты")
+                     + "\nЗадание: выполнить задания и ответить на контрольные вопросы.")
+    raw = {**RAW, "questions": []}
+    _, findings = extract_spec(src, SUBJECTS["psip"], ENR, FakeLLM([raw]), lab_number=None, date="24.09.2026")
+    assert "spec.questions_missing" not in [f.rule_id for f in findings]
+
+
+def test_questions_section_without_questions_is_still_reported():
+    assert "Контрольные вопросы" in SRC.text
+    raw = {**RAW, "questions": []}
+    _, findings = extract_spec(SRC, SUBJECTS["psip"], ENR, FakeLLM([raw]), lab_number=None, date="24.09.2026")
+    assert "spec.questions_missing" in [f.rule_id for f in findings]
