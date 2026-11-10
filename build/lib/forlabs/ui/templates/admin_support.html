@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Поддержка — Админ{% endblock %}
+{% block body %}
+<div class="split">
+  <aside class="side" aria-label="Переписки">
+    <h3><a href="/admin">← Админ</a></h3>
+    <h3>Переписки</h3>
+    {% if threads %}
+    <ul class="list">
+      {% for t in threads %}{% set m = members.get(t.user_id) %}
+      <li><a href="/admin/support/{{ t.user_id }}" class="{{ 'on' if t.user_id == thread }}">
+        <span>{{ m.name if m else t.user_id[:8] }}</span>{% if t.unread %}<span class="count support-unread">{{ t.unread }}</span>{% endif %}</a></li>
+      {% endfor %}
+    </ul>
+    {% else %}<p class="small muted">Пока никто не писал.</p>{% endif %}
+  </aside>
+  <main class="main">
+    {% include "_flash.html" %}
+    <h1>Поддержка</h1>
+    <section class="box tg-box" aria-labelledby="tg-h">
+      <h2 id="tg-h">Telegram</h2>
+      <ul class="tg-check" data-tg-check="/admin/support/check" data-bound="{{ '1' if telegram else '0' }}"{{ ' data-wait' if setup }}>
+        <li class="{{ 'ok' if telegram else 'bad' }}">{{ 'Telegram подключён' if telegram else 'Telegram не подключён' }}{% if telegram and bot %}: бот @{{ bot }}{% endif %}</li>
+      </ul>
+      {% if setup %}
+        <p><a class="btn primary" href="{{ setup.link }}" target="_blank" rel="noopener">Открыть бота в Telegram</a></p>
+        <p class="small">Нажми там «Запустить» — страница сама увидит подключение. Ссылка действует 30 минут.</p>
+      {% endif %}
+      {% if setup_error %}<div class="flash err" role="alert">{{ setup_error }}</div>{% endif %}
+      <form method="post" action="/admin/support/setup"><button class="btn small{{ '' if telegram else ' primary' }}" type="submit">{{ 'Переподключить Telegram' if telegram else 'Подключить Telegram' }}</button></form>
+      <p class="hint">Токен бота от @BotFather хранится в Supabase: Edge Functions → Secrets → TELEGRAM_BOT_TOKEN.</p>
+    </section>
+    {% if thread %}{% set m = members.get(thread) %}
+    <section class="chat support" aria-label="Переписка" data-support-refresh="/admin/support/{{ thread }}/log">
+      <h2>{{ m.name if m else thread }}{% if m %} <span class="small muted">{{ m.email }}</span>{% endif %}</h2>
+      {% with admin_view=True, who=m %}{% include "_support_log.html" %}{% endwith %}
+      <form method="post" action="/admin/support/{{ thread }}" class="chat-form" data-chat-form enctype="multipart/form-data">
+        <label class="visually-hidden" for="reply">Ответ</label>
+        <textarea id="reply" name="text" rows="3" maxlength="4000" placeholder="Ответ студенту… Снимок можно вставить через Ctrl+V" data-paste-images="reply-images"></textarea>
+        <div class="row attach-row">
+          <label class="btn link small">Прикрепить фото<input id="reply-images" class="visually-hidden" type="file" name="images" accept="image/png,image/jpeg,image/webp" multiple data-images-input></label>
+          <span class="small muted" data-images-picked="reply-images"></span>
+        </div>
+        <div class="row"><button class="btn primary small" type="submit">Ответить</button>
+          {% if m %}<a class="btn link small" href="/admin/u/{{ thread }}">Карточка участника</a>{% endif %}</div>
+      </form>
+    </section>
+    {% elif threads %}
+    <div class="table-wrap"><table class="t"><thead><tr><th>Кто</th><th>Последнее сообщение</th><th>Когда</th></tr></thead><tbody>
+      {% for t in threads %}{% set m = members.get(t.user_id) %}
+      <tr class="click" onclick="location.href='/admin/support/{{ t.user_id }}'">
+        <td class="nowrap"><a href="/admin/support/{{ t.user_id }}">{{ m.name if m else t.user_id[:8] }}</a>{% if t.unread %} <span class="count support-unread">{{ t.unread }}</span>{% endif %}</td>
+        <td>{{ ('Ты: ' if t.last.from_admin else '') ~ t.last.text[:120] }}</td>
+        <td class="muted nowrap small">{{ t.last.created_at[:16].replace('T', ' ') }}</td></tr>
+      {% endfor %}
+    </tbody></table></div>
+    {% endif %}
+  </main>
+</div>
+{% endblock %}

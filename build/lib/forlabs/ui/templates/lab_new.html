@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Новая лаба{% endblock %}
+{% block body %}
+<main class="page narrow">
+  {% include "_flash.html" %}
+  <h1>Новая лаба</h1>
+  <p class="muted">ForLabs найдёт в методичке тему, задания, вариант и вопросы, а перед выполнением покажет их на проверку.</p>
+  <form method="post" action="/labs/new" enctype="multipart/form-data" data-once>
+    <input type="hidden" name="form_token" value="{{ form_token }}">
+    <div class="grid3">
+      <div class="field"><label for="profile_id">Профиль</label>
+        <select id="profile_id" name="profile_id">{% for p in profiles %}<option value="{{ p.id }}" {{ 'selected' if p.id == profile_id }}>{{ p.full_name }}</option>{% endfor %}</select></div>
+      <div class="field"><label for="subject_id">Предмет</label>
+        <select id="subject_id" name="subject_id">{% for sid, s in subjects.items() %}<option value="{{ sid }}" {{ 'selected' if sid == subject_id }}>{{ s.name }}</option>{% endfor %}</select></div>
+      <div class="field"><label for="number">Номер лабы</label><input id="number" name="number" type="text" placeholder="из методички">
+        <div class="hint">Можно не заполнять.</div></div>
+    </div>
+    <div class="field">
+      <span style="display:block;font-weight:500;margin-bottom:4px">Методичка</span>
+      <div class="dropzone" data-dropzone>
+        <div>Перетащи сюда PDF, DOCX, TXT или фото страниц</div>
+        <label class="btn filebtn">Выбрать файлы
+          <input class="visually-hidden" type="file" name="files" multiple accept=".pdf,.docx,.txt,.md,.png,.jpg,.jpeg"></label>
+        <div class="files-picked" data-picked></div>
+        <div class="hint" data-picked-many hidden>Если это методички разных лаб, каждая станет отдельной лабой. Впишешь номер — всё пойдёт в одну.</div>
+      </div>
+    </div>
+    <div class="field"><label for="text">Или вставь текст методички</label>
+      <textarea id="text" name="text" rows="8" placeholder="Лабораторная работа №…&#10;Тема: …&#10;Цель: …"></textarea></div>
+    <div class="field"><label for="wishes">Пожелания и отклонения от методички</label>
+      <textarea id="wishes" name="wishes" rows="3" maxlength="4000" placeholder="Например: вариант мне дали 7; код на C# вместо Java; в задании 3 без массива. Фото можно вставить через Ctrl+V" data-paste-images="wish-images"></textarea>
+      <div class="row attach-row">
+        <label class="btn link small">Прикрепить фото<input id="wish-images" class="visually-hidden" type="file" name="wish_images" accept="image/png,image/jpeg,image/webp" multiple data-images-input></label>
+        <span class="small muted" data-images-picked="wish-images"></span>
+      </div>
+      <div class="hint">Необязательно. Учтётся при разборе и во всех заданиях. Замечания к готовой лабе — в чат «Правки».</div></div>
+    <div class="grid2">
+      <div class="field"><label for="linked">Связанные прошлые лабы</label>
+        <input id="linked" name="linked" type="text" maxlength="60" placeholder="например: 1, 27">
+        <div class="row attach-row">
+          <label class="btn link small">Общий отчёт с ними (DOCX, PDF)<input id="linked-report" class="visually-hidden" type="file" name="linked_report" accept=".docx,.pdf" data-images-input></label>
+          <span class="small muted" data-images-picked="linked-report"></span>
+        </div>
+        <div class="hint">Если тема и приложение берутся из прошлых лаб. Из общего отчёта ForLabs возьмёт только эти лабы: весь отчёт модель не читает, лимит на него не тратится.</div></div>
+      <div class="field"><span style="display:block;font-weight:500;margin-bottom:4px">Файлы к лабе</span>
+        <div class="row attach-row">
+          <label class="btn small">Выбрать файлы<input id="materials-in" class="visually-hidden" type="file" name="materials" multiple accept="{{ materials_accept }}" data-images-input></label>
+          <span class="small muted" data-images-picked="materials-in"></span>
+        </div>
+        <div class="hint">Если преподаватель выдал данные, текст или заготовку кода. Модель прочитает их целиком. На все файлы — до {{ materials_pages }} страниц.</div></div>
+    </div>
+    <div class="row"><button class="btn primary" type="submit">Разобрать методичку</button>
+      <a class="btn link" href="/">Отмена</a></div>
+  </form>
+</main>
+{% endblock %}

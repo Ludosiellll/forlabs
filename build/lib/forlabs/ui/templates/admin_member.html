@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+{% block title %}{{ m.name }} · Админ{% endblock %}
+{% block body %}
+<main class="page admin" data-balances="/admin/balances">
+  {% include "_flash.html" %}
+  <a class="back small" href="/admin">← Все участники</a>
+  <h1>{{ m.name }}</h1>
+  <p class="muted small">{{ m.email }} · {{ 'администратор' if m.role == 'admin' else 'участник' }} · с {{ joined }} · активность: {{ seen }}</p>
+
+  <div class="admin-card">
+    <aside class="admin-side">
+      <section class="box" aria-labelledby="b-sub">
+        <h2 id="b-sub">Подписка</h2>
+        <p><span class="sub sub-{{ 'admin' if m.role == 'admin' else m.access_state }}">{{ access }}</span></p>
+        {% if is_me %}
+          <p class="small muted">Это ты: у администратора срок не действует.</p>
+        {% else %}
+          {% if not m.approved %}
+          <form method="post" action="/admin/u/{{ m.user_id }}/access" class="row">
+            <button class="btn small primary" type="submit" name="action" value="approve">Одобрить аккаунт</button>
+          </form>
+          <p class="hint">После одобрения доступ без срока, ограничить его можно кнопками ниже.</p>
+          {% endif %}
+          <form method="post" action="/admin/u/{{ m.user_id }}/access" class="row until">
+            <input type="hidden" name="action" value="extend">
+            <label for="days">Продлить на</label>
+            <input id="days" class="num" type="number" name="days" min="1" max="3650" step="1" value="30" required>
+            <span class="small muted">дн.</span>
+            <button class="btn small" type="submit">Продлить</button>
+            <button class="btn small link" type="submit" name="action" value="unlimited" formnovalidate>Без срока</button>
+          </form>
+          <form method="post" action="/admin/u/{{ m.user_id }}/access" class="row until">
+            <input type="hidden" name="action" value="until">
+            <label class="visually-hidden" for="until">Дата окончания подписки</label>
+            <input id="until" type="date" name="until" value="{{ until_value }}" required>
+            <button class="btn small" type="submit">До этой даты</button>
+          </form>
+          <form method="post" action="/admin/u/{{ m.user_id }}/access" class="row">
+            {% if m.approved %}
+              {% if m.access_state != 'expired' %}<button class="btn small danger" type="submit" name="action" value="revoke">Забрать сейчас</button>{% endif %}
+              <button class="btn small link" type="submit" name="action" value="disable">Отключить аккаунт</button>
+            {% endif %}
+          </form>
+          <p class="hint">Продление считается от текущей даты окончания, если она ещё не прошла.</p>
+        {% endif %}
+      </section>
+
+      {% if not is_me %}
+      <section class="box" aria-labelledby="b-daily">
+        <h2 id="b-daily">Лимит токенов в день</h2>
+        <p class="small">Сейчас: {{ daily_limit }}{% if not daily_own %} (общий){% endif %} · сегодня потрачено {{ today_tokens }}.</p>
+        <form method="post" action="/admin/u/{{ m.user_id }}/access" class="row until">
+          <input type="hidden" name="action" value="daily">
+          <label class="visually-hidden" for="daily">Свой лимит токенов в день</label>
+          <input id="daily" type="text" inputmode="numeric" name="daily" value="{{ m.daily_tokens or '' }}" placeholder="общий: 1 000 000">
+          <button class="btn small" type="submit">Сохранить</button>
+        </form>
+        <p class="hint">Пусто — общий лимит. Лаба с правками обычно тратит до ~100 000 токенов. Лимит проверяет сервер, сутки считаются по Минску.</p>
+      </section>
+
+      <section class="box" aria-labelledby="b-trial">
+        <h2 id="b-trial">Пробный доступ</h2>
+        {% if trial %}
+          <p class="small">Сейчас пробный: лаб {{ trial.labs_used }} из {{ trial.labs_limit }}, по {{ trial.chat_limit }} правок на лабу.</p>
+          {% if trial.rows %}
+          <div class="trial-rows small">
+            {% for r in trial.rows %}<div><span>{{ r.lab }}</span><span class="muted">правок {{ r.chats }} из {{ trial.chat_limit }} · запросов {{ r.calls }}</span></div>{% endfor %}
+          </div>
+          {% endif %}
+          <form method="post" action="/admin/u/{{ m.user_id }}/access" class="row" style="margin-top:8px">
+            <button class="btn small primary" type="submit" name="action" value="full">Полный доступ</button>
+          </form>
+          <p class="hint">«Полный доступ» снимает ограничения на лабы и правки; срок остаётся прежним.</p>
+        {% elif m.trial_labs is not none %}
+          <p class="small muted">Пробный доступ: {{ m.trial_labs }} лаб, по {{ m.trial_chat }} правок (расход сейчас не загрузился).</p>
+        {% endif %}
+        <form method="post" action="/admin/u/{{ m.user_id }}/access" class="trial-form">
+          <input type="hidden" name="action" value="trial">
+          <div class="trial-grid">
+            <label>Лаб<input class="num" type="number" name="labs" min="1" max="100" value="3" required></label>
+            <label>Правок на лабу<input class="num" type="number" name="chat" min="0" max="100" value="5" required></label>
+            <label>Дней<input class="num" type="number" name="days" min="1" max="3650" value="7" required></label>
+          </div>
+          <button class="btn small" type="submit" style="margin-top:8px">{{ 'Выдать пробный заново' if trial else 'Выдать пробный доступ' }}</button>
+        </form>
+        <p class="hint">Пробный считается с момента выдачи. Лимиты проверяет сервер.</p>
+      </section>
+      {% endif %}
+
+      <section class="box" aria-labelledby="b-key">
+        <h2 id="b-key">Ключ модели</h2>
+        {% if card.key %}
+          <p><span class="mono">••••{{ card.key.last4 }}</span> <span class="small muted">выдан {{ key_set }}</span></p>
+          <p class="small">Остаток: <b data-balance="{{ m.user_id }}">…</b> <span class="muted" data-balance-labs="{{ m.user_id }}"></span></p>
+        {% else %}
+          <p class="small muted">Свой ключ не выдан. {{ 'Работает через общий ключ.' if m.allow_shared_key else 'Без ключа модель для участника не работает.' }}</p>
+        {% endif %}
+        <form method="post" action="/admin/u/{{ m.user_id }}/key">
+          <input type="hidden" name="action" value="set">
+          <div class="field"><label for="api_key">{{ 'Заменить ключ' if card.key else 'Вставить ключ' }}</label>
+            <input id="api_key" name="api_key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-…" required></div>
+          <button class="btn small primary" type="submit">Сохранить ключ</button>
+        </form>
+        <form method="post" action="/admin/u/{{ m.user_id }}/key" class="row" style="margin-top:8px">
+          {% if card.key %}<button class="btn small danger" type="submit" name="action" value="clear" onclick="return confirm('Убрать ключ участника?')">Убрать ключ</button>{% endif %}
+          <button class="btn small link" type="submit" name="action" value="{{ 'shared_off' if m.allow_shared_key else 'shared_on' }}">{{ 'Запретить общий ключ' if m.allow_shared_key else 'Разрешить общий ключ' }}</button>
+        </form>
+        <p class="hint">Участник ключ не видит. Он хранится в Supabase зашифрованным, здесь — только последние 4 символа.</p>
+      </section>
+
+      <section class="box" aria-labelledby="b-note">
+        <h2 id="b-note">Имя и заметка</h2>
+        <form method="post" action="/admin/u/{{ m.user_id }}/note">
+          <div class="field"><label for="display_name">Имя в панели</label>
+            <input id="display_name" name="display_name" type="text" value="{{ m.display_name }}" maxlength="120"></div>
+          <div class="field"><label for="note">Заметка</label>
+            <textarea id="note" name="note" rows="3" maxlength="2000" placeholder="Например: оплатил за ноябрь">{{ m.note }}</textarea></div>
+          <button class="btn small" type="submit">Сохранить</button>
+        </form>
+      </section>
+    </aside>
+
+    <div class="admin-main">
+      <section aria-labelledby="s-prof">
+        <h2 id="s-prof">Профили</h2>
+        {% for p in card.profiles %}
+          <div class="prof"><b>{{ p.full_name }}</b> <span class="muted">· {{ p.group or 'группа не указана' }}</span>
+            {% if p.enrollments %}<div class="small muted">{% for e in p.enrollments %}{{ subjects[e.subject_id].short_name if e.subject_id in subjects else e.subject_id }}{{ ', ' if not loop.last }}{% endfor %}</div>{% endif %}</div>
+        {% else %}
+          <p class="small muted">Профилей пока нет: участник ещё не заполнил ФИО и группу.</p>
+        {% endfor %}
+      </section>
+
+      <section aria-labelledby="s-usage">
+        <h2 id="s-usage">Расход токенов по дням</h2>
+        {{ chart }}
+      </section>
+
+      <section aria-labelledby="s-labs">
+        <h2 id="s-labs">Лабы</h2>
+        {% if labs %}
+        <div class="table-wrap"><table class="t">
+          <thead><tr><th>Предмет</th><th>Работа</th><th>Статус</th><th>Создана</th><th class="num">Токенов</th><th></th></tr></thead>
+          <tbody>
+          {% for r in labs %}
+            <tr>
+              <td>{{ r.subject }}</td><td class="nowrap">ЛР {{ r.lab.number }}</td>
+              <td><span class="status s-{{ r.lab.status }}">{{ STATUS_RU.get(r.lab.status, r.lab.status) }}</span></td>
+              <td class="nowrap">{{ r.created }}</td>
+              <td class="num nowrap" title="{{ r.calls }} запросов к модели">{{ fmt_tokens(r.tokens) if r.tokens else '—' }}</td>
+              <td class="nowrap">{% if r.lab.status in ('rendered', 'final', 'needs_manual') %}<a href="/admin/u/{{ m.user_id }}/lab/{{ q(r.lab.profile_id) }}/{{ q(r.lab.subject_id) }}/{{ q(r.lab.number) }}.docx">Отчёт .docx</a>{% endif %}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table></div>
+        {% else %}
+          <p class="small muted">Лаб пока нет.</p>
+        {% endif %}
+        {% if unmatched %}<p class="small muted" style="margin-top:8px">Без привязки к лабе: {{ fmt_tokens(unmatched) }} токенов (проверка связи, удалённые лабы, запросы до обновления).</p>{% endif %}
+      </section>
+
+      <section aria-labelledby="s-hist">
+        <h2 id="s-hist">История</h2>
+        <ul class="history">
+          {% for day, text in events %}<li><span class="muted">{{ day }}</span> {{ text }}</li>
+          {% else %}<li class="muted">Действий пока не было.</li>{% endfor %}
+        </ul>
+      </section>
+    </div>
+  </div>
+</main>
+{% endblock %}

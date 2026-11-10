@@ -1,0 +1,369 @@
+{
+ "cases": {
+  "apps_found": {
+   "installed": {
+    "notepad": "C:\\Windows\\System32\\notepad.exe",
+    "visualstudio": "C:\\Program Files\\Microsoft Visual Studio\\18\\Enterprise\\Common7\\IDE\\devenv.exe",
+    "idle": "C:\\hostedtoolcache\\windows\\Python\\3.12.10\\x64\\pythonw.exe",
+    "paint": "C:\\Windows\\System32\\mspaint.exe",
+    "cmd": "C:\\Windows\\System32\\cmd.exe"
+   },
+   "missing_packettracer": null,
+   "ok": true,
+   "sec": 8.8
+  },
+  "notepad_type_save_and_save_as": {
+   "title": "заметки.txt - Notepad",
+   "elements": [
+    "[1] Кнопка «Minimize» @(603,19)",
+    "[2] Кнопка «Maximize» @(662,19)",
+    "[3] Кнопка «Close» @(722,19)",
+    "[4] Пункт меню «System» @(15,23)",
+    "[5] Пункт меню «File» @(21,50)",
+    "[6] Пункт меню «Edit» @(64,50)",
+    "[7] Пункт меню «Format» @(118,50)",
+    "[8] Пункт меню «View» @(176,50)",
+    "[9] Пункт меню «Help» @(226,50)",
+    "[10] Документ «Text Editor» @(376,267)",
+    "[11] Кнопка «Back by small amount» @(738,71) (недоступен)",
+    "[12] Кнопка «Forward by small amount» @(738,442) (недоступен)",
+    "[13] Кнопка «Back by small amount» @(9,459) (недоступен)",
+    "[14] Кнопка «Forward by small amount» @(721,459) (недоступен)",
+    "[15] Поле «» @(107,487)",
+    "[16] Поле «Ln 1, Col 1» @(301,487)",
+    "[17] Поле «100%» @(420,487)",
+    "[18] Поле «Windows (CRLF)» @(527,487)",
+    "[19] Поле «UTF-8» @(667,487)"
+   ],
+   "saved_text": "Привет из ForLabs 😀\nЛабораторная №1\tтаб",
+   "emoji_kept": true,
+   "save_as_note": "",
+   "dialog": true,
+   "dialog_title": "Save As",
+   "dialog_elements": [
+    "[1] Кнопка «Close» @(752,19)",
+    "[2] Пункт меню «System» @(24,23)",
+    "[3] Кнопка «Back (Alt + Left Arrow)» @(37,70) (недоступен)",
+    "[4] Кнопка «Forward (Alt + Right Arrow)» @(81,70) (недоступен)",
+    "[5] Кнопка «Recent locations» @(116,70) (недоступен)",
+    "[6] Кнопка «Up to \"agent-probe\" (Alt + Up Arrow)» @(156,70)",
+    "[7] Кнопка «All locations» @(212,69)",
+    "[8] Кнопка «‎agent-probe» @(266,69)",
+    "[9] Пункт меню «‎ЛР 1 Иванов» @(331,69)",
+    "[10] Кнопка «Previous Locations» @(430,69)",
+    "[11] Кнопка «Refresh \"ЛР 1 Иванов\" (F5)» @(473,69)",
+    "[12] Кнопка «Search» @(735,70)",
+    "[13] Поле «Search Box» @(613,70)",
+    "[14] Кнопка «Organize» @(69,122)",
+    "[15] Кнопка «New folder» @(179,122)",
+    "[16] Кнопка «Details» @(682,122)",
+    "[17] Кнопка «View Slider» @(693,122)",
+    "[18] Кнопка «&Help» @(744,122)",
+    "[19] Кнопка «Back by small amount» @(192,150)",
+    "[20] Кнопка «Name» @(380,158)",
+    "[21] Кнопка «Filter dropdown» @(539,158)",
+    "[22] Кнопка «Date modified» @(640,158)",
+    "[23] Кнопка «Filter dropdown» @(719,158)",
+    "[24] Кнопка «Type» @(805,158)",
+    "[25] Строка «заметки» @(601,197)",
+    "[26] Поле «Name» @(403,198)",
+    "[27] Поле «Date modified» @(640,198)",
+    "[28] Поле «Type» @(805,198)",
+    "[29] Кнопка «Forward by large amount» @(192,310)",
+    "[30] Кнопка «Column left» @(220,378)",
+    "[31] Кнопка «Page right» @(679,378)",
+    "[32] Кнопка «Column right» @(762,378)",
+    "[33] Кнопка «Forward by small amount» @(192,380)",
+    "[34] Текст «File name:» @(95,416)",
+    "[35] Список «File name:» @(467,416)",
+    "[36] Поле «File name:» @(456,416)",
+    "[37] Кнопка «Drop Down Button» @(756,416)",
+    "[38] Текст «Save as type:» @(95,447)",
+    "[39] Список «Save as type:» @(467,447)",
+    "[40] Кнопка «Drop Down Button» @(756,447)",
+    "[41] Кнопка «Save» @(572,553)",
+    "[42] Кнопка «Cancel» @(697,553)",
+    "[43] Кнопка «Hide Folders» @(76,557)",
+    "[44] Текст «Encoding:» @(275,553)",
+    "[45] Список «Encoding:» @(408,553)",
+    "[46] Кнопка «Drop Down Button» @(491,553)"
+   ],
+   "save_as_exists": true,
+   "ok": true,
+   "sec": 12.4
+  },
+  "foreign_window_on_top_is_not_in_shot_and_not_clickable": {
+   "magenta_pixels_in_shot": 0,
+   "blocked": "в этой точке окно другой программы",
+   "ok": true,
+   "sec": 4.0
+  },
+  "minimized_window_is_restored": {
+   "iconic_after": false,
+   "ok": true,
+   "sec": 2.0
+  },
+  "program_closed_mid_run": {
+   "stopped": "программа «Блокнот» закрылась",
+   "run_reason": "программа «Блокнот» закрылась",
+   "ok": true,
+   "sec": 2.1
+  },
+  "student_escape_and_overlay": {
+   "hooked": true,
+   "overlay": true,
+   "after_own_esc": null,
+   "stopped": "остановлено (Esc)",
+   "ok": true,
+   "sec": 1.1
+  },
+  "app_missing_or_broken": {
+   "missing_exe": "программа «Блокнот» не запустилась: [WinError 2] The system cannot find the file specified",
+   "ok": true,
+   "sec": 0.0
+  },
+  "visual_studio_project": {
+   "main_window_sec": 24,
+   "project_open": true,
+   "seen": [
+    {
+     "title": "Microsoft Visual Studio",
+     "dialog": false,
+     "elements": 10,
+     "observe_sec": 0.2,
+     "clicked": "Skip and add accounts later."
+    },
+    {
+     "title": "Microsoft Visual Studio",
+     "dialog": false,
+     "elements": 16,
+     "observe_sec": 0.1,
+     "clicked": "Start Visual Studio"
+    },
+    {
+     "title": "Program.cs - Program.cs - Microsoft Visual Studio (Administrator)",
+     "dialog": false,
+     "elements": 9,
+     "observe_sec": 10.0
+    }
+   ],
+   "elements_sample": [
+    "[1] Кнопка «Connected User Information» @(813,19)",
+    "[2] Кнопка «Minimize» @(886,19)",
+    "[3] Кнопка «Restore» @(941,19)",
+    "[4] Кнопка «Close» @(996,19)",
+    "[5] Кнопка «GitHub Copilot» @(882,57)",
+    "[6] Кнопка «Feedback» @(930,57)",
+    "[7] Кнопка «Admin» @(981,57)",
+    "[8] Кнопка «Background tasks (Ctrl+E, Ctrl+T)» @(19,693)",
+    "[9] Кнопка «Notifications» @(1005,693)"
+   ],
+   "uia_direct": {
+    "count": 50,
+    "sec": 6.1,
+    "sample": [
+     [
+      "Пункт меню",
+      "System"
+     ],
+     [
+      "Пункт меню",
+      "File"
+     ],
+     [
+      "Пункт меню",
+      "Edit"
+     ],
+     [
+      "Пункт меню",
+      "View"
+     ],
+     [
+      "Пункт меню",
+      "Git"
+     ],
+     [
+      "Пункт меню",
+      "Debug"
+     ],
+     [
+      "Пункт меню",
+      "Test"
+     ],
+     [
+      "Пункт меню",
+      "Tools"
+     ],
+     [
+      "Пункт меню",
+      "Extensions"
+     ],
+     [
+      "Пункт меню",
+      "Window"
+     ],
+     [
+      "Пункт меню",
+      "Help"
+     ],
+     [
+      "Пункт меню",
+      "Search"
+     ],
+     [
+      "Кнопка",
+      "Connected User Information"
+     ],
+     [
+      "Кнопка",
+      "Minimize"
+     ],
+     [
+      "Кнопка",
+      "Restore"
+     ]
+    ]
+   },
+   "ok": true,
+   "sec": 131.1
+  },
+  "idle_with_code": {
+   "title": "main.py - D:\\a\\_temp\\agent-probe\\idle\\main.py (3.12.10)",
+   "elements": 11,
+   "ok": true,
+   "sec": 4.4
+  },
+  "core_run_end_to_end_in_notepad": {
+   "result": true,
+   "reason": "",
+   "log": [
+    "щелчок [10] Документ «Text Editor»",
+    "набор «Отчёт по лабораторной №3» → окно: «*заметки.txt - Notepad»",
+    "готово: текст набран"
+   ],
+   "ok": true,
+   "sec": 2.6
+  },
+  "students_own_window_is_left_alone": {
+   "own_windows": [
+    852098
+   ],
+   "agent_main": 262744,
+   "front_after": "лаба.txt - Notepad",
+   "ok": true,
+   "sec": 4.5
+  },
+  "paint_drag_draws_a_line": {
+   "dark_before": 0,
+   "dark_after": 772,
+   "ok": true,
+   "sec": 7.0
+  },
+  "typing_stops_when_another_window_takes_focus": {
+   "blocked": "окно программы ушло с переднего плана — набор остановлен, чтобы текст не попал в чужое окно",
+   "leaked_chars": 0,
+   "ok": true,
+   "sec": 6.8
+  },
+  "overlay_three_times_in_one_process": {
+   "overlay_0": true,
+   "overlay_1": true,
+   "overlay_2": true,
+   "ok": true,
+   "sec": 1.2
+  },
+  "winforms_stretched_window_whole_and_clickable": {
+   "size": [
+    402,
+    365
+   ],
+   "black_right": 0.036,
+   "black_bottom": 0.007,
+   "elements": [
+    "[1] Кнопка «Minimize» @(253,20)",
+    "[2] Кнопка «Maximize» @(312,20)",
+    "[3] Кнопка «Close» @(372,20)",
+    "[4] Пункт меню «System» @(15,24)",
+    "[5] Поле «Первый операнд:» @(276,80)",
+    "[6] Текст «Первый операнд:» @(90,79)",
+    "[7] Текст «Второй операнд:» @(88,122)",
+    "[8] Поле «Второй операнд:» @(276,124)",
+    "[9] Текст «Операция:» @(66,166)",
+    "[10] Список «Операция:» @(276,167)",
+    "[11] Текст «Операция:» @(276,167)",
+    "[12] Кнопка «Open» @(340,168)",
+    "[13] Поле «Результат:» @(276,211)",
+    "[14] Текст «Результат:» @(65,210)",
+    "[15] Кнопка «Вычислить» @(95,270)"
+   ],
+   "after_title": "Ошибка",
+   "after_elements": [
+    "[1] Кнопка «Close» @(493,227)",
+    "[2] Текст «Введите целые числа!» @(402,284)",
+    "[3] Кнопка «OK» @(448,345)"
+   ],
+   "ok": true,
+   "sec": 6.4
+  },
+  "qt5_unaware_window_whole_and_clickable": {
+   "size": [
+    527,
+    315
+   ],
+   "black_right": 0.0,
+   "black_bottom": 0.006,
+   "elements": [
+    "[1] Кнопка «Minimize» @(379,20)",
+    "[2] Кнопка «Maximize» @(438,20)",
+    "[3] Кнопка «Close» @(497,20)",
+    "[4] Пункт меню «System» @(15,24)",
+    "[5] Текст «Пакет не отправлен» @(264,134)",
+    "[6] Кнопка «Отправить пакет» @(264,262)"
+   ],
+   "after_title": "Топология сети",
+   "after_elements": [
+    "[1] Кнопка «Minimize» @(379,20)",
+    "[2] Кнопка «Maximize» @(438,20)",
+    "[3] Кнопка «Close» @(497,20)",
+    "[4] Пункт меню «System» @(15,24)",
+    "[5] Текст «Пакет доставлен: PC0 -> Server0» @(264,134)",
+    "[6] Кнопка «Отправить пакет» @(264,262)"
+   ],
+   "ok": true,
+   "sec": 8.2
+  },
+  "qt5_system_window_whole_and_clickable": {
+   "size": [
+    422,
+    259
+   ],
+   "black_right": 0.044,
+   "black_bottom": 0.007,
+   "elements": [
+    "[1] Кнопка «Minimize» @(273,19)",
+    "[2] Кнопка «Maximize» @(332,19)",
+    "[3] Кнопка «Close» @(392,19)",
+    "[4] Пункт меню «System» @(15,23)",
+    "[5] Текст «Пакет не отправлен» @(211,114)",
+    "[6] Кнопка «Отправить пакет» @(211,215)"
+   ],
+   "after_title": "Топология сети",
+   "after_elements": [
+    "[1] Кнопка «Minimize» @(273,19)",
+    "[2] Кнопка «Maximize» @(332,19)",
+    "[3] Кнопка «Close» @(392,19)",
+    "[4] Пункт меню «System» @(15,23)",
+    "[5] Текст «Пакет доставлен: PC0 -> Server0» @(211,114)",
+    "[6] Кнопка «Отправить пакет» @(211,215)"
+   ],
+   "ok": true,
+   "sec": 5.7
+  }
+ },
+ "scale": {
+  "recommended": 100,
+  "current": 125,
+  "max": 125,
+  "min": 100
+ }
+}

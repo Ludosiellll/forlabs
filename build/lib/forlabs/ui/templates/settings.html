@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Настройки{% endblock %}
+{% block body %}
+<main class="page narrow">
+  {% include "_flash.html" %}
+  <h1>Настройки</h1>
+  {% if ctx.cloud and member %}
+  <section class="pane sub-pane" aria-label="Подписка и ключ">
+    <h2>Подписка и ключ</h2>
+    <p class="small">Подписка: <b>{{ access_text(member) }}</b></p>
+    {% if balance_state == 'ok' %}
+      <p class="small">Остаток на твоём ключе: <b>{{ fmt_tokens(my_balance) }}</b> токенов, {{ labs_estimate(my_balance) }}.</p>
+    {% elif balance_state == 'no_key' %}
+      <p class="small muted">Свой ключ ещё не выдан{{ ', работа идёт через общий' if member.allow_shared_key }}. Ключи выдаёт администратор.</p>
+    {% else %}
+      <p class="small muted">Остаток сейчас не узнать: нет связи с облаком.</p>
+    {% endif %}
+  </section>
+  {% endif %}
+  <form method="post" action="/settings">
+    {% if show_mode %}
+    <fieldset><legend>Режим работы</legend>
+      <label class="radio"><input type="radio" name="mode" value="cloud" {{ 'checked' if s.mode == 'cloud' }}> Облако — вход по e-mail, ключ модели выдаёт администратор</label><br>
+      <label class="radio"><input type="radio" name="mode" value="local" {{ 'checked' if s.mode == 'local' }}> Локально — данные только на этом ПК, свой ключ</label>
+      <div class="hint" style="margin-bottom:12px">В облаке ключ модели хранится в Supabase зашифрованным, участники его не видят.</div>
+    </fieldset>
+    {% endif %}
+    {% if show_model %}
+    <fieldset><legend>Модель</legend>
+      <div class="grid2">
+        <div class="field"><label for="model">Модель</label>
+          <select id="model" name="model">
+            {% for m in model_choices %}<option value="{{ m }}" {{ 'selected' if s.model == m }}>{{ m }}{{ ' — по умолчанию' if loop.first }}</option>{% endfor %}
+            {% if s.model not in model_choices %}<option value="{{ s.model }}" selected>{{ s.model }}</option>{% endif %}
+          </select></div>
+        {% if show_mode %}
+        <div class="field"><label for="base_url">Адрес API (для локального режима)</label>
+          <input id="base_url" name="base_url" type="text" value="{{ s.base_url }}" list="presets">
+          <datalist id="presets">{% for k, pr in presets.items() %}<option value="{{ pr.base_url }}">{{ pr.title }}</option>{% endfor %}</datalist></div>
+        {% endif %}
+      </div>
+      {% if show_mode %}
+      <div class="field"><label for="api_key">Ключ API (для локального режима)</label>
+        <input id="api_key" name="api_key" type="password" autocomplete="off" placeholder="{{ 'Ключ сохранён. Вставь новый, чтобы заменить' if has_key else 'sk-…' }}">
+        <div class="hint">Хранится в диспетчере учётных данных Windows, не в файлах.</div></div>
+      {% endif %}
+    </fieldset>
+    {% endif %}
+    <fieldset><legend>Программы на этом ПК</legend>
+      <p class="small">Word: <b>{{ 'найден' if word else 'не найден' }}</b>{% if not word %}. Номера страниц посчитает LibreOffice, а «Продолжение листинга» появится после пересборки на ПК с Word.{% endif %}</p>
+      <div class="field"><label for="soffice_path">LibreOffice (soffice)</label>
+        <input id="soffice_path" name="soffice_path" type="text" value="{{ s.soffice_path or '' }}" placeholder="{{ soffice or 'не найден' }}"></div>
+      <div class="field"><label for="tesseract_path">Tesseract для фото методичек</label>
+        <input id="tesseract_path" name="tesseract_path" type="text" value="{{ s.tesseract_path or '' }}" placeholder="C:\Program Files\Tesseract-OCR\tesseract.exe"></div>
+    </fieldset>
+    <div class="row"><button class="btn primary" type="submit">Сохранить</button></div>
+  </form>
+  <form method="post" action="/settings/check" style="margin-top:14px">
+    <button class="btn" type="submit">Проверить подключение к модели</button></form>
+  <form method="post" action="/tour/restart" style="margin-top:8px">
+    <button class="btn" type="submit">Пройти обучение заново</button></form>
+  {% if lab_tools %}{% from "_tools.html" import tool_box %}
+  <section class="pane sub-pane tools" aria-label="Программы для лаб" data-tools>
+    <div class="tools-head"><h2>Программы для лаб</h2>
+      <button class="btn small link" type="button" data-tools-recheck>Проверить снова</button></div>
+    <p class="small muted">Нужны, чтобы ForLabs сам запускал программы из лаб и делал скриншоты. Ставятся в папку ForLabs, без прав администратора.</p>
+    {% for t in lab_tools %}{{ tool_box(t) }}{% endfor %}
+  </section>
+  {% endif %}
+</main>
+{% endblock %}

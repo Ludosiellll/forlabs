@@ -1,0 +1,194 @@
+"""Окно консоли для снимка: запуск в настоящем conhost в UTF-8, ввод с клавиатуры, заголовок, чтение текста окна.
+
+Ввод и чтение делает отдельный короткий процесс-помощник: он подключается к консоли программы (AttachConsole),
+пишет нажатия клавиш (WriteConsoleInput) и читает буфер экрана. Сам ForLabs к чужой консоли не подключается —
+у окна приложения консоли нет, а подключение сломало бы его вывод."""
+
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+
+CONHOST = r"C:\Windows\System32\conhost.exe"
+
+
+def quote(arg: str) -> str:
+    """Аргумент для командной строки cmd.exe (пробелы, кавычки)."""
+    if arg and not any(c in arg for c in ' \t"&|<>^()%!'):
+        return arg
+    return '"' + arg.replace('"', '""') + '"'
+
+
+def console_command(cmd: list[str], workdir) -> str:
+    """conhost (а не Windows Terminal: окно должно принадлежать процессу программы) → cmd → файл .cmd с программой.
+    Команда — в файле, потому что conhost по-своему разбирает вложенные кавычки и путь с пробелами
+    («MySQL Server 8.4») разваливался. В файле: UTF-8 в консоли, программа, затем `timeout /nobreak` держит окно
+    (ничего не печатает и не съедает нажатия клавиш, в отличие от `pause`)."""
+    return f'"{CONHOST}" cmd.exe /d /c "{console_script(cmd, workdir)}"'
+
+
+def console_script(cmd: list[str], workdir):
+    """Файл forlabs-run.cmd с программой (см. console_command)."""
+    from pathlib import Path
+
+    bat = Path(workdir) / "forlabs-run.cmd"
+    line = " ".join(quote(a).replace("%", "%%") for a in cmd)
+    bat.write_text("@chcp 65001>nul\r\n@echo off\r\n" + line + "\r\ntimeout /t 86400 /nobreak >nul\r\n", encoding="utf-8")
+    return bat
+
+
+def host_cmd() -> list[str]:
+    """Хозяин консоли для программы в песочнице: в установленной программе — ForLabs.exe, иначе — этот модуль."""
+    from forlabs.version import frozen
+
+    if frozen():
+        return [sys.executable, "--console-host"]
+    return [sys.executable, "-m", "forlabs.runner.console", "--console-host"]
+
+
+def host_main(job_file) -> int:
+    """ForLabs.exe --console-host <job.json>: окно консоли принадлежит этому процессу (не песочнице) — ввод для снимка
+    в него проходит; программа лабы работает в песочнице AppContainer, в этой же консоли."""
+    from pathlib import Path
+
+    job_file = Path(job_file)
+    try:
+        return _host(job_file)
+    except Exception as e:  # noqa: BLE001 — причина — в файл рядом, ForLabs покажет её
+        import traceback
+
+        job_file.with_suffix(".err").write_text(f"{type(e).__name__}: {e}\n{traceback.format_exc()[-1500:]}",
+                                                encoding="utf-8")
+        return 3
+
+
+def _host(job_file) -> int:
+    import ctypes
+    import time
+
+    from forlabs.runner import appcontainer
+
+    job = json.loads(job_file.read_text(encoding="utf-8"))
+    k32 = ctypes.windll.kernel32
+    k32.SetConsoleCP(65001)
+    k32.SetConsoleOutputCP(65001)
+    if job.get("title"):
+        k32.SetConsoleTitleW(job["title"])
+    try:
+        program = appcontainer.spawn(job["cmd"], job["cwd"], job["sid"], env=job.get("env") or {},
+                                     internet=bool(job.get("internet")))
+    except Exception as e:  # noqa: BLE001 — причина уйдёт в снимок
+        job_file.with_suffix(".err").write_text(f"{type(e).__name__}: {e}", encoding="utf-8")
+        return 3
+    job_file.with_suffix(".pid").write_text(str(program.pid), encoding="utf-8")
+    while True:  # окно держится, пока ForLabs не закроет задание (вместе с программой)
+        time.sleep(3600)
+
+
+def helper_cmd() -> list[str]:
+    """Как запустить помощника: в установленной программе — сам ForLabs.exe, иначе — этот модуль."""
+    from forlabs.version import frozen
+
+    if frozen():
+        return [sys.executable, "--console-helper"]
+    return [sys.executable, "-m", "forlabs.runner.console"]
+
+
+def act(pid: int | list[int], *, text: str | None = None, title: str | None = None, read: bool = False,
+        timeout: float = 20.0) -> dict:
+    """Ввод, заголовок и/или чтение экрана консоли. pid — процесс этой консоли или список: подключение к первому
+    живому (сама программа могла уже завершиться — окно держит cmd). Возвращает {"ok", "screen", "error"}."""
+    import tempfile
+    from pathlib import Path
+
+    # задание и ответ — файлами: у собранного ForLabs.exe (оконная программа) нет надёжных stdin/stdout
+    with tempfile.TemporaryDirectory(prefix="forlabs-con-") as tmp:
+        job_file = Path(tmp) / "job.json"
+        pids = [pid] if isinstance(pid, int) else list(pid)
+        job_file.write_text(json.dumps({"pids": pids, "text": text, "title": title, "read": read},
+                                       ensure_ascii=False), encoding="utf-8")
+        try:
+            subprocess.run([*helper_cmd(), str(job_file)], timeout=timeout, capture_output=True,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "error": "помощник консоли не ответил"}
+        out = job_file.with_suffix(".out")
+        try:
+            return json.loads(out.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {"ok": False, "error": "помощник консоли не дал ответа"}
+
+
+def _helper(job: dict) -> dict:
+    import time
+
+    import win32con
+    import win32console
+    import win32file
+
+    win32console.FreeConsole()
+    pids = job.get("pids") or [job["pid"]]
+    last = None
+    for p in pids:  # первый живой процесс этой консоли
+        try:
+            win32console.AttachConsole(int(p))
+            break
+        except Exception as e:  # noqa: BLE001 - процесс уже завершился или без консоли
+            last = e
+    else:
+        raise RuntimeError(f"не подключиться к консоли ({last})")
+    try:
+        if job.get("title"):
+            win32console.SetConsoleTitle(job["title"])
+        if job.get("text"):
+            h = win32file.CreateFile("CONIN$", win32con.GENERIC_READ | win32con.GENERIC_WRITE,
+                                     win32con.FILE_SHARE_READ | win32con.FILE_SHARE_WRITE, None,
+                                     win32con.OPEN_EXISTING, 0, None)
+            con = win32console.PyConsoleScreenBufferType(h)
+            records = []
+            for ch in job["text"]:
+                for down in (True, False):
+                    r = win32console.PyINPUT_RECORDType(win32console.KEY_EVENT)
+                    r.KeyDown, r.RepeatCount = down, 1
+                    if ch == "\n":
+                        r.Char, r.VirtualKeyCode = "\r", 13
+                    else:
+                        r.Char = ch
+                    records.append(r)
+            con.WriteConsoleInput(records)
+            time.sleep(0.2)
+        screen = ""
+        if job.get("read"):
+            h = win32file.CreateFile("CONOUT$", win32con.GENERIC_READ | win32con.GENERIC_WRITE,
+                                     win32con.FILE_SHARE_READ | win32con.FILE_SHARE_WRITE, None,
+                                     win32con.OPEN_EXISTING, 0, None)
+            out = win32console.PyConsoleScreenBufferType(h)
+            info = out.GetConsoleScreenBufferInfo()
+            width = info["Size"].X
+            rows = info["CursorPosition"].Y + 1
+            text = out.ReadConsoleOutputCharacter(width * rows, win32console.PyCOORDType(0, 0))
+            screen = "\n".join(text[i:i + width].rstrip() for i in range(0, len(text), width)).rstrip()
+        return {"ok": True, "screen": screen}
+    finally:
+        win32console.FreeConsole()
+
+
+def main(argv: list[str] | None = None) -> int:
+    """ForLabs.exe --console-helper <job.json> (или python -m forlabs.runner.console <job.json>)."""
+    from pathlib import Path
+
+    argv = sys.argv[1:] if argv is None else argv
+    job_file = Path([a for a in argv if not a.startswith("--")][-1])
+    if "--console-host" in argv:
+        return host_main(job_file)
+    try:
+        res = _helper(json.loads(job_file.read_text(encoding="utf-8")))
+    except Exception as e:  # noqa: BLE001 - любой сбой — ответом, а не трассировкой
+        res = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    job_file.with_suffix(".out").write_text(json.dumps(res, ensure_ascii=False), encoding="utf-8")
+    return 0 if res.get("ok") else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

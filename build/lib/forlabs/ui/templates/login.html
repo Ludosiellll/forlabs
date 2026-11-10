@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Вход{% endblock %}
+{% block top %}{% endblock %}
+{% block body %}
+{% set reg = request.query_params.get('tab') == 'register' %}
+<main class="auth">
+  <h1 style="margin-bottom:6px">ForLabs</h1>
+  <p class="muted">Лабораторные работы с оформлением по образцу колледжа.</p>
+  {% include "_flash.html" %}
+  <div class="tabs" role="tablist">
+    <a href="/login" class="{{ 'on' if not reg }}" role="tab" aria-selected="{{ 'false' if reg else 'true' }}">Вход</a>
+    <a href="/login?tab=register" class="{{ 'on' if reg }}" role="tab" aria-selected="{{ 'true' if reg else 'false' }}">Регистрация</a>
+  </div>
+  <div class="card">
+  {% if not reg %}
+    <form method="post" action="/login">
+      <div class="field"><label for="email">E-mail</label><input id="email" name="email" type="email" required autocomplete="email" autofocus></div>
+      <div class="field"><label for="password">Пароль</label><input id="password" name="password" type="password" required autocomplete="current-password"></div>
+      <div class="field"><button class="btn primary" type="submit" style="width:100%">Войти</button></div>
+    </form>
+  {% else %}
+    <form method="post" action="/register">
+      <div class="field"><label for="name">Как тебя зовут</label><input id="name" name="name" type="text" autocomplete="name"></div>
+      <div class="field"><label for="remail">E-mail</label><input id="remail" name="email" type="email" required autocomplete="email"></div>
+      <div class="field"><label for="rpassword">Пароль</label><input id="rpassword" name="password" type="password" required minlength="6" autocomplete="new-password">
+        <div class="hint">Не меньше 6 символов.</div></div>
+      <div class="field"><button class="btn primary" type="submit" style="width:100%">Зарегистрироваться</button>
+        <div class="hint">Работать можно, когда администратор одобрит аккаунт.</div></div>
+    </form>
+  {% endif %}
+  </div>
+</main>
+{% endblock %}

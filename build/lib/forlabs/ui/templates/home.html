@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Лабы{% endblock %}
+{% block body %}
+{% if not current %}
+<main class="page narrow">
+  {% include "_flash.html" %}
+  <h1>Начнём с профиля</h1>
+  <p class="muted">Профиль — это студент, для которого делаются лабы: ФИО, пол, группа, варианты и руководители по предметам.
+    Можно завести несколько профилей.</p>
+  <a class="btn primary" data-tour="start" href="/profiles/new">Создать профиль</a>
+</main>
+{% else %}
+<div class="split">
+  <aside class="side" aria-label="Профиль и предметы">
+    <h3>Профиль</h3>
+    <ul class="list">
+      {% for p in profiles %}
+      <li><a href="/?profile={{ q(p.id) }}" class="{{ 'on' if p.id == current.id }}"><span>{{ p.full_name }}</span></a></li>
+      {% endfor %}
+    </ul>
+    <h3>Предметы</h3>
+    {% if enrolled %}
+    <ul class="list">
+      {% for sid in enrolled %}
+      <li><a href="/?profile={{ q(current.id) }}&subject={{ q(sid) }}" class="{{ 'on' if sid == subject_id }}">
+        <span>{{ subjects[sid].name }}</span><span class="count">{{ counts.get(sid, 0) }}</span></a></li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="small muted">В профиле не отмечены предметы. <a href="/profiles/{{ q(current.id) }}">Отметить</a></p>
+    {% endif %}
+  </aside>
+  <main class="main">
+    {% include "_flash.html" %}
+    <div class="row" style="margin-bottom:16px">
+      <div>
+        <div class="small muted">{{ current.full_name }} · {{ current.group }}</div>
+        <h1>{{ subjects[subject_id].name }}</h1>
+      </div>
+      <span class="spacer"></span>
+      <a class="btn primary" data-tour="start" href="/labs/new?profile={{ q(current.id) }}&subject={{ q(subject_id) }}">Новая лаба</a>
+    </div>
+    {% if labs %}
+    <div class="table-wrap">
+      <table class="t">
+        <thead><tr><th>№</th><th>Тема</th><th>Статус</th><th>Изменена</th><th><span class="visually-hidden">Удалить</span></th></tr></thead>
+        <tbody>
+        {% for l in labs %}
+          {% set url = '/labs/' ~ q(l.profile_id) ~ '/' ~ q(l.subject_id) ~ '/' ~ q(l.number) %}
+          <tr class="click" onclick="location.href='{{ url }}'">
+            <td class="nowrap"><a href="{{ url }}">ЛР {{ l.number }}</a></td>
+            <td>{{ l.topic or 'Методичка ещё не разобрана' }}</td>
+            <td><span class="status s-{{ l.status }}">{{ STATUS_RU[l.status] }}</span></td>
+            <td class="muted nowrap small">{{ l.updated_at[:16].replace('T', ' ') }}</td>
+            <td class="nowrap row-actions" onclick="event.stopPropagation()">
+              <form method="post" action="{{ url }}/delete" onclick="event.stopPropagation()"
+                    onsubmit="return confirm('Удалить ЛР {{ l.number }}? Отчёт, снимки и чат в ForLabs удалятся. Файлы в папке сдачи (документ, проект) останутся.')">
+                <button class="btn link small danger-link" type="submit" aria-label="Удалить ЛР {{ l.number }}">Удалить</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty">По этому предмету лаб пока нет.</div>
+    {% endif %}
+  </main>
+</div>
+{% endif %}
+{% endblock %}

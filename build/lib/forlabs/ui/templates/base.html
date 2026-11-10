@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}ForLabs{% endblock %} · ForLabs</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+{% block top %}
+<header class="top">
+  <a class="brand" href="/">ForLabs</a>
+  <nav class="nav" aria-label="Разделы">
+    <a data-tour="labs" href="/" class="{{ 'on' if nav == 'home' }}">Лабы</a>
+    <a data-tour="profiles" href="/profiles" class="{{ 'on' if nav == 'profiles' }}">Профили</a>
+    <a data-tour="semester" href="/semester" class="{{ 'on' if nav == 'semester' }}">Отчёт за семестр</a>
+    {% if show_rules %}<a data-tour="rules" href="/rules" class="{{ 'on' if nav == 'rules' }}">Правила</a>{% endif %}
+    <a data-tour="settings" href="/settings" class="{{ 'on' if nav == 'settings' }}">Настройки</a>
+    {% if ctx.cloud and user_email %}<a data-tour="support" href="/support" class="{{ 'on' if nav == 'support' }}">Поддержка{% if support_unread %} <span class="support-badge" title="Новый ответ">{{ support_unread }}</span>{% endif %}</a>{% endif %}
+    {% if member and member.role == 'admin' and member.approved %}<a href="/admin" class="{{ 'on' if nav == 'admin' }}">Админ</a>{% endif %}
+  </nav>
+  {% if ctx.cloud and user_email %}
+  <div class="who">
+    {% if member and member.role != 'admin' and member.approved %}
+      {% set st = member.access_state %}
+      {% if trial %}<span class="sub sub-{{ 'expiring' if st == 'expiring' or trial.labs_left == 0 else 'active' }}" title="Пробный доступ">Пробный доступ{% if member.access_until %} до {{ date_ru(member.access_until) }}{% endif %} · лаб: {{ trial.labs_used }} из {{ trial.labs_limit }}</span>
+      {% elif st in ('active', 'expiring') %}<span class="sub sub-{{ st }}" title="Срок подписки">Подписка до {{ date_ru(member.access_until) }}</span>
+      {% elif st == 'unlimited' %}<span class="sub" title="Срок подписки">Подписка без срока</span>{% endif %}
+    {% endif %}
+    <span>{{ user_email }}</span>
+    <form method="post" action="/logout"><button class="btn link small" type="submit">Выйти</button></form>
+    <form method="post" action="/logout" onsubmit="return confirm('Выйти и стереть с этого компьютера копию своих лаб и профилей? В облаке всё останется.')"><input type="hidden" name="wipe" value="1"><button class="btn link small" type="submit" title="Для общего компьютера в колледже">Выйти и стереть копию</button></form></div>
+  {% elif not ctx.cloud %}<div class="who">Локальный режим</div>{% endif %}
+</header>
+{% if ctx.notice %}<div class="offline-banner" role="status">{{ ctx.notice }}</div>{% endif %}
+{% if ctx.updater.enabled %}{% set upd = ctx.update_status() %}
+<aside class="update-toast" role="status" aria-live="polite" data-update data-state="{{ upd.state if upd else '' }}"
+       data-version="{{ upd.version if upd else '' }}"{{ '' if upd and not ctx.updater.dismissed else ' hidden' }}>
+  <div class="update-head"><b data-update-title>Доступно обновление</b>
+    <button class="update-x" type="button" data-update-later aria-label="Позже">
+      <svg width="10" height="10" viewBox="0 0 12 12" aria-hidden="true"><path d="M1 1l10 10M11 1L1 11" stroke="currentColor" stroke-width="1.4"/></svg></button></div>
+  <p class="update-text" data-update-text>ForLabs {{ upd.version if upd else '' }}{% if upd and upd.size_mb %} · {{ upd.size_mb }} МБ{% endif %}. Лабы, профили и настройки останутся.</p>
+  <span class="update-track" data-update-track hidden><span class="update-bar" data-update-bar></span></span>
+  <div class="update-actions" data-update-actions>
+    <button class="btn small" type="button" data-update-later>Позже</button>
+    <button class="btn small primary" type="button" data-update-go>Обновить</button>
+  </div>
+</aside>
+{% endif %}
+{% if ctx.cloud and ctx.store.offline %}
+<div class="offline-banner" role="status">Нет связи с облаком, показана копия с этого компьютера. Лабы можно смотреть и скачивать,
+  а выполнять и править — когда связь вернётся.</div>
+{% endif %}
+{% if member and member.role != 'admin' and member.approved and member.access_state == 'expired' %}
+<div class="sub-banner" role="alert">Подписка закончилась {{ date_ru(member.access_until) }}. Свои лабы можно смотреть и скачивать,
+  новые модель не выполнит. Чтобы продлить подписку, напиши администратору.</div>
+{% endif %}
+{% endblock %}
+{% block body %}{% endblock %}
+<script src="/static/app.js"></script>
+{% if show_tour %}<script src="/static/tour.js" defer></script>{% endif %}
+{% block scripts %}{% endblock %}
+</body>
+</html>
