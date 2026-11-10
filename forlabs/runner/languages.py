@@ -24,6 +24,7 @@ from urllib.parse import quote
 
 from forlabs import version
 from forlabs.core import paths
+from forlabs.runner import plan as plan_rules
 from forlabs.runner.plan import CODE_EXT, ProjectFile, ProjectPlan, validate
 
 WINDOWS = sys.platform == "win32"
@@ -797,6 +798,13 @@ def run_spec_for(plan: ProjectPlan, result: BuildResult | None, project_dir: Pat
     запускаемую). Каждая из нескольких программ запускается из своей папки."""
     d = Path(project_dir)
     if not plan.programs:
+        own = plan_rules.entry_of(plan, program) if program else None
+        if own and own != plan.entry:  # несколько программ одной папкой: запускается названный файл
+            kind = plan.kind
+            if plan.language == "java":  # оконный класс среди консольных и наоборот — по самому файлу
+                f = plan.file(own)
+                kind = "gui" if re.search(plan_rules.WINDOW_CODE["java"], f.content if f else "") else "console"
+            plan = plan.model_copy(update={"entry": own, "kind": kind})
         return run_spec(plan, result.artifact if result else None, d, tools)
     prog = plan.program(program) if program else None
     if prog is None or not prog.runs:

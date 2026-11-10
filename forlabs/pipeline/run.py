@@ -846,6 +846,12 @@ class Pipeline:
         fix — просьба из чата исправить программу: модель чинит файлы прежнего плана, затем обычная сборка."""
         from forlabs.pipeline import project as proj
 
+        if self.projects and st.report and plan is None and (engine := proj.engine_of(st)):
+            # код для Unity, Android Studio, Arduino: чужой проект вместо него не строим — причина остаётся у рисунков
+            if proj.mark_engine(st, engine):
+                self._emit(st, f"Проект {engine} ForLabs не собирает и не запускает: код — в листингах отчёта, "
+                               "снимки сделай сам", "warn", step="check")
+            return st
         if not self.projects or not st.report or (plan is None and not proj.needs_project(st)):
             return st
         emit = lambda text, kind="info": self._emit(st, text, kind, step="check")  # noqa: E731
@@ -897,8 +903,16 @@ class Pipeline:
                 st = proj.build_and_shoot(self, st, before, None, emit, retake=retake)
                 outcome = "broke"
             left = [f for f in self.slots(st)]
-            emit("Программа собрана" + (f". Снял сам: {self._auto_shots(st)}" if st.project.built else "")
-                 + (f", нужно от тебя: {len(left)}" if left else ""), "done" if st.project.built else "warn")
+            if st.project.built:
+                head = f"Программа собрана. Снял сам: {self._auto_shots(st)}"
+            elif st.project.missing:
+                head = "Программу не собирал: не хватает " + ", ".join(
+                    proj._tool_title(k) for k in st.project.missing)
+            elif st.project.blocked:
+                head = "Программу не собирал и не запускал: " + st.project.blocked[0].rstrip(".")
+            else:
+                head = "Программа не собралась: ошибки остались"
+            emit(head + (f", нужно от тебя: {len(left)}" if left else ""), "done" if st.project.built else "warn")
         except Exception as e:  # проект — помощь, а не условие: лаба собирается и без него
             logging.getLogger("forlabs").warning("Этап «Проект»: %s", e, exc_info=True)
             reason = str(getattr(e, "message_ru", None) or e)

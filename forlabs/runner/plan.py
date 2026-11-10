@@ -21,6 +21,10 @@ ENTRY_POINT = {
     "csharp": r"\bstatic\s+(?:async\s+)?(?:void|int|(?:System\.Threading\.Tasks\.)?Task(?:\s*<\s*int\s*>)?)\s+Main\s*\(",
     "cpp": r"^\s*(?:int|void)\s+(?:w?main|_tmain)\s*\(", "go": r"^\s*func\s+main\s*\(\s*\)",
 }  # Java здесь нет: пакеты со своими main собираются вместе и видят друг друга — это обычный единый проект
+# Языки, где файл с точкой входа запускается сам, без отдельной сборки под него: в одной папке может лежать
+# несколько программ (три класса с main, три скрипта), и снимок называет свой файл в program
+FILE_RUN_LANGS = ("java", "python", "javascript", "php")
+JAVA_MAIN = r"\bstatic\s+(?:final\s+)?(?:public\s+)?void\s+main\s*\("
 PROGRAM_NAME = re.compile(r"[^\W_][\w.\-]*")  # имя программы — и папка, и имя проекта в .csproj и .sln
 WINDOW_CODE = {"csharp": r"System\.Windows\.Forms|Application\.Run\s*\(|:\s*Form\b",
                "java": r"javax\.swing|java\.awt|javafx\."}
@@ -392,6 +396,71 @@ def _program_problems(plan: ProjectPlan) -> list[str]:
     return out
 
 
+def _used_by_others(lang: str, path: str, others: str) -> bool:
+    """Файл подключает другой файл проекта — значит, это модуль, а не отдельная программа."""
+    p = PurePosixPath(path)
+    stem, name = re.escape(p.stem), re.escape(p.name)
+    if lang == "python":
+        return bool(re.search(rf"^\s*(?:from\s+(?:[\w.]+\.)?{stem}\s+import\b|import\s+(?:[\w.]+\.)?{stem}\b|"
+                              rf"from\s+[\w.]+\s+import\s+[^\n]*\b{stem}\b)", others, re.M))
+    if lang == "javascript":
+        return bool(re.search(rf"""(?:require\(\s*|from\s+|import\s+)['"][./\w-]*{stem}(?:\.[cm]?js)?['"]""", others))
+    if lang == "php":
+        return bool(re.search(rf"""(?:include|require)(?:_once)?\s*\(?[^;\n]*['"/]{name}['"]""", others))
+    return False
+
+
+def entry_files(plan: ProjectPlan) -> list[str]:
+    """Файлы плана без programs, которые запускаются сами: классы Java с main; скрипты Python, JS и PHP, которые
+    не подключает другой файл. Главный файл плана — первым. Для остальных языков — только главный файл."""
+    lang = plan.language
+    if plan.programs or lang not in FILE_RUN_LANGS:
+        return [plan.entry] if plan.entry else []
+    code = [f for f in plan.files if PurePosixPath(f.path).suffix.lower() in CODE_EXT[lang]]
+    out = []
+    for f in code:
+        if lang == "java":
+            runs = bool(re.search(JAVA_MAIN, f.content))
+        else:
+            runs = not _used_by_others(lang, f.path, "\n".join(x.content for x in code if x is not f))
+        if runs or f.path == plan.entry:
+            out.append(f.path)
+    return sorted(out, key=lambda x: x != plan.entry)
+
+
+def entry_of(plan: ProjectPlan, name: str) -> str | None:
+    """Файл, названный в program снимка, когда programs в плане нет: по пути, имени файла или имени без
+    расширения (для Java — имя класса). None — такого запускаемого файла нет."""
+    want = (name or "").strip().replace("\\", "/").removeprefix("./").lower()
+    if not want:
+        return None
+    for path in entry_files(plan):
+        p = PurePosixPath(path)
+        if want in (path.lower(), p.name.lower(), p.stem.lower()):
+            return path
+    return None
+
+
+def shot_files(plan: ProjectPlan, sh: ShotPlan) -> list[ProjectFile]:
+    """Файлы программы, которую запускает снимок: своя папка и её библиотеки; у программ одной папкой — свой
+    файл и общие (без точки входа); у единственной программы — весь проект."""
+    prog = plan.program_of(sh)
+    if prog is not None:
+        return [f for p in (prog, *(plan.program(u) for u in prog.uses)) if p is not None for f in plan.files_of(p)]
+    runnable = entry_files(plan)
+    if len(runnable) < 2:
+        return list(plan.files)
+    own = entry_of(plan, sh.program) or plan.entry
+    return [f for f in plan.files if f.path == own or f.path not in runnable]
+
+
+# Оконная программа, которая сначала читает консоль: окно не появится, пока не введут данные, — снимок окна
+# его не дождётся
+WINDOW_KINDS = ("gui", "winforms", "wpf")
+CONSOLE_INPUT = {"java": r"System\s*\.\s*in\b", "csharp": r"Console\s*\.\s*Read(?:Line|Key)?\s*\(",
+                 "python": r"(?<![\w.])input\s*\("}
+
+
 def split_programs(plan: ProjectPlan) -> ProjectPlan:
     """План без programs, где у нескольких папок своя точка входа (библиотека и приложения, сложенные в один
     проект: такая сборка падает с «несколько точек входа»), — папки становятся программами. Делится только то, что
@@ -458,6 +527,14 @@ def validate(plan: ProjectPlan) -> list[str]:
     lang = plan.language
     if plan.programs:
         out += _program_problems(plan)
+    elif lang in FILE_RUN_LANGS and len(runnable := entry_files(plan)) > 1:
+        # несколько программ одной папкой: снимок с чужим именем молча запустил бы первую — и снял не то
+        for sh in plan.shots:
+            named = sh.program.strip()
+            if named and sh.mode in ("console", "window", "browser") and named.lower() != plan.name.lower() \
+                    and entry_of(plan, named) is None:
+                out.append(f"Снимок рисунка {sh.section}.{sh.block}: программы «{named}» в проекте нет — в program "
+                           f"укажи файл, который запускать ({', '.join(runnable)}), или убери program")
     if (p := _name_problem(plan.name)) is not None:
         out.append(p)
     if plan.kind not in KINDS[lang]:
@@ -510,6 +587,15 @@ def validate(plan: ProjectPlan) -> list[str]:
             for f in shot.open:
                 if plan.file(f) is None:
                     out.append(f"{where}: файла «{f}» нет в проекте")
+        if shot.mode == "window" and (reads := CONSOLE_INPUT.get(lang)):
+            code = "\n".join(f.content for f in shot_files(plan, shot)
+                             if PurePosixPath(f.path).suffix.lower() in CODE_EXT[lang])
+            prog = plan.program_of(shot)
+            windowed = (prog.kind if prog is not None else plan.kind) in WINDOW_KINDS
+            if windowed and re.search(reads, code):
+                out.append(f"{where}: программа сначала читает ввод с консоли, и окно не появится, пока данные не "
+                           "введут, — снимок окна его не дождётся. Задай данные в коде или вводи их в самом окне "
+                           "(поле, диалог), либо сними консоль (mode console)")
         for step in shot.steps:
             if step.action not in SHOT_ACTIONS:
                 out.append(f"{where}: неизвестное действие «{step.action}» (можно: {', '.join(SHOT_ACTIONS)})")

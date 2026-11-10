@@ -111,6 +111,8 @@ SHOT_RULES = """- mode "console": input — что набрать на клав�
   goal — что сделать (например «открыть Program.cs в редакторе, чтобы был виден метод Main»); open — файлы
   проекта, которые открыть при запуске (для Visual Studio — файл .csproj или .sln и нужный .cs); expect — что
   должно быть видно на снимке.
+  Программы из рисунка нет в этом списке (Eclipse, Unity, Selenium IDE…) — не подменяй её похожей: mode "manual"
+  с причиной «в программе … ForLabs работать не умеет».
 - mode "manual" + reason — только если снять может лишь студент: phpMyAdmin и сайты со входом, телефон, фото."""
 
 _AGENT_APPS = __import__("forlabs.agent.apps", fromlist=["APPS"]).APPS
@@ -356,9 +358,62 @@ def stale(st: LabState, plan: ProjectPlan | None = None) -> bool:
     return False
 
 
+# Код, который живёт только внутри своей среды: ForLabs его не собирает и не запускает. Раньше скрипт Unity
+# превращался в проект WinForms — чужую программу в папке сдачи и чужое окно под подписью «режим Play».
+ENGINES = {
+    "Unity": r"\bUnityEngine\b|\bMonoBehaviour\b|\bScriptableObject\b",
+    "Unreal Engine": r"#include\s+\"CoreMinimal\.h\"|\bUCLASS\s*\(|\bGENERATED_BODY\s*\(",
+    "Godot": r"\busing\s+Godot\s*;|^\s*extends\s+(?:Node\w*|Control|CharacterBody\dD|Area\dD|Sprite\dD)\b",
+    "Android": r"\bimport\s+androidx?\.|\bAppCompatActivity\b|\bsetContentView\s*\(",
+    "Arduino": r"\bvoid\s+loop\s*\(\s*\)[\s\S]*\b(?:pinMode|digitalWrite|analogRead|Serial\.)|"
+               r"\b(?:pinMode|digitalWrite|analogRead|Serial\.)[\s\S]*\bvoid\s+loop\s*\(\s*\)",
+}
+
+
+def engine_in(listings) -> str | None:
+    """Среда, без которой код листингов не собрать (Unity, Android Studio, Arduino…), или None."""
+    code = "\n".join(b.code or "" for b in listings)
+    return next((name for name, pat in ENGINES.items() if re.search(pat, code, re.M)), None)
+
+
+def engine_of(st: LabState) -> str | None:
+    return engine_in([b for _, _, b in _blocks(st) if isinstance(b, Listing)])
+
+
+def mark_engine(st: LabState, engine: str) -> bool:
+    """Рисункам без снимка — причина, по которой их делает студент. → изменилось ли что-то."""
+    changed = False
+    for _, _, b in _blocks(st):
+        if isinstance(b, Figure) and not b.image_path and not b.auto_note and b.app_task is None:
+            b.auto_note = (f"Этот снимок делаешь ты: проект {engine} ForLabs не собирает и не запускает. Код из "
+                           f"листингов перенеси в свой проект и сними окно сам.")
+            changed = True
+    return changed
+
+
+# Программы, в которых ForLabs работать не умеет: рисунок про них не отдаётся «ближайшей» из списка
+FOREIGN_APPS = ("Eclipse", "NetBeans", "Android Studio", "Unity", "Unreal Engine", "Qt Creator", "Sublime Text",
+                "WebStorm", "PhpStorm", "CLion", "Rider", "GoLand", "DataGrip", "Figma", "Photoshop", "GIMP",
+                "Blender", "AutoCAD", "КОМПАС", "MATLAB", "Wireshark", "VirtualBox", "VMware", "Postman",
+                "Selenium IDE", "pgAdmin", "phpMyAdmin", "DBeaver", "HeidiSQL", "OpenServer", "Denwer", "XAMPP",
+                "GitHub Desktop", "Jupyter", "Delphi", "Scratch", "Arduino IDE", "Proteus", "Multisim", "GNS3")
+
+
+def foreign_app(shot: ShotPlan, fig: Figure) -> str | None:
+    """Рисунок назван по программе, которой нет среди рабочих для ForLabs, а сценарий отдаёт его другой. →
+    название той программы; None — рисунок про выбранную программу или программа в нём не названа."""
+    text = f"{fig.topic} {fig.slot or ''}".lower()
+    chosen = _AGENT_APPS.get(shot.app)
+    if chosen is not None and chosen.title.lower() in text:
+        return None
+    return next((name for name in FOREIGN_APPS if re.search(rf"(?<!\w){re.escape(name.lower())}(?!\w)", text)), None)
+
+
 def needs_project(st: LabState) -> bool:
-    """Есть ли в отчёте программа: листинг на поддерживаемом языке."""
-    return any(isinstance(b, Listing) and (b.language or "").strip().lower() in CODE_LANGS for _, _, b in _blocks(st))
+    """Есть ли в отчёте программа, которую ForLabs соберёт сам: листинг на поддерживаемом языке и не код среды,
+    которой у ForLabs нет (Unity, Android, Arduino)."""
+    listings = [b for _, _, b in _blocks(st) if isinstance(b, Listing)]
+    return any((b.language or "").strip().lower() in CODE_LANGS for b in listings) and engine_in(listings) is None
 
 
 def lab_text(st: LabState) -> str:
@@ -500,7 +555,7 @@ def _assign_programs(plan: ProjectPlan) -> ProjectPlan:
     """Какую программу запускает снимок, если модель этого не сказала (или назвала библиотеку): ту, чей листинг
     стоит в отчёте над рисунком, затем любую из того же задания, иначе первую запускаемую."""
     if not plan.programs:
-        return plan
+        return _assign_entries(plan)
     main = plan.main_program()
     refs: dict[int, list[tuple[int, str]]] = {}
     for r in plan.listings:
@@ -520,9 +575,40 @@ def _assign_programs(plan: ProjectPlan) -> ProjectPlan:
     return plan.model_copy(update={"shots": shots})
 
 
+def _assign_entries(plan: ProjectPlan) -> ProjectPlan:
+    """Несколько программ одной папкой без programs (классы Java с main, скрипты): снимок запускает файл, чей
+    листинг стоит в отчёте над рисунком; названный моделью файл записывается его путём. Иначе — главный файл."""
+    runnable = plan_rules.entry_files(plan)
+    if len(runnable) < 2:
+        return plan
+    refs: dict[int, list[tuple[int, str]]] = {}
+    for r in plan.listings:
+        if r.file in runnable:
+            refs.setdefault(r.section, []).append((r.block, r.file))
+    shots = []
+    for sh in plan.shots:
+        if sh.mode not in ("console", "window", "browser"):
+            shots.append(sh)
+            continue
+        named = plan_rules.entry_of(plan, sh.program)
+        if named is None and not sh.program.strip():
+            near = sorted(refs.get(sh.section, []))
+            above = [path for block, path in near if block < sh.block]
+            named = above[-1] if above else near[0][1] if near else None
+        shots.append(sh if named is None or sh.program == named else sh.model_copy(update={"program": named}))
+    return plan.model_copy(update={"shots": shots})
+
+
+shot_files = plan_rules.shot_files
+
+
 def programs_text(plan: ProjectPlan) -> str:
     """Программы плана одной строкой — для запросов к модели."""
     if not plan.programs:
+        runnable = plan_rules.entry_files(plan)
+        if len(runnable) > 1:
+            return ("Programs нет, но запускаемых файлов несколько: " + ", ".join(runnable) + f" (главный — "
+                    f"{plan.entry}). Снимок называет свой файл в program.")
         return f"Программа одна (programs нет), главный файл: {plan.entry}."
     parts = []
     for prog in plan.programs:
@@ -592,10 +678,7 @@ def _quiet_console(plan: ProjectPlan) -> ProjectPlan:
     ext = plan_rules.CODE_EXT[plan.language]
 
     def reads_keyboard(sh: ShotPlan) -> bool:
-        prog = plan.program_of(sh)
-        files = plan.files
-        if prog is not None:  # своя программа и библиотеки, которые она подключает
-            files = [f for p in (prog, *(plan.program(u) for u in prog.uses)) if p is not None for f in plan.files_of(p)]
+        files = shot_files(plan, sh)  # своя программа и то, что она подключает
         return bool(re.search(reads, "\n".join(f.content for f in files if Path(f.path).suffix.lower() in ext)))
 
     shots = [sh.model_copy(update={"input": "", "steps": [x for x in sh.steps if x.action not in ("type", "key")]})
@@ -1077,6 +1160,10 @@ def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None, 
                     continue
                 b.need_tool = None
                 shot = shots.get((n, bi))
+                if shot is not None and shot.mode == "app" and (other := foreign_app(shot, b)):
+                    b.app_task = None
+                    b.auto_note = (f"Этот снимок делаешь ты: в программе {other} ForLabs работать не умеет.")
+                    continue
                 if shot is not None and shot.mode == "app":  # окно среды разработки и т.п. — агент, по кнопке
                     from forlabs.agent import apps as agent_apps
                     from forlabs.core.models import AppTask
@@ -1114,7 +1201,7 @@ def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None, 
                     b.auto_note = "Снимки окон ForLabs делает только в Windows."
                     continue
                 prog = plan.program_of(shot)
-                which = prog.name if prog is not None else ""
+                which = prog.name if prog is not None else (plan_rules.entry_of(plan, shot.program) or "")
                 if which not in specs:
                     specs[which] = languages.run_spec_for(plan, result, work, tools, which)
                 spec = specs[which]
@@ -1231,7 +1318,11 @@ def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None, 
             emit(f"Исправить не получилось ({getattr(e, 'message_ru', None) or e})", "warn")
             break
         # исправление проверяется до любых действий: опасным может быть и код, и ввод в сценарии (команды в консоли)
-        if fixed == plan or validate(fixed) or _blocked(pipe, fixed)[0]:
+        if fixed == plan:
+            emit("Исправить не получилось: модель не предложила изменений — снимок остаётся за тобой", "warn")
+            break
+        if (bad := validate(fixed)) or (bad := _blocked(pipe, fixed)[0]):
+            emit(f"Исправление не принято ({str(bad[0]).rstrip('.')[:200]}) — снимок остаётся за тобой", "warn")
             break
         if fixed.files == plan.files:  # поменялся только сценарий
             plan = fixed
