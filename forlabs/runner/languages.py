@@ -81,6 +81,7 @@ CSPROJ = """<Project Sdk="Microsoft.NET.Sdk">
 
 </Project>
 """
+LOG_PATH = re.compile(r"^(\s*)((?:[^\s:()\"'<>|*?\\]+\\)+[^\s:()\"'<>|*?\\]+\.\w+)(?=[(:])")  # «папка\\файл.cs(» в логе Windows
 NOISE = re.compile(r"\s*(?:Picked up (?:JAVA_TOOL_OPTIONS|_JAVA_OPTIONS|JDK_JAVA_OPTIONS)|No syntax errors detected|"
                    r"Errors parsing |Note: |Determining projects to restore|All projects are up-to-date|Restored |"
                    r"Build FAILED|Time Elapsed|\d+ (?:Warning|Error)\(s\)|MSBuild version|Node\.js v\d|"
@@ -577,6 +578,8 @@ def trim_log(text: str, project_dir: Path, drop: set[str] = frozenset(), max_lin
     seen: set[str] = set()
     for line in text.split("\n"):
         line = re.sub(r"\s*\[[^\]\n]*\.csproj\]\s*$", "", line.rstrip())
+        # путь файла в начале сообщения — как в проекте, с «/»: по нему модель и чат находят файл
+        line = LOG_PATH.sub(lambda m: m[1] + m[2].replace("\\", "/"), line)
         if NOISE.match(line) or line.strip() in drop:
             continue
         if re.search(r"\b(?:error|warning)\b", line, re.I):

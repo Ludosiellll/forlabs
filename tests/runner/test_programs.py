@@ -248,8 +248,9 @@ def test_library_and_apps_build_and_each_app_runs(tmp_path):
     assert r.ok, r.log
     assert set(r.artifacts) == {"ClassLibrary1", "CalculatorApp", "LibraryTestApp"}
     assert r.artifacts["ClassLibrary1"].name == "ClassLibrary1.dll"
-    assert "Сумма: 5" in run(p, r, d, "CalculatorApp") and "Проверка: True" in run(p, r, d, "LibraryTestApp")
-    assert "Сумма: 5" in run(p, r, d)  # программа не названа — первая запускаемая
+    # русские слова в выводе через перенаправление Windows отдаёт знаками «?» — сверяем то, что от кодировки не зависит
+    assert ": 5" in run(p, r, d, "CalculatorApp") and ": True" in run(p, r, d, "LibraryTestApp")
+    assert ": 5" in run(p, r, d)  # программа не названа — первая запускаемая
     assert (d / "Библиотека_калькулятора.sln").is_file() and not list(d.glob("*.csproj"))
 
 
@@ -320,3 +321,14 @@ def test_error_in_one_of_the_programs_is_reported_with_its_name(tmp_path):
     d = L.materialize(p, tmp_path / "Проект", TOOLS)
     r = L.build(d, p, TOOLS, 600)
     assert not r.ok and "second" in r.log and "main.cpp" in r.log and "first" not in r.log
+
+
+def test_build_log_names_files_the_way_the_project_does(tmp_path):
+    # Windows пишет пути с обратной чертой, а в проекте они с прямой: модель и чат ищут файл по пути из ошибки
+    msbuild = (f"{tmp_path}\\LibraryTestApp\\Program.cs(10,58): error CS0117: 'Calculator' does not contain a "
+               f"definition for 'Нет' [{tmp_path}\\LibraryTestApp\\LibraryTestApp.csproj]")
+    assert L.trim_log(msbuild, tmp_path).startswith("LibraryTestApp/Program.cs(10,58): error CS0117")
+    assert L.trim_log("second\\main.cpp:1:21: error: 'x' was not declared", tmp_path).startswith("second/main.cpp:1:21")
+    kept = L.trim_log("a\\b.cs(1,1): error CS1010: Newline in constant '\\n'", tmp_path)
+    assert kept.startswith("a/b.cs(1,1)") and "'\\n'" in kept  # текст сообщения не трогаем
+    assert L.trim_log("main.py:3: SyntaxError", tmp_path) == "main.py:3: SyntaxError"
