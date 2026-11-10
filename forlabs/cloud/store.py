@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import threading
 import time
 from datetime import timedelta
 from pathlib import Path
@@ -126,6 +127,78 @@ class CloudStore:
         self.offline = False
         self._offline_until = 0.0  # недавно не было связи: чтение с копией идёт сразу в копию
         self._memory_cache: dict[tuple[str, str], tuple[float, str]] = {}
+        self._cache: dict[tuple, tuple[float, object]] = {}  # ответы чтения для страниц (см. _cached)
+        self._cache_gen: dict[str, int] = {}
+        self._cache_lock = threading.Lock()
+        self._refreshing: set[tuple] = set()
+
+    # память чтения: переходы между страницами не ждут сеть
+    FRESH = 20.0  # секунд ответ облака считается свежим
+    KEEP = 1800.0  # устаревший ответ ещё отдаётся сразу, а свежий подтягивается следом в фоне
+
+    def _cached(self, tag: str, key: tuple, fetch):
+        """Чтение для страниц. Свежий ответ — из памяти; устаревший — тоже сразу, а обновление идёт в фоне; нет в
+        памяти — запрос. fetch возвращает None, когда связи нет: такое не запоминается. Свою запись видно сразу:
+        она сбрасывает память своего раздела (_forget). Состояние открытой лабы здесь не хранится — оно всегда
+        читается заново."""
+        k = (tag, self.auth.user_id, *key)
+        now = time.monotonic()
+        with self._cache_lock:
+            hit = self._cache.get(k)
+            gen = self._cache_gen.get(tag, 0)
+        recheck = self.offline and now >= self._offline_until  # считали, что связи нет: пора проверить облако
+        if hit is not None and now - hit[0] < self.KEEP and not recheck:
+            if now - hit[0] >= self.FRESH:
+                self._refresh(k, tag, gen, fetch)
+            return hit[1]
+        value = fetch()
+        self._remember(k, tag, gen, value)
+        if value is None and hit is not None:  # связи нет — прежний ответ лучше пустой страницы
+            return hit[1]
+        return value
+
+    def _remember(self, k: tuple, tag: str, gen: int, value) -> None:
+        if value is None:
+            return
+        with self._cache_lock:
+            if self._cache_gen.get(tag, 0) == gen:  # пока шёл запрос, раздел не меняли
+                self._cache[k] = (time.monotonic(), value)
+
+    def _refresh(self, k: tuple, tag: str, gen: int, fetch) -> None:
+        with self._cache_lock:
+            if k in self._refreshing:
+                return
+            self._refreshing.add(k)
+
+        def run() -> None:
+            try:
+                self._remember(k, tag, gen, fetch())
+            except Exception:  # noqa: BLE001 — обновление в фоне: не вышло — останется прежний ответ
+                pass
+            finally:
+                with self._cache_lock:
+                    self._refreshing.discard(k)
+
+        threading.Thread(target=run, daemon=True, name="cloud-refresh").start()
+
+    def _forget(self, tag: str | None = None) -> None:
+        """Своя запись: память раздела (или вся) сбрасывается, следующий переход читает облако."""
+        with self._cache_lock:
+            for k in [k for k in self._cache if tag is None or k[0] == tag]:
+                del self._cache[k]
+            for t in ([tag] if tag else list(self._cache_gen) + ["profiles", "labs", "subjects", "rules"]):
+                self._cache_gen[t] = self._cache_gen.get(t, 0) + 1
+
+    def together(self, *calls):
+        """Несколько запросов одновременно: страница ждёт самый долгий, а не сумму всех. → ответы по порядку."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        if len(calls) < 2:
+            return [c() for c in calls]
+        self.auth.access_token()  # вход обновляется один раз, до параллельных запросов
+        with ThreadPoolExecutor(max_workers=min(8, len(calls)), thread_name_prefix="cloud") as pool:
+            futures = [pool.submit(c) for c in calls]
+            return [f.result() for f in futures]
 
     # HTTP
     def _h(self, extra: dict | None = None) -> dict:
@@ -218,29 +291,35 @@ class CloudStore:
             return None
 
     def list_profiles(self) -> list[Profile]:
-        rows = self._read("student_profiles", {"select": "data", **self._mine()})
-        if rows is None:
+        def fetch():
+            rows = self._read("student_profiles", {"select": "data", **self._mine()})
+            if rows is None:
+                return None
+            profiles = sorted((Profile.model_validate(r["data"]) for r in rows), key=lambda p: p.full_name)
+            for p in profiles:
+                self._cache_profile(p)
+            return profiles
+
+        profiles = self._cached("profiles", ("list",), fetch)
+        if profiles is None:
             return self._cached_profiles()
-        profiles = sorted((Profile.model_validate(r["data"]) for r in rows), key=lambda p: p.full_name)
-        for p in profiles:
-            self._cache_profile(p)
-        return profiles
+        return [p.model_copy(deep=True) for p in profiles]  # копии: правка формы не меняет память до сохранения
 
     def get_profile(self, pid: str) -> Profile | None:
-        rows = self._read("student_profiles", {"select": "data", "id": f"eq.{pid}", **self._mine()})
-        if rows is None:
-            return next((p for p in self._cached_profiles() if p.id == pid), None)
-        p = Profile.model_validate(rows[0]["data"]) if rows else None
-        if p:
-            self._cache_profile(p)
-        return p
+        return next((p for p in self.list_profiles() if p.id == pid), None)
 
     def save_profile(self, p: Profile) -> None:
-        self._upsert("student_profiles", {"id": p.id, "data": p.model_dump(mode="json")}, "owner,id")
+        try:
+            self._upsert("student_profiles", {"id": p.id, "data": p.model_dump(mode="json")}, "owner,id")
+        finally:
+            self._forget("profiles")
         self._cache_profile(p)
 
     def delete_profile(self, pid: str) -> None:
-        self._rest("DELETE", "student_profiles", params={"id": f"eq.{pid}"})
+        try:
+            self._rest("DELETE", "student_profiles", params={"id": f"eq.{pid}"})
+        finally:
+            self._forget("profiles")
 
     # лабы
     def lab_dir(self, profile_id: str, subject_id: str, number: str) -> Path:
@@ -318,6 +397,7 @@ class CloudStore:
             raise
         st._attempted = None
         self._cache_lab(st)
+        self._patch_summaries(st.profile_id, st.subject_id, st.number, summarize(st))
 
     def load_lab(self, profile_id: str, subject_id: str, number: str, strict: bool = False) -> LabState | None:
         """strict — для решений и действий: без связи ошибка, а не копия с этого компьютера."""
@@ -338,20 +418,42 @@ class CloudStore:
             return self._cached_labs(profile_id, subject_id)
         return sorted((LabState.model_validate(r["state"]) for r in rows), key=lambda s: _number_key(s.number))
 
+    def _all_summaries(self) -> list[LabSummary] | None:
+        """Все свои лабы одной строкой каждая — одним запросом на все профили и предметы. None — связи нет."""
+        def fetch():
+            rows = self._read("labs", {"select": "profile_id,subject_id,number,status,updated:state->>updated_at,"
+                                                 "topic:state->spec->>topic", **self._mine()})
+            if rows is None:
+                return None
+            out = []
+            for r in rows:
+                state = r.get("state") or {}  # фейк в тестах отдаёт строку целиком
+                topic = r.get("topic") if "topic" in r else ((state.get("spec") or {}).get("topic"))
+                out.append(LabSummary(profile_id=r.get("profile_id") or state.get("profile_id") or "",
+                                      subject_id=r.get("subject_id") or state.get("subject_id") or "",
+                                      number=r["number"], status=r.get("status") or state.get("status") or "draft",
+                                      updated_at=r.get("updated") or state.get("updated_at") or "", topic=topic))
+            return out
+
+        return self._cached("labs", ("summaries",), fetch)
+
+    def _patch_summaries(self, profile_id: str, subject_id: str, number: str, new: LabSummary | None) -> None:
+        """Своя запись лабы (идёт выполнение, правка, удаление): список для главной меняется на месте, без запроса."""
+        k = ("labs", self.auth.user_id, "summaries")
+        with self._cache_lock:
+            hit = self._cache.get(k)
+            if hit is None:
+                return
+            rest = [x for x in hit[1] if (x.profile_id, x.subject_id, x.number) != (profile_id, subject_id, number)]
+            self._cache[k] = (hit[0], rest + ([new] if new is not None else []))
+
     def list_lab_summaries(self, profile_id: str, subject_id: str) -> list[LabSummary]:
         """Для главной: номер, статус, тема и дата — без полного состояния (отчёт, версии, методичка)."""
-        rows = self._read("labs", {"select": "number,status,updated:state->>updated_at,topic:state->spec->>topic",
-                                   **self._mine(), "profile_id": f"eq.{profile_id}", "subject_id": f"eq.{subject_id}"})
+        rows = self._all_summaries()
         if rows is None:
             return [summarize(x) for x in self._cached_labs(profile_id, subject_id)]
-        out = []
-        for r in rows:
-            state = r.get("state") or {}  # фейк в тестах отдаёт строку целиком
-            topic = r.get("topic") if "topic" in r else ((state.get("spec") or {}).get("topic"))
-            out.append(LabSummary(profile_id=profile_id, subject_id=subject_id, number=r["number"],
-                                  status=r.get("status") or state.get("status") or "draft",
-                                  updated_at=r.get("updated") or state.get("updated_at") or "", topic=topic))
-        return sorted(out, key=lambda x: _number_key(x.number))
+        return sorted((x for x in rows if x.profile_id == profile_id and x.subject_id == subject_id),
+                      key=lambda x: _number_key(x.number))
 
     def delete_lab(self, profile_id: str, subject_id: str, number: str) -> None:
         """Строка в базе, файлы в облаке и локальная копия: новая лаба с тем же номером начинается с чистого листа."""
@@ -359,6 +461,7 @@ class CloudStore:
 
         self._rest("DELETE", "labs", params={**self._mine(), "profile_id": f"eq.{profile_id}",
                                              "subject_id": f"eq.{subject_id}", "number": f"eq.{number}"})
+        self._patch_summaries(profile_id, subject_id, number, None)
         shutil.rmtree(self.lab_dir(profile_id, subject_id, number), ignore_errors=True)
         try:  # файлы — по возможности: без связи останутся в облаке, но лаба уже удалена
             prefix = storage_key(self.auth.user_id, profile_id, subject_id, number, "x").rsplit("/", 1)[0]
@@ -407,24 +510,39 @@ class CloudStore:
         self._memory_cache[(profile_id, subject_id)] = (time.monotonic(), text)
 
     def rule_overrides(self) -> dict[str, str]:
-        rows = self._rest("GET", "rule_overrides", params={"select": "path,text", **self._mine()}).json()
-        return {r["path"]: r["text"] for r in rows}
+        def fetch():
+            rows = self._rest("GET", "rule_overrides", params={"select": "path,text", **self._mine()}).json()
+            return {r["path"]: r["text"] for r in rows}
+
+        return dict(self._cached("rules", ("all",), fetch))
 
     def save_rule_override(self, path: str, text: str) -> None:
-        self._upsert("rule_overrides", {"path": path, "text": text}, "owner,path")
+        try:
+            self._upsert("rule_overrides", {"path": path, "text": text}, "owner,path")
+        finally:
+            self._forget("rules")
 
     def reset_rule_override(self, path: str) -> None:
-        self._rest("DELETE", "rule_overrides", params={"path": f"eq.{path}"})
+        try:
+            self._rest("DELETE", "rule_overrides", params={"path": f"eq.{path}"})
+        finally:
+            self._forget("rules")
 
     # свои предметы (общие для всех компьютеров аккаунта)
     def list_custom_subjects(self) -> list:
         from forlabs.core.subjects import Subject
 
-        rows = self._rest("GET", "custom_subjects", params={"select": "id,data", **self._mine()}).json()
-        return [Subject.model_validate(r["data"]) for r in rows]
+        def fetch():
+            rows = self._rest("GET", "custom_subjects", params={"select": "id,data", **self._mine()}).json()
+            return [Subject.model_validate(r["data"]) for r in rows]
+
+        return list(self._cached("subjects", ("list",), fetch))
 
     def save_custom_subject(self, subject) -> None:
-        self._upsert("custom_subjects", {"id": subject.id, "data": subject.model_dump(mode="json")}, "owner,id")
+        try:
+            self._upsert("custom_subjects", {"id": subject.id, "data": subject.model_dump(mode="json")}, "owner,id")
+        finally:
+            self._forget("subjects")
 
     # файлы
     def _storage(self, method: str, path: str, headers: dict | None = None, **kw) -> httpx.Response:
@@ -497,14 +615,22 @@ class CloudStore:
         было видно сразу); без связи — последнее известное значение, без пауз повторов."""
         cached = getattr(self, "_member_cache", None)
         at = getattr(self, "_member_at", (None, 0.0))
-        if (cached is not None and cached.approved and at[0] == self.auth.user_id
-                and time.monotonic() - at[1] < self.MEMBER_TTL):
+        uid = self.auth.user_id
+
+        def fetch():
+            rows = self._read("members", {"select": "*", "user_id": f"eq.{uid}"})
+            if rows is None:
+                return None
+            self._member_cache = Member.model_validate(rows[0]) if rows else None
+            self._member_at = (uid, time.monotonic())
+            return True
+
+        if cached is not None and cached.approved and at[0] == uid:
+            if time.monotonic() - at[1] >= self.MEMBER_TTL:  # прежнее значение сразу, свежее — в фоне
+                self._refresh(("member", uid), "member", self._cache_gen.get("member", 0), lambda: fetch() and None)
             return cached
-        rows = self._read("members", {"select": "*", "user_id": f"eq.{self.auth.user_id}"})
-        if rows is None:
+        if fetch() is None:
             return cached
-        self._member_cache = Member.model_validate(rows[0]) if rows else None
-        self._member_at = (self.auth.user_id, time.monotonic())
         return self._member_cache
 
     def list_members(self) -> list[Member]:
@@ -532,41 +658,48 @@ class CloudStore:
         return r.json() if r.content else None
 
     def admin_overview(self) -> AdminOverview:
-        members = self.list_members()
-        keys = {r["user_id"]: KeyInfo.model_validate(r) for r in self._rpc("admin_keys") or []}
-        daily = [(str(r["day"]), r["user_id"], int(r["tokens"])) for r in self._rpc("admin_usage_daily", {"days": 30}) or []]
+        members, key_rows, daily_rows, lab_rows, profile_rows, notes = self.together(
+            self.list_members,
+            lambda: self._rpc("admin_keys"),
+            lambda: self._rpc("admin_usage_daily", {"days": 30}),
+            lambda: self._rest("GET", "labs", params={"select": self._LAB_COLUMNS, "order": "created_at.desc"}).json(),
+            lambda: self._rest("GET", "student_profiles", params={"select": "owner,data"}).json(),
+            self._notes)
+        keys = {r["user_id"]: KeyInfo.model_validate(r) for r in key_rows or []}
+        daily = [(str(r["day"]), r["user_id"], int(r["tokens"])) for r in daily_rows or []]
         usage: dict[str, int] = {}
         for _, uid, tokens in daily:
             usage[uid] = usage.get(uid, 0) + tokens
-        labs = [LabRow.model_validate(r) for r in
-                self._rest("GET", "labs", params={"select": self._LAB_COLUMNS, "order": "created_at.desc"}).json()]
+        labs = [LabRow.model_validate(r) for r in lab_rows]
         profiles: dict[str, list[Profile]] = {}
-        for r in self._rest("GET", "student_profiles", params={"select": "owner,data"}).json():
+        for r in profile_rows:
             profiles.setdefault(r["owner"], []).append(Profile.model_validate(r["data"]))
-        notes = self._notes()
         for m in members:
             m.note = notes.get(m.user_id, "")
         return AdminOverview(members=members, keys=keys, usage_30d=usage, daily=daily, labs=labs, profiles=profiles)
 
     def admin_member(self, uid: str) -> MemberCard | None:
-        rows = self._rest("GET", "members", params={"select": "*", "user_id": f"eq.{uid}"}).json()
+        rows, key_rows, profile_rows, lab_rows, by_lab_rows, daily_rows, event_rows, notes = self.together(
+            lambda: self._rest("GET", "members", params={"select": "*", "user_id": f"eq.{uid}"}).json(),
+            lambda: self._rpc("admin_keys"),
+            lambda: self._rest("GET", "student_profiles", params={"select": "owner,data", "owner": f"eq.{uid}"}).json(),
+            lambda: self._rest("GET", "labs", params={"select": self._LAB_COLUMNS, "owner": f"eq.{uid}",
+                                                      "order": "created_at.desc"}).json(),
+            lambda: self._rpc("admin_usage_by_lab", {"target": uid}),
+            lambda: self._rpc("admin_usage_daily", {"days": 30}),
+            lambda: self._rest("GET", "member_events", params={"select": "*", "user_id": f"eq.{uid}",
+                                                               "order": "created_at.desc", "limit": "50"}).json(),
+            lambda: self._notes(uid))
         if not rows:
             return None
-        key = next((KeyInfo.model_validate(r) for r in self._rpc("admin_keys") or [] if r["user_id"] == uid), None)
-        profiles = [Profile.model_validate(r["data"]) for r in
-                    self._rest("GET", "student_profiles", params={"select": "owner,data", "owner": f"eq.{uid}"}).json()]
-        labs = [LabRow.model_validate(r) for r in
-                self._rest("GET", "labs", params={"select": self._LAB_COLUMNS, "owner": f"eq.{uid}",
-                                                  "order": "created_at.desc"}).json()]
-        by_lab = {r["lab"]: (int(r["tokens"]), int(r["calls"])) for r in
-                  self._rpc("admin_usage_by_lab", {"target": uid}) or []}
-        daily = [(str(r["day"]), int(r["tokens"])) for r in self._rpc("admin_usage_daily", {"days": 30}) or []
-                 if r["user_id"] == uid]
-        events = [MemberEvent.model_validate(r) for r in
-                  self._rest("GET", "member_events", params={"select": "*", "user_id": f"eq.{uid}",
-                                                             "order": "created_at.desc", "limit": "50"}).json()]
+        key = next((KeyInfo.model_validate(r) for r in key_rows or [] if r["user_id"] == uid), None)
+        profiles = [Profile.model_validate(r["data"]) for r in profile_rows]
+        labs = [LabRow.model_validate(r) for r in lab_rows]
+        by_lab = {r["lab"]: (int(r["tokens"]), int(r["calls"])) for r in by_lab_rows or []}
+        daily = [(str(r["day"]), int(r["tokens"])) for r in daily_rows or [] if r["user_id"] == uid]
+        events = [MemberEvent.model_validate(r) for r in event_rows]
         member = Member.model_validate(rows[0])
-        member.note = self._notes(uid).get(uid, "")
+        member.note = notes.get(uid, "")
         return MemberCard(member=member, key=key, profiles=profiles, labs=labs,
                           usage_by_lab=by_lab, daily=daily, events=events)
 
@@ -616,21 +749,28 @@ class CloudStore:
             return None
         cache = self.__dict__.setdefault("_trial_cache", {})
         hit = cache.get(member.user_id)
-        if hit and time.monotonic() - hit[0] < self.TRIAL_TTL:
+
+        def fetch():
+            if time.monotonic() < self._offline_until:
+                return None
+            try:
+                r = self._rest("POST", "rpc/trial_usage", json={"target": member.user_id}, retries=False)
+                rows = r.json() if r.content else []
+            except CloudError as e:
+                if e.offline:
+                    self.offline, self._offline_until = True, time.monotonic() + OFFLINE_HOLD
+                return None
+            usage = TrialUsage(labs_limit=member.trial_labs, chat_limit=member.trial_chat or 0,
+                               rows=[TrialRow.model_validate(x) for x in rows or []])
+            cache[member.user_id] = (time.monotonic(), usage)
+            return usage
+
+        if hit and (hit[1].labs_limit, hit[1].chat_limit) == (member.trial_labs, member.trial_chat or 0):
+            if time.monotonic() - hit[0] >= self.TRIAL_TTL:  # прежний расход сразу, свежий — в фоне
+                self._refresh(("trial", member.user_id), "trial", self._cache_gen.get("trial", 0),
+                              lambda: fetch() and None)
             return hit[1]
-        if time.monotonic() < self._offline_until:
-            return None
-        try:
-            r = self._rest("POST", "rpc/trial_usage", json={"target": member.user_id}, retries=False)
-            rows = r.json() if r.content else []
-        except CloudError as e:
-            if e.offline:
-                self.offline, self._offline_until = True, time.monotonic() + OFFLINE_HOLD
-            return None
-        usage = TrialUsage(labs_limit=member.trial_labs, chat_limit=member.trial_chat or 0,
-                           rows=[TrialRow.model_validate(x) for x in rows or []])
-        cache[member.user_id] = (time.monotonic(), usage)
-        return usage
+        return fetch()
 
     def admin_revoke(self, uid: str) -> None:
         self.admin_update_member(uid, access_until=now_utc().isoformat())

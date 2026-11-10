@@ -181,6 +181,28 @@
   }
 })();
 
+// переход по вкладке виден сразу: вкладка подсвечивается и сверху бежит полоска, пока страница грузится
+(function () {
+  document.addEventListener("click", function (e) {
+    var a = e.target.closest && e.target.closest(".nav a, a[data-go]");
+    if (!a || e.defaultPrevented || e.button || e.ctrlKey || e.metaKey || e.shiftKey || a.target === "_blank") return;
+    document.querySelectorAll(".nav a.on").forEach(function (x) { x.classList.remove("on"); });
+    if (a.closest(".nav")) a.classList.add("on");
+    document.documentElement.classList.add("nav-going");
+  });
+  window.addEventListener("pageshow", function () { document.documentElement.classList.remove("nav-going"); });
+})();
+
+// «Настройки»: остаток на ключе подгружается после показа страницы
+(function () {
+  var el = document.querySelector("[data-my-balance]");
+  if (!el) return;
+  fetch(el.getAttribute("data-my-balance")).then(function (r) { return r.json(); }).then(function (d) {
+    el.textContent = d.text || "Остаток сейчас не узнать.";
+    el.classList.toggle("muted", d.state !== "ok");
+  }).catch(function () { el.textContent = "Остаток сейчас не узнать: нет связи."; });
+})();
+
 // админ-панель: остатки на ключах (подгружаются после открытия страницы), подсказки графиков, строки-ссылки
 (function () {
   var root = document.querySelector("[data-balances]");

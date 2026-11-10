@@ -8,13 +8,7 @@
   <section class="pane sub-pane" aria-label="Подписка и ключ">
     <h2>Подписка и ключ</h2>
     <p class="small">Подписка: <b>{{ access_text(member) }}</b></p>
-    {% if balance_state == 'ok' %}
-      <p class="small">Остаток на твоём ключе: <b>{{ fmt_tokens(my_balance) }}</b> токенов, {{ labs_estimate(my_balance) }}.</p>
-    {% elif balance_state == 'no_key' %}
-      <p class="small muted">Свой ключ ещё не выдан{{ ', работа идёт через общий' if member.allow_shared_key }}. Ключи выдаёт администратор.</p>
-    {% else %}
-      <p class="small muted">Остаток сейчас не узнать: нет связи с облаком.</p>
-    {% endif %}
+    <p class="small muted" data-my-balance="/settings/balance">Остаток на ключе: узнаю…</p>
   </section>
   {% endif %}
   <form method="post" action="/settings">

@@ -223,7 +223,17 @@ def register_admin(app: FastAPI, ctx, render, redirect) -> None:
         me = current_admin()
         if me is None:
             return home()
-        ov = ctx.store.admin_overview()
+        def support_status():
+            try:  # не подключён Telegram — сообщения студентов не доходят до администратора, видно сразу
+                from forlabs.cloud.support import Support
+
+                return Support(ctx.store).status()[0]
+            except Exception:  # noqa: BLE001
+                return None
+
+        # всё, что нужно странице, — одновременно: она ждёт самый долгий запрос, а не их сумму
+        ov, shared, telegram_ok = ctx.store.together(ctx.store.admin_overview, ctx.store.admin_shared_key,
+                                                     support_status)
         days = last_days()
         colors = member_colors(ov.members)
         series = daily_series(ov.daily, colors, days)
@@ -244,13 +254,6 @@ def register_admin(app: FastAPI, ctx, render, redirect) -> None:
                          "access": access_text(m), "is_me": m.user_id == me.user_id,
                          "seen": ago(m.last_seen_at)})
         active = sum(1 for m in ov.members if m.access_state in ("active", "expiring", "unlimited"))
-        shared = ctx.store.admin_shared_key()
-        try:  # не подключён Telegram — сообщения студентов не доходят до администратора, видно сразу
-            from forlabs.cloud.support import Support
-
-            telegram_ok = Support(ctx.store).status()[0]
-        except Exception:
-            telegram_ok = None
         return render(request, "admin.html", nav="admin", me=me, rows=rows, active=active, telegram_ok=telegram_ok,
                       shared_key=shared, shared_set=date_ru(shared[1]) if shared and shared[1] else "",
                       total_30=sum(ov.usage_30d.values()), labs_30=len(labs_30),

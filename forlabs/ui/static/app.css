@@ -43,6 +43,11 @@ p { margin: 0 0 10px; }
 /* верхняя полоса */
 .top { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; padding: 10px 20px;
   border-bottom: 1px solid var(--line); background: var(--bg); position: sticky; top: 0; z-index: 5; }
+/* страница грузится после щелчка по вкладке: тонкая полоска под шапкой */
+.nav-going .top::after { content: ""; position: absolute; left: 0; bottom: -2px; height: 2px; width: 30%;
+  background: var(--accent); animation: nav-going 1s ease-in-out infinite; }
+@keyframes nav-going { 0% { transform: translateX(-100%); } 100% { transform: translateX(340%); } }
+@media (prefers-reduced-motion: reduce) { .nav-going .top::after { animation: none; width: 100%; } }
 .brand { font-weight: 600; font-size: 16px; color: var(--ink); text-decoration: none; margin-right: 6px; }
 .nav { display: flex; flex-wrap: wrap; gap: 2px; flex: 1; }
 .nav a { color: var(--muted); text-decoration: none; padding: 6px 10px; border-radius: var(--radius); }

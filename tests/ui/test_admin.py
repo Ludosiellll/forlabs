@@ -165,7 +165,8 @@ def test_member_sees_subscription_in_header(fake, tmp_home):
 def test_member_sees_own_balance(fake, tmp_home):
     client = make_client(fake, tmp_home, me="member")
     fake.balance[UID] = 1500
-    assert "1 500" in client.get("/settings").text
+    assert "data-my-balance" in client.get("/settings").text  # страница не ждёт остаток: он подгружается следом
+    assert "1 500" in client.get("/settings/balance").json()["text"]
 
 
 def test_member_color_is_the_same_on_overview_and_card(admin):
@@ -212,11 +213,11 @@ def test_admin_balances_offline_vs_no_key(admin, fake):
 def test_member_settings_offline_is_not_no_key(fake, tmp_home):
     client = make_client(fake, tmp_home, me="member")
     fake.functions_down = True
-    page = client.get("/settings").text
-    assert "нет связи" in page and "ещё не выдан" not in page
+    text = client.get("/settings/balance").json()["text"]
+    assert "нет связи" in text and "не выдан" not in text
     fake.functions_down = False
     fake.balance_errors = {UID: "no key"}
-    assert "ещё не выдан" in client.get("/settings").text
+    assert "не выдан" in client.get("/settings/balance").json()["text"]
 
 
 def test_admin_cannot_change_own_access(admin, fake):

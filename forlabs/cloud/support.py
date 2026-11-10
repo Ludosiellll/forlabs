@@ -152,16 +152,26 @@ class Support:
         import time
 
         cached = getattr(self.s, "_support_unread", None)
-        if cached and time.monotonic() - cached[0] < UNREAD_TTL:
-            return cached[1]
-        try:
-            rows = self.s._read("support_messages", {"select": "id", "user_id": f"eq.{self.s.auth.user_id}",
-                                                     "from_admin": "eq.true", "read_at": "is.null", "limit": "20"})
-        except CloudError:
-            rows = []
-        n = len(rows or [])
-        self.s._support_unread = (time.monotonic(), n)
-        return n
+        uid = self.s.auth.user_id
+
+        def fetch() -> int:
+            try:
+                rows = self.s._read("support_messages", {"select": "id", "user_id": f"eq.{uid}",
+                                                         "from_admin": "eq.true", "read_at": "is.null", "limit": "20"})
+            except CloudError:
+                rows = []
+            n = len(rows or [])
+            self.s._support_unread = (time.monotonic(), n)
+            return n
+
+        if cached and UNREAD_TTL > 0:
+            if time.monotonic() - cached[0] >= UNREAD_TTL and hasattr(self.s, "_refresh"):
+                # страница не ждёт: значок покажет прежнее число, свежее придёт к следующему переходу
+                self.s._refresh(("unread", uid), "unread", 0, lambda: fetch() and None)
+                return cached[1]
+            if time.monotonic() - cached[0] < UNREAD_TTL:
+                return cached[1]
+        return fetch()
 
     def mark_read(self) -> None:
         self.s._rpc("support_mark_read")

@@ -1152,12 +1152,6 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
     # настройки
     @app.get("/settings", response_class=HTMLResponse)
     def settings_page(request: Request):
-        my_balance, balance_state = None, "offline"
-        if ctx.cloud and ctx.auth.session:
-            try:
-                my_balance, balance_state = ctx.store.my_balance()
-            except CloudError:
-                pass
         admin = can_tune_model()
         try:  # программы для лаб — студенту тоже: это его компьютер
             lab_tools = list(ctx.tools.status()["tools"].values())
@@ -1170,8 +1164,29 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
                       lab_tools=lab_tools,
                       show_mode=not _version.frozen() and admin, show_model=admin,
                       word=word_com.available(), soffice=libreoffice.find_soffice(ctx.settings.soffice_path),
-                      nav="settings", my_balance=my_balance, balance_state=balance_state,
-                      model_choices=MODEL_CHOICES)
+                      nav="settings", model_choices=MODEL_CHOICES)
+
+    @app.get("/settings/balance")
+    def settings_balance():
+        """Остаток на ключе: страница «Настройки» показывается сразу, а остаток (запрос к провайдеру ключа через
+        сервер — самый долгий) подгружается следом."""
+        if not (ctx.cloud and ctx.auth.session):
+            return JSONResponse({"error": "только в облачном режиме"}, status_code=404)
+        try:
+            balance, state = ctx.store.my_balance()
+        except CloudError:
+            balance, state = None, "offline"
+        if state == "ok":
+            text = f"Остаток на ключе: {fmt_tokens(balance)} токенов, {labs_estimate(balance)}."
+        elif state == "no_key":
+            try:
+                shared = bool(ctx.store.member().allow_shared_key)
+            except Exception:  # noqa: BLE001
+                shared = False
+            text = "Свой ключ не выдан" + (", работа идёт через общий." if shared else ". Ключи выдаёт администратор.")
+        else:
+            text = "Остаток сейчас не узнать: нет связи."
+        return {"state": state, "text": text}
 
     def can_tune_model() -> bool:
         """Режим, модель, адрес API и ключ: в облаке — только администратор (студент не уйдёт мимо подписки)."""
