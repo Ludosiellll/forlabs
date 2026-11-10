@@ -187,6 +187,35 @@ def reveal(page, expect: str) -> bool:
     return _seen(want, page_state(page))
 
 
+POSITIONING = ("scroll", "hover")  # шаги, которыми сценарий сам выбрал, что будет в кадре
+
+
+def check_expect(page, expect: str, steps, typed: str = "") -> tuple[bool, str]:
+    """Есть ли ожидаемое и что сейчас видно. Сценарий сам навёл или прокрутил — страница остаётся как есть, а
+    ожидаемому достаточно быть на странице; иначе текст ниже экрана прокручивается в кадр и должен быть виден.
+    typed — что сценарий набрал сам: значение в поле ещё не результат."""
+    from forlabs.runner.shots import shown
+
+    def action(s) -> str:
+        return ((s.get("action") if isinstance(s, dict) else getattr(s, "action", "")) or "").lower()
+
+    want = " ".join((expect or "").split())
+    if not want:
+        return True, page_state(page)
+    if any(action(s) in POSITIONING for s in steps or []):
+        state = page_state(page)
+        if shown(want, state, typed):
+            return True, state
+        try:
+            whole = page.evaluate("() => (document.body ? document.body.innerText : '') + ' ' + document.title")
+        except Exception:  # noqa: BLE001
+            whole = ""
+        return shown(want, whole, typed), state
+    reveal(page, want)
+    state = page_state(page)
+    return shown(want, state, typed), state
+
+
 def _seen(want: str, state: str) -> bool:
     squash = lambda x: re.sub(r"\s+", "", x).lower()  # noqa: E731
     return squash(want) in squash(state)

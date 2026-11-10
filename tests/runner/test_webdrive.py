@@ -201,3 +201,29 @@ def test_steps_that_need_the_page_driver():
     assert needs_page_driver([step("hover", ".btn")]) and needs_page_driver([step("scroll", "", "300")])
     assert needs_page_driver([step("open", "", "about.html")])
     assert not needs_page_driver([step("set", "id:a", "1"), step("click", "OK")]) and not needs_page_driver([])
+
+
+def test_expected_text_elsewhere_on_the_page_does_not_undo_a_deliberate_scroll(page):
+    # сценарий сам прокрутил к слайдеру, а expect назвал текст из шапки: страница остаётся на слайдере
+    steps = [step("scroll", "id:slider")]
+    webdrive.perform(page, steps)
+    y = page.evaluate("scrollY")
+    ok, seen = webdrive.check_expect(page, "Кофейня «Зерно»", steps)
+    assert ok and page.evaluate("scrollY") == y and "Латте с корицей" in seen
+    ok, _ = webdrive.check_expect(page, "Такого текста на странице нет", steps)
+    assert not ok
+
+
+def test_without_positioning_steps_the_expected_text_is_scrolled_into_view(page):
+    ok, seen = webdrive.check_expect(page, "Латте с корицей", [])
+    assert ok and "Латте с корицей" in seen and page.evaluate("scrollY") > 0
+
+
+def test_value_the_scenario_typed_itself_is_not_a_result(page):
+    # в поле набрали 4 — это ещё не «на странице появилось 4»
+    steps = [step("set", "id:guests", "4")]
+    webdrive.perform(page, steps)
+    ok, _ = webdrive.check_expect(page, "4", steps, typed="4")
+    assert not ok
+    ok, _ = webdrive.check_expect(page, "Кофейня", steps, typed="4")
+    assert ok

@@ -566,9 +566,10 @@ class WindowsShooter:
                     except webdrive.StepError as e:
                         state = webdrive.page_state(page)[-4000:]
                         return ShotResult(False, reason=str(e), seen=state, kind="ui", ui=state)
-                    if expect:
-                        webdrive.reveal(page, expect)  # ожидаемое ниже экрана — прокрутить к нему
-                    seen = webdrive.page_state(page)
+                    found, seen = webdrive.check_expect(page, expect, steps, typed_text(shot))
+                    if expect and not found:
+                        return ShotResult(False, reason=f"на странице нет ожидаемого «{expect}»", seen=seen[-4000:],
+                                          kind="expect")
                 if seen is None and needs_page_driver(steps):
                     return ShotResult(False, reason="не получилось управлять страницей в браузере (наведение и "
                                                     "прокрутка): сделай этот снимок сам")
@@ -593,7 +594,7 @@ class WindowsShooter:
                     time.sleep(2.0)  # страница после отправки формы
                 if seen is None:
                     seen = _texts_with_timeout(w.hwnd) if (steps or expect) else w.title
-                if expect and seen and not shown(expect, seen, typed_text(shot)):
+                if page is None and expect and seen and not shown(expect, seen, typed_text(shot)):
                     return ShotResult(False, reason=f"на странице нет ожидаемого «{expect}»", seen=seen[-4000:],
                                       kind="expect")
                 img = winapi.capture(w.hwnd)
