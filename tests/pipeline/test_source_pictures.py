@@ -88,3 +88,24 @@ def test_photo_methodology_that_could_not_be_read_says_why(tmp_home, tmp_path, m
     st = pipe.parse(st, date="24.09.2026")
     assert st.status == "failed" and "картинк" in st.error.lower() and ".." not in st.error
     assert len(fake.calls) == 1  # разбор без текста не запускается
+
+
+def test_theory_illustrations_cost_nothing_at_parse(tmp_home, tmp_path):
+    d = Document()
+    d.add_paragraph("Лабораторная работа №7")
+    d.add_paragraph("Тема работы: Создание визуальных эффектов и анимации на HTML странице")
+    d.add_paragraph("Основные теоретические сведения")
+    d.add_paragraph("Псевдокласс hover меняет вид элемента при наведении курсора. " * 30)
+    d.add_picture(io.BytesIO(png(color=(10, 20, 30))), width=Inches(2))
+    d.add_paragraph("Порядок выполнения работы")
+    d.add_paragraph("Создайте 2 простых анимации к выбранной тематике.")
+    d.add_paragraph("Создайте анимацию с эффектом параллакса.")
+    d.add_paragraph("Hover-эффекты и их применение.")
+    buf = io.BytesIO()
+    d.save(buf)
+    pipe, fake = setup(tmp_home, tmp_path, [RAW])  # запроса на картинки нет: разбор — единственный
+    st = pipe.create_lab("ivanov", "psip", [("m.docx", buf.getvalue())])
+    st = pipe.parse(st, date="24.09.2026")
+    assert st.status == "parsed" and len(fake.calls) == 1
+    assert "[[картинка" not in st.spec.source_text and "Картинка в методичке" not in st.spec.source_text
+    assert not [f for f in st.findings if f.rule_id == "spec.pictures_unread"]

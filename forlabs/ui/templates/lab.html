@@ -27,6 +27,7 @@
       {% endif %}
       {% if pr.programs %}<p class="small muted">Программ в проекте: {{ pr.programs|length }} — {{ pr.programs|join(', ') }}. У каждой своя папка{% if pr.language == 'csharp' %}; в Visual Studio открой файл .sln из папки проекта, в нём все сразу{% endif %}.</p>{% endif %}
       {% if pr.blocked %}<p class="small muted">Сам не запускал: {{ pr.blocked[0] }}</p>{% endif %}
+      {% if pr.placeholders %}<p class="small muted">Картинки сайта — заглушки: {{ pr.placeholders|join(', ') }}. Положи свои с теми же именами в папку проекта и нажми «Пересобрать».</p>{% endif %}
       {% if pr.note and not pr.built and not pr.missing %}<p class="small muted">{{ pr.note }}</p>{% endif %}
       {% if pr.build_log and not pr.built %}
       <details class="build-log"><summary>Ошибки сборки</summary>
@@ -158,7 +159,8 @@
           {% if st.status in ('parsed', 'confirmed') %}
             <h2>Разбор готов</h2>
             <div class="row"><a class="btn" href="{{ base_url }}?tab=spec">Проверить разбор</a>
-              <form method="post" action="{{ base_url }}/execute"><button class="btn primary" type="submit">Выполнить</button></form></div>
+              <form method="post" action="{{ base_url }}/execute"><button class="btn primary" type="submit">Выполнить</button></form>
+              {% if st.findings|selectattr('rule_id', 'equalto', 'spec.pictures_unread')|list %}<form method="post" action="{{ base_url }}/reparse"><button class="btn" type="submit">Прочитать картинки ещё раз</button></form>{% endif %}</div>
           {% elif st.status == 'draft' %}
             <h2>Методичка ещё не разобрана</h2>
             <form method="post" action="{{ base_url }}/reparse"><button class="btn primary" type="submit">Разобрать</button></form>

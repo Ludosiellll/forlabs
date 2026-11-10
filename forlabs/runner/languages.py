@@ -465,6 +465,64 @@ def templates(plan: ProjectPlan, tools: Mapping[str, Toolchain] | None = None) -
     return {}
 
 
+# размеры заглушек по тому, для чего картинка (по имени файла): фон, слайд, значок, обычная
+_PLACEHOLDER_SIZES = [(r"bg|back|fon|hero|banner|parallax|cover|header", (1600, 900)),
+                      (r"slide|slider|carousel|gallery|photo|foto", (1200, 700)),
+                      (r"icon|ico|logo|emblem|avatar|favicon|arrow|btn", (128, 128))]
+_PALETTE = [((93, 64, 55), (188, 143, 113)), ((38, 70, 83), (130, 180, 190)), ((69, 90, 100), (176, 190, 197)),
+            ((85, 107, 47), (190, 205, 150)), ((120, 81, 169), (200, 180, 225)), ((166, 77, 61), (236, 190, 160))]
+
+
+def _placeholder(rel: str) -> bytes:
+    """Картинка-заглушка: плавный переход двух спокойных цветов (цвета — по имени файла, у разных файлов разные)."""
+    import hashlib
+    import io
+
+    from PIL import Image
+
+    p = PurePosixPath(rel)
+    name = p.stem.lower()
+    size = next((wh for pat, wh in _PLACEHOLDER_SIZES if re.search(pat, name)), (800, 500))
+    a, b = _PALETTE[int(hashlib.sha256(rel.lower().encode("utf-8")).hexdigest(), 16) % len(_PALETTE)]
+    w, h = size
+    row = Image.new("RGB", (256, 1))
+    row.putdata([tuple(a[i] + (b[i] - a[i]) * x // 255 for i in range(3)) for x in range(256)])
+    img = row.resize((w, h))
+    out = io.BytesIO()
+    ext = p.suffix.lower()
+    if ext in (".jpg", ".jpeg"):
+        img.save(out, "JPEG", quality=85)
+    elif ext == ".gif":
+        img.save(out, "GIF")
+    elif ext == ".webp":
+        img.save(out, "WEBP")
+    elif ext == ".bmp":
+        img.save(out, "BMP")
+    elif ext == ".ico":
+        img.resize((64, 64)).save(out, "ICO")
+    else:
+        img.save(out, "PNG")
+    return out.getvalue()
+
+
+def write_placeholders(plan: ProjectPlan, project_dir: Path | str) -> list[str]:
+    """Картинки, на которые ссылается сайт, а в проекте их нет: кладёт заглушки (настоящих картинок у ForLabs нет,
+    а без файла на странице был бы значок битой картинки). Готовые файлы не трогает. → что положил."""
+    d = Path(project_dir)
+    made = []
+    for rel in plan_rules.missing_images(plan):
+        p = d.joinpath(*rel.split("/"))
+        if p.exists():
+            continue
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(_placeholder(rel))
+            made.append(rel)
+        except (OSError, ValueError):
+            continue
+    return made
+
+
 def materialize(plan: ProjectPlan, project_dir: Path | str, tools: Mapping[str, Toolchain] | None = None) -> Path:
     """Пишет файлы проекта и файлы сборки ForLabs в пустую (или новую) папку. План сначала проверяется."""
     if problems := validate(plan):
@@ -482,6 +540,7 @@ def materialize(plan: ProjectPlan, project_dir: Path | str, tools: Mapping[str, 
         if PurePosixPath(rel).suffix.lower() in BOM_EXT | {".sln"} and not text.startswith("\ufeff"):
             data = b"\xef\xbb\xbf" + data
         p.write_bytes(data)
+    write_placeholders(plan, d)
     return d
 
 

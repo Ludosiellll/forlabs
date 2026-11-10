@@ -7,6 +7,7 @@ import base64
 import hashlib
 import io
 import re
+import time
 from pathlib import Path
 
 from PIL import Image, ImageOps, UnidentifiedImageError
@@ -66,6 +67,8 @@ def describe_images(paths: list[Path], llm) -> str:
 MAX_SOURCE_PICTURES = 16  # новых картинок за один разбор: дальше дорого, остаток помечается непрочитанным
 SOURCE_BATCH = 4
 SOURCE_WORKERS = 3  # пачек одновременно
+PICTURES_DEADLINE = 150.0  # секунд на все картинки методички: сервер иногда читает одну минутами
+PICTURE_TOKENS = 1500  # на ответ по одной картинке: страница текста помещается, зацикленный ответ — нет
 UNREAD_PICTURE = "[Картинка в методичке — прочитать не удалось]"
 
 SOURCE_SYSTEM = """Тебе дают картинки из методички лабораторной работы колледжа: снимки кода, запросов и команд,
@@ -99,8 +102,43 @@ def _ask_pictures(jpegs: list[bytes], llm) -> list[str] | None:
     content = [{"type": "text", "text": f"Картинок: {len(jpegs)}. Верни содержание каждой."}]
     content += [_jpeg_part(j) for j in jpegs]
     got: SourcePictures = llm.json([{"role": "system", "content": SOURCE_SYSTEM}, {"role": "user", "content": content}],
-                                   SourcePictures, repairs=1, temperature=0.0)
+                                   SourcePictures, repairs=1, temperature=0.0,
+                                   max_tokens=PICTURE_TOKENS * len(jpegs) + 500)
     return got.pictures if len(got.pictures) == len(jpegs) else None
+
+
+# Раздел теории и начало заданий: картинки между ними — иллюстрации к примерам. Сервер читает картинку десятки
+# секунд, поэтому читается то, от чего зависит работа: картинки в заданиях, вариантах, вопросах и сканы страниц.
+_THEORY = re.compile(r"^[ \t]*(?:\d+[.)]?[ \t]*)?(?:Краткие[ \t]+|Основные[ \t]+|Общие[ \t]+)?(?:теоретическ\w+[ \t]+"
+                     r"(?:сведения|часть|материал\w*|положения)|сведения[ \t]+из[ \t]+теории|краткая[ \t]+теория|"
+                     r"методические[ \t]+указания|теория)\b", re.IGNORECASE | re.MULTILINE)
+_TASKS = re.compile(r"^[ \t]*(?:\d+[.)]?[ \t]*)?(?:порядок[ \t]+выполнения|ход[ \t]+(?:работы|выполнения)|"
+                    r"практическ\w+[ \t]+(?:часть|задани\w+)|индивидуальн\w+[ \t]+задани\w+|"
+                    r"задани[ея][ \t]*(?:№[ \t]*)?1\b|задания[ \t]*(?:для|к|на)\b|задания[ \t]*:?[ \t]*$|"
+                    r"содержание[ \t]+работы)", re.IGNORECASE | re.MULTILINE)
+THEORY_TEXT_MIN = 800  # знаков своего текста в теории: меньше — теория дана картинками, их надо читать
+
+
+def worth_reading(text: str, pictures: list) -> set[int]:
+    """Номера картинок (с нуля), которые стоит читать. Иллюстрации внутри раздела теории пропускаются, если у
+    теории есть свой текст; всё остальное и страницы целиком читаются. Разделов не видно — читается всё."""
+    from forlabs.ingest.extract import PICTURE_RE
+
+    every = set(range(len(pictures)))
+    theory = _THEORY.search(text)
+    tasks = _TASKS.search(text, theory.end()) if theory else None
+    if theory is None or tasks is None:
+        return every
+    inside = text[theory.end():tasks.start()]
+    if len(PICTURE_RE.sub("", inside).strip()) < THEORY_TEXT_MIN:
+        return every
+    skip = {int(m.group(1)) - 1 for m in PICTURE_RE.finditer(inside)}
+    return {i for i in every if i not in skip or pictures[i].page}
+
+
+def known_error_is_soft(error: str) -> bool:
+    """Замечание, после которого остальные картинки всё равно стоит читать (часть не в том формате, их больше лимита)."""
+    return error.startswith(("картинок больше", "часть картинок"))
 
 
 def read_source_pictures(pictures: list, llm, known: dict[str, str] | None = None) -> tuple[list[str | None], str]:
@@ -138,17 +176,42 @@ def read_source_pictures(pictures: list, llm, known: dict[str, str] | None = Non
             if t is not None:
                 known[k] = t.strip()
 
-    try:
-        if batches:  # первая пачка — одна: модель без зрения или обрыв связи видны сразу, остальное не шлём
-            keep(batches[0], read(batches[0]))
-        if len(batches) > 1:  # остальные — одновременно: сервер читает картинку десятки секунд
-            from concurrent.futures import ThreadPoolExecutor
+    # Пачки читаются в своих потоках и не дольше общего срока: зависший запрос не держит разбор — его картинки
+    # остаются непрочитанными, а студент видит замечание. Первая пачка идёт одна: модель без зрения или обрыв
+    # связи видны сразу, и остальное не отправляется.
+    import queue
+    import threading
 
-            with ThreadPoolExecutor(max_workers=min(SOURCE_WORKERS, len(batches) - 1)) as pool:
-                for batch, texts in zip(batches[1:], pool.map(read, batches[1:])):
-                    keep(batch, texts)
-    except Exception as e:  # noqa: BLE001 — сеть, лимит, модель без зрения
-        error = str(getattr(e, "message_ru", None) or e)
+    done: queue.Queue = queue.Queue()
+
+    def work(batch: list[str]) -> None:
+        try:
+            done.put((batch, read(batch), None))
+        except Exception as e:  # noqa: BLE001 — сеть, лимит, модель без зрения
+            done.put((batch, [], e))
+
+    def start(group: list[list[str]]) -> None:
+        for batch in group:
+            threading.Thread(target=work, args=(batch,), daemon=True, name="forlabs-pictures").start()
+
+    deadline = time.monotonic() + PICTURES_DEADLINE
+    waves = [batches[:1]] + [batches[i:i + SOURCE_WORKERS] for i in range(1, len(batches), SOURCE_WORKERS)]
+    for wave in waves:
+        if not wave or error and not known_error_is_soft(error):
+            break
+        start(wave)
+        for _ in wave:
+            try:
+                batch, texts, failed = done.get(timeout=max(deadline - time.monotonic(), 0.01))
+            except queue.Empty:
+                error = "сервер модели слишком долго читает картинки"
+                break
+            if failed is not None:
+                error = str(getattr(failed, "message_ru", None) or failed)
+            else:
+                keep(batch, texts)
+        if time.monotonic() >= deadline:
+            break
     return [known.get(k) for k in keys], error
 
 

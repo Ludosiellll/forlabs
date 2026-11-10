@@ -63,6 +63,7 @@ class LabSpec(BaseModel):
     questions: list[str] = Field(default_factory=list)
     conclusion: str | None = None  # своя формулировка вывода, если цель не начинается с инфинитива
     wishes: str | None = None  # пожелания и отклонения от методички (от студента или преподавателя)
+    needs: list[str] = Field(default_factory=list)  # что нужно для работы, а в методичке этого нет
     source_text: str = ""
 
 
@@ -227,6 +228,7 @@ class ProjectInfo(BaseModel):
     folder: str = ""  # папка проекта в папке сдачи
     build_log: str = ""  # ошибки последней сборки, если программа не собралась (видит студент и чат правок)
     programs: list[str] = Field(default_factory=list)  # несколько программ в лабе: их имена (папки проекта)
+    placeholders: list[str] = Field(default_factory=list)  # картинки сайта, вместо которых лежат заглушки
     report_sha: str = ""  # листинги и рисунки отчёта, по которым собран проект (правка в чате — проект устарел)
 
 

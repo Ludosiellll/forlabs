@@ -40,6 +40,7 @@ from forlabs.pipeline.images import (
     prepare_image,
     put_pictures,
     read_source_pictures,
+    worth_reading,
 )
 from forlabs.pipeline.repair import check_all, check_and_repair, report_text
 from forlabs.pipeline.write import refresh_derived, section_has_content, write_report
@@ -393,8 +394,9 @@ class Pipeline:
             if unread:
                 findings.append(Finding(
                     stage="spec", rule_id="spec.pictures_unread", severity="warn", location="Методичка",
-                    message=f"Картинок в методичке, которые не удалось прочитать: {unread}. Если на них задание, код, "
-                            "запрос или таблица — впиши их текст в пожелания к лабе, иначе отчёт выйдет без них"))
+                    message=f"Картинок в методичке, которые не удалось прочитать: {unread}. Нажми «Прочитать "
+                            "картинки ещё раз» или, если на них задание, код, запрос или таблица, впиши их текст в "
+                            "пожелания к лабе — иначе отчёт выйдет без них"))
             old_dir = self.lab_dir(st)
             old_key = moved_from = None
             if renumber:
@@ -439,8 +441,9 @@ class Pipeline:
         повторный разбор за те же картинки не платит. Возвращает методичку и число непрочитанных картинок."""
         from forlabs.ingest.extract import PICTURE_RE
 
-        total = len(src.pictures)
-        self._emit(st, f"Читаю картинки в методичке: {total}", step="parse")
+        import hashlib
+
+        want = worth_reading(src.text, src.pictures)  # иллюстрации к теории не читаются: это минуты ожидания
         cache = self.lab_dir(st) / "source_pictures.json"
         try:
             known = json.loads(cache.read_text(encoding="utf-8"))
@@ -448,19 +451,29 @@ class Pipeline:
         except (OSError, ValueError):
             known = {}
         before = dict(known)
-        texts, error = read_source_pictures(src.pictures, self._llm(st), known)
+        order = sorted(want)
+        error, got = "", []
+        if order:
+            rest = len(src.pictures) - len(order)
+            self._emit(st, f"Читаю картинки в методичке: {len(order)}"
+                           + (f" (ещё {rest} — иллюстрации к теории, их не читаю)" if rest else ""), step="parse")
+            got, error = read_source_pictures([src.pictures[i] for i in order], self._llm(st), known)
         if known != before:
             try:
                 atomic_write_bytes(cache, json.dumps(known, ensure_ascii=False).encode("utf-8"))
             except OSError:
                 pass
-        unread = sum(1 for t in texts if t is None)
+        read = dict(zip(order, got))
+        # пропущенная иллюстрация убирается из текста; прочитанная раньше — берётся из сохранённого
+        texts = [read[i] if i in read else known.get(hashlib.sha256(p.data).hexdigest(), "")
+                 for i, p in enumerate(src.pictures)]
+        unread = sum(1 for i in order if read.get(i) is None)
         if unread:
-            self._emit(st, f"Не прочитал картинок в методичке: {unread} из {total}"
-                           + (f" ({error})" if error else "") + " — текст с них можно вписать в пожелания", "warn",
-                       step="parse")
+            self._emit(st, f"Не прочитал картинок в методичке: {unread} из {len(order)}"
+                           + (f" ({error})" if error else "") + " — нажми «Прочитать картинки ещё раз» (прочитанные второй "
+                           "раз не читаются) или впиши текст с них в пожелания", "warn", step="parse")
         plain = PICTURE_RE.sub("", src.text).strip()
-        if not plain and unread == total:  # методичка целиком картинкой, и прочитать её не получилось
+        if not plain and order and unread == len(order):  # методичка целиком картинкой, и прочитать её не получилось
             why = f": {error.rstrip('. ')}" if error else ""
             raise PipelineError(f"Методичка — это картинка, а прочитать её не получилось{why}. Попробуй ещё раз "
                                 "или вставь текст вручную.")
@@ -1118,6 +1131,15 @@ class Pipeline:
         out = [Finding(stage="spec", rule_id="spec.linked_lab", severity="warn", location="Связь с прошлыми лабами",
                        message=f"ЛР {n}" + (f" «{topic}»" if topic else "") + where(n, src, text))
                for n, src, topic, text in found]
+        # студент уже описал прошлую лабу в пожеланиях (как и просит замечание) — второй раз не просим
+        from forlabs.pipeline.memory import _LAB_REF, _PREV_REF, norm_number
+
+        wishes = (st.wishes or (st.spec.wishes if st.spec else "") or "")
+        told = {norm_number(m.group(1)) for m in _LAB_REF.finditer(wishes)}
+        about_previous = bool(_PREV_REF.search(wishes)) or bool(told)
+        missing = [m for m in missing
+                   if not (norm_number(m.removeprefix("ЛР ").strip()) in told if m.startswith("ЛР ")
+                           else about_previous)]
         out += [Finding(stage="spec", rule_id="spec.linked_lab_missing", severity="warn",
                         location="Связь с прошлыми лабами",
                         message=f"Нет {m} ни в ForLabs, ни в отчёте: прикрепи общий отчёт с ней или опиши её "

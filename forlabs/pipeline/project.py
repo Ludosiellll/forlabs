@@ -101,6 +101,12 @@ SHOT_RULES = """- mode "console": input — что набрать на клав�
   сервер. Если на снимке результат после формы — steps: {"action":"set","target":"id:имя","value":"…"} (id поля
   из HTML), {"action":"select","target":"id:список","value":"пункт"}, {"action":"click","target":"текст кнопки"};
   expect — текст, который появится на странице. У полей формы, участвующих в снимке, обязательно атрибут id.
+  На снимок попадает только то, что помещается на экране (первые ~700 точек страницы). Нужное ниже — шаг
+  {"action":"scroll","target":"id:slider"} (прокрутить к элементу) или {"action":"scroll","value":"600"}.
+  Эффект при наведении (:hover, выпадающее меню, смена картинки) — шаг {"action":"hover","target":"…"}: без
+  него на снимке будет обычный вид. target — id:имя, CSS-селектор (".btn-fill", "nav li:nth-child(2)") или
+  текст элемента. Один снимок — одно состояние: два наведения сразу снять нельзя. Анимация, которая идёт сама
+  (animation, @keyframes), наведения не требует. Щелчок по ссылке на страницу, которой нет, не делай.
 - MySQL: ForLabs запускает консольный клиент mysql в папке проекта, сервер чистый: баз лабы на нём нет. Результат
   запросов — mode "console", input — source каждого скрипта проекта по порядку: создание и заполнение, затем запрос
   («source shop.sql\\nsource select.sql\\n»), или сами запросы; expect — значение из результата. Скрипты должны
@@ -448,7 +454,7 @@ def _tidy(plan: ProjectPlan) -> ProjectPlan:
     name = " ".join(NAME_BAD.sub(" ", plan.name).split()).strip(". ")[:60].strip(". ") or plan.name
     files = [f for f in plan.files if plan_rules._build_file_problem(f) is None]
     plan = plan.model_copy(update={"name": name, "files": files})
-    return _assign_programs(_place_loose(plan_rules.split_programs(plan)))
+    return _assign_programs(_place_loose(plan_rules.split_programs(plan_rules.fix_dead_links(plan))))
 
 
 def _place_loose(plan: ProjectPlan) -> ProjectPlan:
@@ -1104,6 +1110,7 @@ def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None, 
         инструментов над ним. Сеть — не опасность, если программа работает в песочнице."""
         shutil.rmtree(work, ignore_errors=True)
         languages.materialize(candidate, work, tools)
+        info.placeholders = _own_pictures(pipe, st, candidate, work)
         blocked, net = _blocked(pipe, candidate)
         res = None
         if not info.missing and not blocked:
@@ -1120,11 +1127,14 @@ def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None, 
                 candidate = fixed
                 shutil.rmtree(work, ignore_errors=True)
                 languages.materialize(candidate, work, tools)
+                info.placeholders = _own_pictures(pipe, st, candidate, work)
                 blocked, net = _blocked(pipe, candidate)  # исправление тоже проверяется до сборки
                 if blocked:
                     break
                 res = languages.build(work, candidate, tools)
         return candidate, res, blocked, net
+
+    told: list[bool] = []  # про заглушки сказано
 
     def settle() -> Path:
         """Листинги отчёта — как в коде проекта; копия проекта в папку сдачи (до снимков: на снимках пути из неё,
@@ -1141,6 +1151,10 @@ def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None, 
             if saved:
                 emit("Эти файлы ты менял сам, а проект их заменил. Твои версии лежат рядом с пометкой .bak: "
                      + ", ".join(saved[:5]), "warn")
+            if info.placeholders and not told:
+                told.append(True)
+                emit("Картинок для сайта у меня нет — положил заглушки: " + ", ".join(info.placeholders[:8])
+                     + ". Замени их своими с теми же именами в папке проекта", "warn")
         except OSError as e:
             emit(f"Проект не скопировался в папку сдачи ({e})", "warn")
         return folder
@@ -1361,6 +1375,32 @@ def build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm=None, emit=None, 
 
 
 BACKUP = ".bak"  # прежняя версия файла студента рядом с новой: «main.py.bak» (компилятор её не берёт)
+
+
+def _own_pictures(pipe, st: LabState, plan: ProjectPlan, work: Path) -> list[str]:
+    """Картинки сайта, которых нет в плане: если студент уже положил свою на это место в папке сдачи, в сборку
+    идёт она (и на снимки, и обратно в папку — без замены и «.bak»). → картинки, вместо которых остались заглушки."""
+    wanted = plan_rules.missing_images(plan)
+    if not wanted:
+        return []
+    try:
+        before = json.loads((pipe.lab_dir(st) / "project" / "hand_in.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        before = {}
+    root = Path(before.get("folder") or "-")
+    sha = before.get("sha") or {}
+    left = []
+    for rel in wanted:
+        theirs = root.joinpath(*rel.split("/"))
+        try:
+            if theirs.is_file() and not theirs.is_symlink() and theirs.stat().st_size <= 20 * 1024 * 1024 \
+                    and rel in sha and text_sha(theirs.read_bytes()) != sha[rel]:
+                shutil.copy2(theirs, work.joinpath(*rel.split("/")))  # это уже картинка студента
+                continue
+        except OSError:
+            pass
+        left.append(rel)
+    return left
 
 
 def _copy_to_hand_in(pipe, st: LabState, plan: ProjectPlan, work: Path) -> tuple[Path, list[str], list[str]]:

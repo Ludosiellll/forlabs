@@ -30,7 +30,8 @@ def test_models_are_importable_by_design_names():
                        shots=[ShotPlan(section=1, block=3, mode="console", input="2 3\n",
                                        steps=[ShotStep(action="wait", value="1")], expect="Сумма")])
     assert validate(plan) == []
-    assert set(SHOT_ACTIONS) == {"set", "select", "click", "check", "type", "key", "wait", "scroll", "open"}
+    assert set(SHOT_ACTIONS) == {"set", "select", "click", "check", "uncheck", "type", "key", "wait", "scroll",
+                                 "open", "hover"}
 
 
 def test_paths_are_normalized():

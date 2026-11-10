@@ -65,6 +65,7 @@ class RawSpec(BaseModel):
     variant_text: str | None = None
     variants: list[VariantPick] = Field(default_factory=list)
     questions: list[str] = Field(default_factory=list)
+    needs: list[str] = Field(default_factory=list)
 
     @field_validator("kind", mode="before")
     @classmethod
@@ -85,6 +86,14 @@ class RawSpec(BaseModel):
     @classmethod
     def _str(cls, v):  # промпт разрешает null, когда поля нет в методичке
         return "" if v is None else str(v)
+
+    @field_validator("needs", mode="before")
+    @classmethod
+    def _needs(cls, v):
+        items = [" ".join(str(x).split()).rstrip(".;") for x in v if x is not None] if isinstance(v, list) else []
+        lab = re.compile(r"\bЛР\b|\bл/р\b|лабораторн\w*\s+работ", re.IGNORECASE)  # их ищет связь с прошлыми лабами
+        return [x for x in items if len(x) > 4 and x.lower() not in ("нет", "ничего", "не требуется")
+                and not lab.search(x)][:4]
 
     @field_validator("main_tasks", "extra_tasks", "questions", mode="before")
     @classmethod
@@ -373,6 +382,7 @@ def extract_spec(src: SourceText, subject: Subject, enrollment: Enrollment, llm,
         variant_text=variant_block(raw.variants) or (one_line(raw.variant_text) if raw.variant_text else None),
         questions=[clean_item(q) for q in raw.questions if q.strip()],
         wishes=wishes.strip() or None,
+        needs=list(raw.needs),
         source_text=src.text,
     )
     findings = verify_verbatim(spec, src)
@@ -394,6 +404,11 @@ def extract_spec(src: SourceText, subject: Subject, enrollment: Enrollment, llm,
             stage="spec", rule_id="spec.variant_missing", severity="warn", location="Вариант",
             message="В методичке есть варианты, но выбрать твой не получилось — впиши условие своего варианта "
                     "в поле «Текст варианта», иначе отчёт выйдет без него"))
+    if spec.needs:
+        findings.append(Finding(
+            stage="spec", rule_id="spec.needs_material", severity="warn", location="Материалы",
+            message="Для работы нужно то, чего нет в методичке: " + "; ".join(spec.needs) + ". Прикрепи это файлом "
+                    "к лабе или опиши в пожелания — иначе ForLabs составит свой пример, и он может не совпасть с твоим"))
     if any(v.basis == "workplace" for v in raw.variants) and enrollment.workplace is None:
         findings.append(Finding(stage="spec", rule_id="spec.workplace_missing", severity="warn", location="Вариант",
                                 message="Методичка выбирает вариант по номеру рабочего места — укажи его в профиле "

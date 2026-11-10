@@ -230,3 +230,12 @@ def test_writer_is_told_what_picture_blocks_are(tmp_path):
 def test_no_picture_note_when_the_methodology_has_no_pictures(tmp_path):
     spec = SPEC.model_copy(update={"source_text": "Выполните запросы."})
     assert "содержание картинок методички" not in _asked_for(spec, tmp_path)
+
+
+# ---------- чего нет в методичке ----------
+
+def test_needs_reach_the_writer(tmp_path):
+    spec = SPEC.model_copy(update={"needs": ["тестовые сценарии из практической работы №6"]})
+    asked = _asked_for(spec, tmp_path)
+    assert "практической работы №6" in asked and "не утверждай" in asked
+    assert "Для работы нужно" not in _asked_for(SPEC, tmp_path)

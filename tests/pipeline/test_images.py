@@ -150,3 +150,87 @@ def test_source_picture_batches_go_to_the_model_at_once():
     assert error == "" and all(t and t.startswith("текст ") for t in texts)
     assert llm.calls == 3 and llm.peak >= 2
     assert len(set(texts)) > 1  # тексты разошлись по своим картинкам, а не перепутались
+
+
+class Stuck:
+    """Сервер, который читает картинку «вечно» (в жизни — минутами)."""
+
+    def __init__(self, hang: float):
+        self.hang, self.calls = hang, 0
+
+    def json(self, messages, schema, repairs=3, temperature=None, max_tokens=None):
+        import time
+
+        self.calls += 1
+        time.sleep(self.hang)
+        return schema.model_validate({"pictures": ["поздно"]})
+
+
+def test_slow_server_does_not_hold_the_parse(monkeypatch):
+    import time
+
+    import forlabs.pipeline.images as im
+
+    monkeypatch.setattr(im, "PICTURES_DEADLINE", 0.4)
+    llm = Stuck(hang=3.0)
+    t = time.time()
+    texts, error = read_source_pictures(pics(1), llm)
+    assert time.time() - t < 2.0  # разбор не ждёт зависший запрос
+    assert texts == [None] and "долго" in error
+
+
+def test_pictures_request_is_bounded_in_length():
+    seen = {}
+
+    class Capture:
+        def json(self, messages, schema, repairs=3, temperature=None, max_tokens=None):
+            seen["max_tokens"] = max_tokens
+            return schema.model_validate({"pictures": ["а", "б"]})
+
+    read_source_pictures(pics(2), Capture())
+    assert seen["max_tokens"] and seen["max_tokens"] <= 8000  # зациклившийся ответ не тянется минутами
+
+
+# --- какие картинки читать: те, от которых зависит работа
+
+from forlabs.pipeline.images import worth_reading  # noqa: E402
+
+
+def marks(*ns):
+    return [picture_mark(n) for n in ns]
+
+
+def test_theory_illustrations_are_skipped_task_pictures_are_read():
+    m = marks(1, 2, 3, 4)
+    text = ("Лабораторная работа №9\nЦель: изучить запросы.\nТеоретические сведения\n" + "Оператор LIMIT. " * 80
+            + f"\n{m[0]}\nЕщё пример:\n{m[1]}\nПорядок выполнения работы\nЗадание 1\nВыполните запросы с рисунков:\n"
+            f"{m[2]}\n{m[3]}\nКонтрольные вопросы\n1. Что такое LIMIT?")
+    assert worth_reading(text, pics(4)) == {2, 3}
+
+
+def test_theory_given_only_as_pictures_is_read():
+    # КМС 13: под «Основные теоретические сведения» — только три снимка страниц книги
+    m = marks(1, 2, 3)
+    text = (f"Лабораторная работа №13\nОсновные теоретические сведения\n{m[0]}\n{m[1]}\n{m[2]}\n"
+            "Порядок выполнения работы\nСоздайте и настройте 3-5 интерактивных элементов.")
+    assert worth_reading(text, pics(3)) == {0, 1, 2}
+
+
+def test_without_clear_sections_everything_is_read():
+    m = marks(1, 2)
+    text = f"Сделайте форму как на рисунке:\n{m[0]}\nИ отчёт как здесь:\n{m[1]}"
+    assert worth_reading(text, pics(2)) == {0, 1}
+
+
+def test_scanned_pages_are_always_read():
+    m = marks(1, 2)
+    text = ("Теоретические сведения\n" + "Текст теории. " * 100 + f"\n{m[0]}\n{m[1]}\nХод работы\nЗадание 1. Сделать.")
+    pictures = [Picture(png(400, 200), page=True), Picture(png(400, 200, (1, 2, 3)))]
+    assert worth_reading(text, pictures) == {0}
+
+
+def test_picture_in_a_question_after_the_tasks_is_read():
+    m = marks(1, 2)
+    text = ("Методические указания\n" + "Условные конструкции. " * 60 + f"\n{m[0]}\nЗадание 1\nНапишите программу.\n"
+            f"Контрольные вопросы\n1. Что выведет программа:\n{m[1]}")
+    assert worth_reading(text, pics(2)) == {1}

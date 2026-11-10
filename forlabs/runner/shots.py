@@ -131,13 +131,30 @@ def browser_url(page: str, base: str, work: Path) -> str:
     return (work / page.lstrip("/")).as_uri()
 
 
-def edge_command(edge: str, profile: Path, url: str) -> str:
-    """Командная строка Edge: аргументы по правилам Windows, после «--» — только адрес (ключом он не станет)."""
+def edge_command(edge: str, profile: Path, url: str, port: int = 0) -> str:
+    """Командная строка Edge: аргументы по правилам Windows, после «--» — только адрес (ключом он не станет).
+    port — порт отладки на этом компьютере: через него выполняются шаги на странице (наведение, прокрутка)."""
     import subprocess
 
+    debug = [f"--remote-debugging-port={port}", "--remote-debugging-address=127.0.0.1"] if port else []
     return subprocess.list2cmdline([edge, f"--user-data-dir={profile}", "--no-first-run", "--no-default-browser-check",
                                     "--disable-features=msEdgeFirstRunExperience,msImplicitSignin",
-                                    "--window-size=1200,800", "--new-window", "--", url])
+                                    "--window-size=1200,800", "--new-window", *debug, "--", url])
+
+
+PAGE_STEPS = ("hover", "scroll", "open")  # шаги, которые умеет только управление страницей (не кнопки окна)
+
+
+def needs_page_driver(steps) -> bool:
+    return any((_get(st, "action") or "") in PAGE_STEPS for st in steps or [])
+
+
+def _free_port() -> int:
+    import socket
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
 
 
 def typed_text(shot) -> str:
@@ -528,14 +545,33 @@ class WindowsShooter:
             return ShotResult(False, reason=str(e))
         profile_dir = run_dir()
         profile = profile_dir / "edge"
-        app = winapi.spawn(edge_command(edge, profile, url), str(work), low=False, max_processes=64, memory_mb=4096)
+        steps = _get(shot, "steps", None) or []
+        expect = _get(shot, "expect") or ""
+        port = _free_port()
+        app = winapi.spawn(edge_command(edge, profile, url, port), str(work), low=False, max_processes=64,
+                           memory_mb=4096)
         try:
             w = winapi.wait_window({app.pid}, self.timeout, lambda x: "Edge" in x.title)
             if not w:
                 return ShotResult(False, reason="окно браузера не появилось")
             time.sleep(2.5)
-            steps = _get(shot, "steps", None) or []
-            if steps:  # форма на странице: поля по id из HTML, кнопки по тексту; клавиши — в окно браузера
+            from forlabs.runner import webdrive
+
+            seen = None
+            with webdrive.attach(port, url) as page:
+                if page is not None:  # шаги на самой странице: поля, кнопки, наведение, прокрутка
+                    try:
+                        webdrive.perform(page, steps)
+                    except webdrive.StepError as e:
+                        return ShotResult(False, reason=str(e), seen=webdrive.page_state(page)[-4000:], kind="ui",
+                                          ui=webdrive.page_state(page)[-4000:])
+                    if expect:
+                        webdrive.reveal(page, expect)  # ожидаемое ниже экрана — прокрутить к нему
+                    seen = webdrive.page_state(page)
+            if seen is None and needs_page_driver(steps):
+                return ShotResult(False, reason="не получилось управлять страницей в браузере (наведение и "
+                                                "прокрутка): сделай этот снимок сам")
+            if seen is None and steps:  # запасной путь: поля по id из HTML, кнопки по тексту; клавиши — в окно
                 from forlabs.runner import uia
 
                 ui = []
@@ -554,8 +590,8 @@ class WindowsShooter:
                 if ui:
                     uia.perform(w.hwnd, ui, timeout=8)
                 time.sleep(2.0)  # страница после отправки формы
-            seen = _texts_with_timeout(w.hwnd) if (steps or _get(shot, "expect")) else w.title
-            expect = _get(shot, "expect") or ""
+            if seen is None:
+                seen = _texts_with_timeout(w.hwnd) if (steps or expect) else w.title
             if expect and seen and not shown(expect, seen, typed_text(shot)):
                 return ShotResult(False, reason=f"на странице нет ожидаемого «{expect}»", seen=seen[-4000:],
                                   kind="expect")

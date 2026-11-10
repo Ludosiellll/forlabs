@@ -244,3 +244,20 @@ def test_link_findings_refreshed_before_execute(tmp_home, tmp_path):
     st = pipe.execute(pipe.confirm(pipe.store.load_lab("ivanov", "psip", "7"), None))
     assert not any(f.rule_id == "spec.linked_lab_missing" for f in st.findings)
     assert any(f.rule_id == "spec.linked_lab" and "ЛР 2" in f.message for f in st.findings)
+
+
+def test_lab_described_in_wishes_is_not_asked_for_again(tmp_home, tmp_path):
+    # студент сделал то, о чём просит замечание: описал прошлую лабу в пожеланиях — замечание уходит
+    pipe, fake = setup(tmp_home, tmp_path, [RAW])
+    st = pipe.create_lab("ivanov", "psip", [(FIXTURE.name, FIXTURE.read_bytes())], number="7",
+                         wishes="Тема сайта из ЛР 2 — кофейня «Зерно», главная страница index.html.")
+    st = pipe.parse(st, date="24.09.2026")
+    assert not any(f.rule_id == "spec.linked_lab_missing" for f in st.findings)
+
+
+def test_wishes_about_something_else_keep_the_note(tmp_home, tmp_path):
+    pipe, fake = setup(tmp_home, tmp_path, [RAW])
+    st = pipe.create_lab("ivanov", "psip", [(FIXTURE.name, FIXTURE.read_bytes())], number="7",
+                         wishes="Комментарии в коде пиши по-русски.")
+    st = pipe.parse(st, date="24.09.2026")
+    assert any(f.rule_id == "spec.linked_lab_missing" for f in st.findings)

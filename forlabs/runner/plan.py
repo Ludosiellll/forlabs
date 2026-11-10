@@ -29,8 +29,9 @@ PROGRAM_NAME = re.compile(r"[^\W_][\w.\-]*")  # имя программы — и
 WINDOW_CODE = {"csharp": r"System\.Windows\.Forms|Application\.Run\s*\(|:\s*Form\b",
                "java": r"javax\.swing|java\.awt|javafx\."}
 ShotMode = Literal["window", "console", "browser", "manual", "app"]  # app — агент в программе студента
-SHOT_ACTIONS = ("set", "select", "click", "check", "type", "key", "wait", "scroll", "open")
-NEEDS_TARGET = {"set", "select", "click", "check"}
+SHOT_ACTIONS = ("set", "select", "click", "check", "uncheck", "type", "key", "wait", "scroll", "open", "hover")
+NEEDS_TARGET = {"set", "select", "click", "check", "uncheck", "hover"}
+BROWSER_ONLY = {"hover", "scroll", "open"}  # шаги страницы сайта: в окне программы их выполнить нечем
 NEEDS_VALUE = {"set", "select", "type", "key", "open"}
 
 MAX_FILES = 60
@@ -461,6 +462,78 @@ CONSOLE_INPUT = {"java": r"System\s*\.\s*in\b", "csharp": r"Console\s*\.\s*Read(
                  "python": r"(?<![\w.])input\s*\("}
 
 
+# --- сайт: файлы, на которые он ссылается, а в проекте их нет
+SITE_LANGS = ("web", "php", "javascript")
+SITE_TEXT = {".html", ".htm", ".php", ".css"}
+IMAGE_FILES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico"}
+PAGE_FILES = {".html", ".htm", ".php"}
+_REF = re.compile(r"""(?:\b(?:src|href|poster)\s*=\s*(["'])(?P<attr>[^"'<>]*)\1|url\(\s*(["']?)(?P<css>[^"')<>]*)\3\s*\))""",
+                  re.IGNORECASE)
+_NOT_LOCAL = re.compile(r"^(?:[a-z][a-z0-9+.-]*:|//|#|$)", re.IGNORECASE)  # http:, mailto:, data:, //cdn, #якорь
+
+
+def _local_refs(plan: ProjectPlan) -> list[tuple[str, str, str]]:
+    """(файл, ссылка как в коде, путь в проекте) для всех ссылок сайта на свои файлы."""
+    if plan.language not in SITE_LANGS:
+        return []
+    out = []
+    for f in plan.files:
+        if PurePosixPath(f.path).suffix.lower() not in SITE_TEXT:
+            continue
+        base = PurePosixPath(f.path).parent
+        for m in _REF.finditer(f.content):
+            raw = (m.group("attr") if m.group("attr") is not None else m.group("css") or "").strip()
+            if _NOT_LOCAL.match(raw) or any(x in raw for x in ("<?", "{{", "${", "<%")):
+                continue
+            bare = re.split(r"[?#]", raw, maxsplit=1)[0]
+            parts: list[str] = []
+            for part in (base / bare).parts if not bare.startswith("/") else PurePosixPath(bare.lstrip("/")).parts:
+                if part == "..":
+                    if not parts:
+                        parts = [".."]  # выше папки проекта — не наш файл
+                        break
+                    parts.pop()
+                elif part not in (".", ""):
+                    parts.append(part)
+            if parts and parts[0] != "..":
+                out.append((f.path, raw, "/".join(parts)))
+    return out
+
+
+def _missing(plan: ProjectPlan, kinds: set[str]) -> list[str]:
+    have = {f.path.lower() for f in plan.files}
+    return sorted({path for _, _, path in _local_refs(plan)
+                   if PurePosixPath(path).suffix.lower() in kinds and path.lower() not in have})
+
+
+def missing_images(plan: ProjectPlan) -> list[str]:
+    """Картинки, на которые ссылается сайт, а в проекте их нет: модель даёт только текст, картинок у неё нет."""
+    return _missing(plan, IMAGE_FILES)
+
+
+def missing_pages(plan: ProjectPlan) -> list[str]:
+    """Страницы, на которые ведут ссылки сайта, а в проекте их нет."""
+    return _missing(plan, PAGE_FILES)
+
+
+def fix_dead_links(plan: ProjectPlan) -> ProjectPlan:
+    """Ссылки на страницы, которых в проекте нет, ведут в «#»: пункт меню остаётся на месте, а щелчок по нему
+    не открывает «Файл не найден» (на таком снимке вместо сайта была бы ошибка браузера)."""
+    dead = set(missing_pages(plan))
+    if not dead:
+        return plan
+    gone = {(src, raw) for src, raw, path in _local_refs(plan) if path in dead}
+    files = []
+    for f in plan.files:
+        text = f.content
+        for src, raw in gone:
+            if src == f.path:
+                text = re.sub(rf"""(\bhref\s*=\s*)(["']){re.escape(raw)}\2""", lambda m: f"{m[1]}{m[2]}#{m[2]}", text,
+                              flags=re.IGNORECASE)
+        files.append(f if text == f.content else f.model_copy(update={"content": text}))
+    return plan.model_copy(update={"files": files})
+
+
 def split_programs(plan: ProjectPlan) -> ProjectPlan:
     """План без programs, где у нескольких папок своя точка входа (библиотека и приложения, сложенные в один
     проект: такая сборка падает с «несколько точек входа»), — папки становятся программами. Делится только то, что
@@ -601,6 +674,8 @@ def validate(plan: ProjectPlan) -> list[str]:
                 out.append(f"{where}: неизвестное действие «{step.action}» (можно: {', '.join(SHOT_ACTIONS)})")
             elif step.action in NEEDS_TARGET and not step.target.strip():
                 out.append(f"{where}: у действия «{step.action}» не указан элемент окна (target)")
+            elif step.action == "hover" and shot.mode != "browser":
+                out.append(f"{where}: действие «hover» есть только у страницы сайта (mode browser)")
             elif step.action in NEEDS_VALUE and not step.value:
                 out.append(f"{where}: у действия «{step.action}» не указано значение (value)")
     return out

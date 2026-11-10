@@ -61,3 +61,10 @@ def test_parse_finding_that_blocks_hand_in_can_be_seen_and_accepted(tmp_home, tm
     assert "Формулировки нет в методичке дословно" in notes and "Оставить как есть" in notes
     r = c.post(url + "/accept", data={"rule": "spec.not_verbatim|Задание 1"}, follow_redirects=False)
     assert r.status_code == 303
+
+
+def test_unread_pictures_offer_to_read_them_again():
+    from pathlib import Path
+
+    html = (Path(__file__).parents[2] / "forlabs" / "ui" / "templates" / "lab.html").read_text(encoding="utf-8")
+    assert "spec.pictures_unread" in html and "Прочитать картинки ещё раз" in html
