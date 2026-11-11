@@ -268,3 +268,25 @@ def test_wording_that_continues_into_a_picture_is_verbatim():
     raw = {**RAW, "questions": [*RAW["questions"], q]}
     _, findings = extract_spec(src, SUBJECTS["psip"], ENR, FakeLLM([raw]), lab_number=None, date="24.09.2026")
     assert findings == []
+
+
+VAR_SRC = SourceText(normalize("""Лабораторная работа №20
+Тема: Разработка программ записи данных в JSON-файл.
+Цель: Сформировать умение записывать данные в JSON-файл.
+Индивидуальные задания:
+Вариант 1: Создать класс «Студент» с полями: Имя, Фамилия. Записать массив студентов в JSON-файл.
+Вариант 2: Создать класс «Книга» с полями: Название, Автор. Записать список книг в JSON.
+"""))
+VAR_TASK = "Создать класс «Книга» с полями: Название, Автор. Записать список книг в JSON."
+RAW_VAR = {"number": "20", "topic": "Разработка программ записи данных в JSON-файл.",
+           "goal": "Сформировать умение записывать данные в JSON-файл.", "equipment": None, "assignment": None,
+           "main_tasks": [VAR_TASK], "extra_tasks": [], "variant_text": None, "questions": []}
+
+
+def test_no_tasks_at_all_is_asked_again_with_reasoning():
+    fake = FakeLLM([dict(RAW_VAR, main_tasks=[]), RAW_VAR])
+    enr = Enrollment(subject_id="kpiyap", title_subject="КПиЯП", variant=2, header_style="short")
+    spec, _ = extract_spec(VAR_SRC, SUBJECTS["kpiyap"], enr, fake, lab_number=None, date="11.11.2026")
+    assert [t.text for t in spec.tasks] == [VAR_TASK]
+    assert len(fake.calls) == 2 and fake.thinks == [False, True]
+    assert "нет ни одного задания" in fake.calls[1][-1]["content"]

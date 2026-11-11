@@ -337,6 +337,17 @@ def extract_spec(src: SourceText, subject: Subject, enrollment: Enrollment, llm,
                 raw = second
         except Exception:  # noqa: BLE001 — второй ответ не получился: остаётся первый, студент увидит замечание
             pass
+    elif not got:  # заголовков «Задание N» нет (задания по вариантам, «Выполнение работы»…), а модель не нашла ни одного
+        again = [*messages, {"role": "user", "content":
+                 "В твоём ответе нет ни одного задания (main_tasks пуст), а в лабораторной работе всегда есть хотя бы "
+                 "одно: «Задание», «Индивидуальное задание» или задание своего варианта, «Выполнение работы», "
+                 "«Порядок выполнения». Найди их в тексте и верни JSON заново, переписав задания дословно."}]
+        try:
+            second = llm.json(again, RawSpec, temperature=0.0, think=True)
+            if str(second.kind).strip().lower() != "not_lab" and second.main_tasks:
+                raw = second
+        except Exception:  # noqa: BLE001 — остаётся первый ответ, студент увидит замечание «нет заданий»
+            pass
     asked_variant = variant if isinstance(variant, int) else _as_int(variant) or 1
     asked_place = workplace if isinstance(workplace, int) else _as_int(workplace) or asked_variant
     has_variants = bool(_HAS_VARIANTS.search(text))
