@@ -40,6 +40,9 @@ _ACCESS = {
 
 
 DEFAULT_MAX_TOKENS = 8000  # предел ответа: ни один вызов не растянется дольше лимита прокси (~150 с)
+# С размышлением: оно засчитывается в предел ответа. 16 000 токенов модель пишет примерно за 70 с
+# (≈230 токенов/с), это в пределах 140 с, которые прокси ждёт провайдера.
+THINK_MAX_TOKENS = 16000
 TIMEOUT_MESSAGE = ("Модель не ответила за 2,5 минуты — сервер модели перегружен. Подожди пару минут и нажми ещё раз "
                    "(написанное сохранено).")
 RATE_LIMIT_MESSAGE = "Сервер модели просит подождать: слишком много запросов подряд. Подожди минуту и нажми ещё раз."
@@ -131,6 +134,9 @@ class LLM:
         self.api_key = api_key
         self.http = http_client or httpx.Client(timeout=timeout)
         self.usage = UsageCounter()
+        self.think_fallbacks = 0  # сколько раз размышление не уложилось и ответ получен без него
+        # предел ответа на прокси (заголовок x-forlabs-max-tokens); общий для копий клиента (with_headers)
+        self.server: dict[str, int | None] = {"max_tokens": None}
 
     def _post(self, payload: dict) -> dict:
         """Запрос; если ключ не пускает модель — следующая модель из MODEL_FALLBACKS (и запоминается)."""
@@ -239,6 +245,9 @@ class LLM:
         except ValueError as e:
             raise LLMError("bad_response", r.text[:200]) from e
         self.usage.add(data.get("usage"))
+        cap = r.headers.get("x-forlabs-max-tokens", "")
+        if cap.isdigit():
+            self.server["max_tokens"] = int(cap)
         return data
 
     def with_headers(self, extra: dict[str, str]) -> "LLM":
@@ -250,30 +259,49 @@ class LLM:
         return clone
 
     def chat(self, messages: list[dict], temperature: float | None = None, max_tokens: int | None = None,
-             json_mode: bool = False) -> str:
+             json_mode: bool = False, think: bool = False) -> str:
+        """think — модель сначала рассуждает (уровень из настроек). Рассуждение непредсказуемо по длине: если оно
+        съело весь предел ответа или запрос не уложился по времени, тот же запрос повторяется без размышления."""
         payload: dict[str, Any] = {"model": self.model, "messages": messages,
                                    "temperature": self.settings.temperature if temperature is None else temperature}
-        if max_tokens:
+        effort = (getattr(self.settings, "reasoning", "off") or "off") if think else "off"
+        if effort != "off" and self.settings.mode == "cloud" and (self.server["max_tokens"] or 0) < THINK_MAX_TOKENS:
+            effort = "off"  # прокси ещё старый (предел 8000): размышление съело бы весь ответ
+        if effort != "off":
+            payload["reasoning_effort"] = effort
+            payload["max_tokens"] = max(max_tokens or 0, THINK_MAX_TOKENS)
+        elif max_tokens:
             payload["max_tokens"] = max_tokens
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
-        data = self._post(payload)
+        try:
+            data = self._post(payload)
+        except LLMError as e:
+            if effort != "off" and e.message_ru == TIMEOUT_MESSAGE:
+                self.think_fallbacks += 1
+                return self.chat(messages, temperature, max_tokens, json_mode, think=False)
+            raise
         try:
             choice = data["choices"][0]
             content = choice["message"]["content"] or ""
         except (KeyError, IndexError, TypeError) as e:
             raise LLMError("bad_response", str(data)[:200]) from e
         if choice.get("finish_reason") == "length":  # обрезан по длине: «чинить» формат бессмысленно и платно
+            if effort != "off":  # размышление заняло весь предел — ответ без размышления, как раньше
+                self.think_fallbacks += 1
+                return self.chat(messages, temperature, max_tokens, json_mode, think=False)
             raise LLMError("bad_response", "finish_reason=length",
                            "Ответ модели не поместился в лимит длины — попробуй ещё раз или раздели задание на части.")
         return content
 
     def json(self, messages: list[dict], schema: type[T], repairs: int = 3, temperature: float | None = None,
-             max_tokens: int = DEFAULT_MAX_TOKENS) -> T:
+             max_tokens: int = DEFAULT_MAX_TOKENS, think: bool = False) -> T:
         msgs = list(messages)
         last_error = ""
-        for _ in range(repairs + 1):
-            text = self.chat(msgs, temperature=temperature, json_mode=True, max_tokens=max_tokens)
+        for attempt in range(repairs + 1):
+            # исправление формата — без размышления: ошибка обычно мелкая, а размышление дорогое
+            text = self.chat(msgs, temperature=temperature, json_mode=True, max_tokens=max_tokens,
+                             think=think and attempt == 0)
             try:
                 return schema.model_validate(_extract_json(text))
             except (json.JSONDecodeError, ValidationError, ValueError) as e:
@@ -301,6 +329,8 @@ class FakeLLM:
         self.headers: dict[str, str] = {}
         self.accepts_lab_tag = True
         self.max_tokens: list[int | None] = []
+        self.thinks: list[bool] = []  # просил ли вызов размышление
+        self.think_fallbacks = 0
 
     def with_headers(self, extra: dict[str, str]) -> "FakeLLM":
         self.headers = {**self.headers, **extra}
@@ -315,12 +345,14 @@ class FakeLLM:
             raise r
         return r
 
-    def chat(self, messages, temperature=None, max_tokens=None, json_mode=False) -> str:
+    def chat(self, messages, temperature=None, max_tokens=None, json_mode=False, think=False) -> str:
+        self.thinks.append(think)
         r = self._next(messages)
         return r if isinstance(r, str) else json.dumps(r, ensure_ascii=False)
 
-    def json(self, messages, schema, repairs=3, temperature=None, max_tokens=DEFAULT_MAX_TOKENS):
+    def json(self, messages, schema, repairs=3, temperature=None, max_tokens=DEFAULT_MAX_TOKENS, think=False):
         self.max_tokens.append(max_tokens)
+        self.thinks.append(think)
         r = self._next(messages)
         return schema.model_validate(r if not isinstance(r, str) else _extract_json(r))
 

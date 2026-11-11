@@ -268,7 +268,7 @@ def plan_edit(st: LabState, message: str, profile: Profile, subject: Subject, ll
     messages = [{"role": "system", "content": CHAT_PLAN_SYSTEM.format(rules=rules.load("repair", subject.id))},
                 {"role": "user", "content": user}]
     for rounds in range(MAX_LOOKS + 1):
-        plan = llm.json(messages, EditPlan, max_tokens=PLAN_MAX_TOKENS)
+        plan = llm.json(messages, EditPlan, max_tokens=PLAN_MAX_TOKENS, think=True)
         if not plan.look or view is None or rounds == MAX_LOOKS:
             break
         asked = json.dumps({"look": [x.model_dump(exclude_defaults=True) for x in plan.look]}, ensure_ascii=False)
@@ -323,7 +323,7 @@ def revise_section(spec: LabSpec, section: TaskSection, instruction: str, profil
             f"Задание {section.n}: «{section.title}»\n\nБлоки сейчас:\n{blocks_text}\n\n"
             f"Что поменять по замечанию преподавателя:\n{instruction}")
     draft = llm.json([{"role": "system", "content": CHAT_REVISE_SYSTEM.format(rules=rules.load("write", subject.id))},
-                      {"role": "user", "content": user}], ReviseDraft)
+                      {"role": "user", "content": user}], ReviseDraft, think=True)
     out, retake, used = [], [], set()
     suffix = f"_r{uuid.uuid4().hex[:6]}"
     for rb in draft.blocks:
@@ -364,6 +364,6 @@ def revise_answers(spec: LabSpec, qas: list[QA], edits: list[QuestionEdit], prof
     draft = llm.json([{"role": "system", "content": CHAT_ANSWERS_SYSTEM.format(rules=rules.load("repair", subject.id))},
                       {"role": "user", "content": f"Предмет: {subject.name}. Тема работы: {spec.topic}.\n"
                                                   f"Пол студента: {_gender_ru(profile.gender)}.\n{body}"}],
-                     AnswersEditDraft)
+                     AnswersEditDraft, think=True)
     new = {a.n: a.answer.strip() for a in draft.answers if a.n in wanted and a.answer.strip()}
     return [q.model_copy(update={"answer": new[q.n]}) if q.n in new else q for q in qas]

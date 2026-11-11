@@ -635,7 +635,7 @@ def _plan_in_parts(user: str, llm) -> ProjectPlan:
     """Большой проект, который не влез в один ответ: сначала план без текстов файлов, затем каждый файл отдельно."""
     head = _tidy(llm.json([{"role": "system", "content": PROJECT_SYSTEM},
                            {"role": "user", "content": f"{user}\n\n{PARTS_NOTE}"}], ProjectPlan,
-                          max_tokens=PLAN_MAX_TOKENS))
+                          max_tokens=PLAN_MAX_TOKENS, think=True))
     todo = [f for f in head.files if not f.content.strip()]
     if len(todo) > MAX_PART_FILES:
         raise LLMError("bad_response", f"{len(todo)} файлов", "Проект программы слишком большой.")
@@ -649,7 +649,7 @@ def _plan_in_parts(user: str, llm) -> ProjectPlan:
         ask = (f"{user}\n\n{manifest}\n\n" + (f"Уже написаны:\n{written}\n\n" if written else "")
                + f"Напиши файл {f.path} целиком. Листинги отчёта из этого файла: {mine}.")
         out = llm.json([{"role": "system", "content": FILE_SYSTEM}, {"role": "user", "content": ask}], ProjectFile,
-                       max_tokens=FILE_MAX_TOKENS)
+                       max_tokens=FILE_MAX_TOKENS, think=True)
         done[f.path] = ProjectFile(path=f.path, content=out.content)
     return head.model_copy(update={"files": [done[f.path] for f in head.files]})
 
@@ -721,7 +721,7 @@ def plan_project(st: LabState, llm, memory: str = "", wish: str = "", rejected: 
         user += f"\n\nПрошлый план не принят: {rejected.strip()}. Составь план заново без этих ошибок."
     try:
         plan = llm.json([{"role": "system", "content": PROJECT_SYSTEM}, {"role": "user", "content": user}],
-                        ProjectPlan, max_tokens=PLAN_MAX_TOKENS)
+                        ProjectPlan, max_tokens=PLAN_MAX_TOKENS, think=True)
     except LLMError as e:
         if e.kind != "bad_response":  # сеть, ключ, лимит — части не помогут
             raise
@@ -738,7 +738,7 @@ def fix_project(plan: ProjectPlan, log: str, llm) -> ProjectPlan:
     user = (f"Язык: {plan.language}, вид: {plan.kind}. {programs_text(plan)}\n\nОшибки сборки:\n{log[-6000:]}"
             f"\n\nЛистинги отчёта: {refs}.\nСнимки, которые ForLabs делает сам: {shots}.\n\nФайлы проекта:\n{files}")
     out = llm.json([{"role": "system", "content": FIX_SYSTEM}, {"role": "user", "content": user}], FixOut,
-                   max_tokens=8000)
+                   max_tokens=8000, think=True)
     return _apply_fix(plan, out, scenarios=False)
 
 
@@ -874,7 +874,7 @@ def repair_project(plan: ProjectPlan, wish: str, log: str, llm, st: LabState | N
             f"{errors}\n\nЛистинги отчёта: {refs}.\nСнимки, которые ForLabs делает сам:\n{shots}\n\n"
             f"Файлы проекта:\n{files}")
     out = llm.json([{"role": "system", "content": REPAIR_SYSTEM}, {"role": "user", "content": user}], FixOut,
-                   max_tokens=PLAN_MAX_TOKENS)
+                   max_tokens=PLAN_MAX_TOKENS, think=True)
     fixed = _apply_fix(plan, out, scenarios=True)
     return _quiet_console(_trusted_expects(_tidy(fixed), st)) if st is not None else fixed
 
@@ -900,7 +900,7 @@ def review_results(plan: ProjectPlan, st: LabState, shown: list, llm) -> dict[tu
     user = (f"Тема: {spec.topic if spec else ''}\nЗадания:\n{tasks}\n\nРисунки:\n\n"
             + "\n\n".join(one(*x) for x in shown) + f"\n\nФайлы проекта:\n{files}")
     out = llm.json([{"role": "system", "content": REVIEW_SYSTEM}, {"role": "user", "content": user}], ReviewOut,
-                   max_tokens=1500)
+                   max_tokens=1500, think=True)
     known = {(n, bi) for n, bi, *_ in shown}
     return {(v.section, v.block): (" ".join(v.problem.split()) or "результат на экране неверный")
             for v in out.shots if not v.ok and (v.section, v.block) in known}

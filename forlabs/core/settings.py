@@ -45,6 +45,8 @@ class Settings(BaseModel):
     soffice_path: str | None = None
     tesseract_path: str | None = None
     temperature: float = 0.4
+    # размышление модели перед ответом на сложных шагах (текст заданий, код, ответы, чат правок); "off" — выключено
+    reasoning: Literal["off", "low", "medium", "high"] = "low"
     browser_channel: str | None = None
     tour_done: bool = False  # обучение при первом запуске пройдено или пропущено
     app_paths: dict[str, str] = {}  # программы для снимков, которые студент указал сам (ключ → путь к .exe)

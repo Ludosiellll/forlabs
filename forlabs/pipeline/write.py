@@ -225,7 +225,7 @@ def write_section(spec: LabSpec, n: int, profile: Profile, subject: Subject, llm
     ctx = _context(spec, profile, subject, memory, previous or [])
     messages = [{"role": "system", "content": WRITE_SYSTEM.format(rules=rules.load("write", subject.id))},
                 {"role": "user", "content": WRITE_USER.format(n=n, task=task.text, **ctx)}]
-    draft = llm.json(messages, SectionDraft)
+    draft = llm.json(messages, SectionDraft, think=True)
     return TaskSection(n=n, title=task.text, blocks=draft_to_blocks(draft, Path(assets_dir), n, render_diagrams))
 
 
@@ -240,7 +240,7 @@ def answer_questions(spec: LabSpec, profile: Profile, subject: Subject, llm, rul
         draft = llm.json([{"role": "system", "content": system},
                           {"role": "user", "content": f"Предмет: {subject.name}. Тема работы: {spec.topic}.\n"
                                                       f"Пол студента: {_gender_ru(profile.gender)}.\n{source}"
-                                                      f"Вопросы:\n{qs}"}], AnswersDraft)
+                                                      f"Вопросы:\n{qs}"}], AnswersDraft, think=True)
         return draft.for_questions(numbers)
 
     numbers = list(range(1, len(spec.questions) + 1))

@@ -143,7 +143,8 @@ def repair(doc: ReportDoc, findings: list[Finding], llm, rules: RuleBook, spec: 
                                           for f in fs]})
         user = (f"Пол студента: {gender}. Задание {sec.n}: «{sec.title}».\nБлоки с замечаниями:\n"
                 + json.dumps(payload, ensure_ascii=False, indent=1))
-        draft = llm.json([{"role": "system", "content": system}, {"role": "user", "content": user}], RepairDraft)
+        draft = llm.json([{"role": "system", "content": system}, {"role": "user", "content": user}], RepairDraft,
+                         think=True)
         for rb in draft.blocks:
             if rb.index not in flagged or not (1 <= rb.index <= len(sec.blocks)):
                 continue
@@ -160,7 +161,8 @@ def repair(doc: ReportDoc, findings: list[Finding], llm, rules: RuleBook, spec: 
                    if 1 <= n <= len(doc.questions)]
         user = f"Пол студента: {gender}. Ответы на контрольные вопросы с замечаниями:\n" + \
                json.dumps(payload, ensure_ascii=False, indent=1)
-        draft = llm.json([{"role": "system", "content": system}, {"role": "user", "content": user}], RepairDraft)
+        draft = llm.json([{"role": "system", "content": system}, {"role": "user", "content": user}], RepairDraft,
+                         think=True)
         for rb in draft.blocks:
             if rb.index in by_question and rb.text and 1 <= rb.index <= len(doc.questions):
                 doc.questions[rb.index - 1].answer = rb.text.strip()

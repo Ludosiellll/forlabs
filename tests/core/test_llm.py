@@ -241,3 +241,113 @@ def test_model_falls_back_when_key_does_not_allow_it():
     assert llm.chat([{"role": "user", "content": "x"}]) == "ok"
     assert seen == ["deepseek-v4.1-flash-1017", "deepseek-v4.1-flash", "deepseek-v4.1-flash"]
     assert llm.model == "deepseek-v4.1-flash"
+
+
+def think_llm(handler, mode="local", reasoning="low") -> LLM:
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    return LLM(Settings(base_url="https://example.test/v1", mode=mode, reasoning=reasoning), api_key="k",
+               http_client=client, retry_delays=(0, 0))
+
+
+def test_think_asks_for_reasoning_with_bigger_limit():
+    seen = []
+
+    def handler(req):
+        seen.append(json.loads(req.content))
+        return httpx.Response(200, json=_completion(json.dumps({"city": "Минск", "population": 2})))
+
+    llm = think_llm(handler)
+    llm.json([{"role": "user", "content": "?"}], Answer, think=True)
+    llm.json([{"role": "user", "content": "?"}], Answer)
+    assert seen[0]["reasoning_effort"] == "low" and seen[0]["max_tokens"] == 16000
+    assert "reasoning_effort" not in seen[1] and seen[1]["max_tokens"] == 8000
+
+
+def test_think_off_in_settings_sends_no_reasoning():
+    seen = []
+
+    def handler(req):
+        seen.append(json.loads(req.content))
+        return httpx.Response(200, json=_completion("да"))
+
+    llm = think_llm(handler, reasoning="off")
+    llm.chat([{"role": "user", "content": "?"}], max_tokens=500, think=True)
+    assert "reasoning_effort" not in seen[0] and seen[0]["max_tokens"] == 500
+
+
+def test_reasoning_that_eats_the_limit_is_retried_without_it():
+    seen = []
+
+    def handler(req):
+        body = json.loads(req.content)
+        seen.append(body)
+        if "reasoning_effort" in body:  # всё ушло на размышление, ответа нет
+            data = _completion("")
+            data["choices"][0]["finish_reason"] = "length"
+            return httpx.Response(200, json=data)
+        return httpx.Response(200, json=_completion(json.dumps({"city": "Минск", "population": 2})))
+
+    llm = think_llm(handler)
+    res = llm.json([{"role": "user", "content": "?"}], Answer, think=True)
+    assert res.city == "Минск"
+    assert [("reasoning_effort" in b, b["max_tokens"]) for b in seen] == [(True, 16000), (False, 8000)]
+    assert llm.think_fallbacks == 1
+
+
+def test_reasoning_timeout_is_retried_without_it():
+    seen = []
+
+    def handler(req):
+        body = json.loads(req.content)
+        seen.append(body)
+        if "reasoning_effort" in body:
+            return httpx.Response(504, json={"error": "provider timeout"})
+        return httpx.Response(200, json=_completion("готово"))
+
+    llm = think_llm(handler)
+    assert llm.chat([{"role": "user", "content": "?"}], think=True) == "готово"
+    assert ["reasoning_effort" in b for b in seen] == [True, False]
+
+
+def test_length_without_reasoning_still_fails():
+    def handler(req):
+        data = _completion("обрыв")
+        data["choices"][0]["finish_reason"] = "length"
+        return httpx.Response(200, json=data)
+
+    llm = think_llm(handler)
+    with pytest.raises(LLMError):
+        llm.chat([{"role": "user", "content": "?"}])
+
+
+def test_json_format_repair_does_not_think_again():
+    replies = iter(["не json", json.dumps({"city": "Минск", "population": 2})])
+    seen = []
+
+    def handler(req):
+        seen.append(json.loads(req.content))
+        return httpx.Response(200, json=_completion(next(replies)))
+
+    llm = think_llm(handler)
+    llm.json([{"role": "user", "content": "?"}], Answer, think=True)
+    assert ["reasoning_effort" in b for b in seen] == [True, False]
+
+
+def test_cloud_thinks_only_after_proxy_reports_bigger_limit():
+    seen, cap = [], {"value": None}
+
+    def handler(req):
+        seen.append(json.loads(req.content))
+        headers = {"x-forlabs-max-tokens": cap["value"]} if cap["value"] else {}
+        return httpx.Response(200, json=_completion("да"), headers=headers)
+
+    llm = think_llm(handler, mode="cloud")
+    llm.chat([{"role": "user", "content": "?"}], think=True)  # старый прокси: заголовка нет
+    cap["value"] = "8000"
+    llm.chat([{"role": "user", "content": "?"}], think=True)
+    llm.chat([{"role": "user", "content": "?"}], think=True)  # прокси сказал 8000 — всё ещё без размышления
+    cap["value"] = "16000"
+    llm.chat([{"role": "user", "content": "?"}])  # узнали новый предел
+    clone = llm.with_headers({"x-forlabs-lab": "lab1"})
+    clone.chat([{"role": "user", "content": "?"}], think=True)
+    assert ["reasoning_effort" in b for b in seen] == [False, False, False, False, True]

@@ -15,7 +15,9 @@ const TRIAL_CALLS_PER_LAB = Number(Deno.env.get("TRIAL_CALLS_PER_LAB") ?? "120")
 const DAILY_TOKENS = Number(Deno.env.get("DAILY_TOKENS") ?? "1000000") || 1000000;
 const LAB_CALLS_LIMIT = Number(Deno.env.get("LAB_CALLS_LIMIT") ?? "300") || 300;
 const MAX_PARALLEL = 4;          // одновременно в работе на человека
-const MAX_TOKENS_CAP = 8000;     // предел ответа (как в программе)
+// предел ответа: 16 000 — для размышления модели (оно входит в предел); ≈70 с при 230 ток/с, в пределах 140 с
+// ожидания провайдера. Программа узнаёт предел из заголовка x-forlabs-max-tokens и без него не размышляет.
+const MAX_TOKENS_CAP = 16000;
 const MAX_BODY_CHARS = 600_000;  // методичка 30 тыс. символов + правила + отчёт — с большим запасом
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, {
   auth: { persistSession: false },
@@ -206,5 +208,8 @@ Deno.serve(async (req: Request) => {
       // учёт расхода не должен ломать ответ
     }
   }
-  return new Response(text, { status: upstream.status, headers: { "Content-Type": "application/json" } });
+  return new Response(text, {
+    status: upstream.status,
+    headers: { "Content-Type": "application/json", "x-forlabs-max-tokens": String(MAX_TOKENS_CAP) },
+  });
 });
