@@ -9,6 +9,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ClassLibrary1", "ClassLibra
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CalculatorApp", "CalculatorApp\CalculatorApp.csproj", "{7E3E0095-B42F-53A6-908A-26E92910CE17}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CapacitorLibrary", "CapacitorLibrary\CapacitorLibrary.csproj", "{415F985B-7284-5476-ADEA-66E69A917071}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CapacitorApp", "CapacitorApp\CapacitorApp.csproj", "{A52BFB49-324E-5A10-AAF0-D69E0B34CE22}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -27,6 +31,14 @@ Global
 		{7E3E0095-B42F-53A6-908A-26E92910CE17}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{7E3E0095-B42F-53A6-908A-26E92910CE17}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{7E3E0095-B42F-53A6-908A-26E92910CE17}.Release|Any CPU.Build.0 = Release|Any CPU
+		{415F985B-7284-5476-ADEA-66E69A917071}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{415F985B-7284-5476-ADEA-66E69A917071}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{415F985B-7284-5476-ADEA-66E69A917071}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{415F985B-7284-5476-ADEA-66E69A917071}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A52BFB49-324E-5A10-AAF0-D69E0B34CE22}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A52BFB49-324E-5A10-AAF0-D69E0B34CE22}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A52BFB49-324E-5A10-AAF0-D69E0B34CE22}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A52BFB49-324E-5A10-AAF0-D69E0B34CE22}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
