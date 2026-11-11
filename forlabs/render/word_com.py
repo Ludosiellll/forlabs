@@ -18,6 +18,10 @@ from pathlib import Path
 WD_EXPORT_PDF = 17
 WD_ACTIVE_END_PAGE = 3
 WD_CHARACTER = 1
+WD_GOTO_PAGE = 1
+WD_GOTO_ABSOLUTE = 1
+WD_STATISTIC_PAGES = 2
+WD_WITHIN_TABLE = 12
 MAX_ROUNDS = 10
 MAX_INSERTS = 300
 LISTING_PREFIX = "_ForLabsL"
@@ -29,6 +33,7 @@ CONT_TABLE = "Продолжение таблицы"
 class WordReport:
     continuations: int = 0
     warnings: list[str] = field(default_factory=list)
+    marks: int = -1  # абзацы, отмеченные для разрыва страницы (freeze); -1 — отметить не удалось
 
 
 _failed = False  # Word в этом запуске уже зависал/падал — до перезапуска доводим через LibreOffice
@@ -192,6 +197,27 @@ def place_continuations(doc) -> int:
     return total
 
 
+def mark_page_starts(doc) -> int:
+    """Абзацы, с которых начинается страница и у которых стоит «не отрывать от следующего», «не разрывать абзац»
+    или «с новой страницы», отмечаются закладкой freeze.MARK_PREFIX…: после сохранения на их место встаёт обычный
+    разрыв страницы, а настройки (у Word они видны как чёрные квадраты слева) снимаются. Разбивка не меняется."""
+    from forlabs.render.freeze import MARK_PREFIX
+
+    doc.Repaginate()
+    pages = int(doc.ComputeStatistics(WD_STATISTIC_PAGES))
+    count = 0
+    for k in range(2, pages + 1):
+        start = doc.GoTo(WD_GOTO_PAGE, WD_GOTO_ABSOLUTE, k)
+        par = start.Paragraphs(1)
+        if par.Range.Start != start.Start or par.Range.Information(WD_WITHIN_TABLE):
+            continue  # страница начинается посреди абзаца или в таблице — обычный переход
+        fmt = par.Format
+        if fmt.KeepWithNext or fmt.KeepTogether or fmt.PageBreakBefore:
+            count += 1
+            doc.Bookmarks.Add(f"{MARK_PREFIX}{count}", doc.Range(start.Start, start.Start))
+    return count
+
+
 def finalize(docx: Path, pdf_out: Path, author: str) -> WordReport:
     import pythoncom
     import win32com.client
@@ -210,6 +236,10 @@ def finalize(docx: Path, pdf_out: Path, author: str) -> WordReport:
         report.continuations = place_continuations(doc)
         for toc in doc.TablesOfContents:
             toc.UpdatePageNumbers()
+        try:
+            report.marks = mark_page_starts(doc)
+        except Exception as e:  # без отметок документ остаётся с прежними настройками — разбивка та же
+            report.warnings.append(f"Не удалось закрепить разрывы страниц: {e}")
         try:
             doc.BuiltInDocumentProperties("Author").Value = author
             doc.BuiltInDocumentProperties("Last author").Value = author
@@ -367,7 +397,7 @@ def _child(docx: str, pdf_out: str, author: str, queue) -> None:
     win32com.client.DispatchEx = dispatch_and_report
     try:
         rep = finalize(Path(docx), Path(pdf_out), author)
-        queue.put(("ok", rep.continuations, rep.warnings))
+        queue.put(("ok", rep.continuations, rep.warnings, rep.marks))
     except Exception as e:  # отдаём текст ошибки родителю
         queue.put(("error", 0, [f"{type(e).__name__}: {e}"]))
 
@@ -415,9 +445,9 @@ def finalize_isolated(docx: Path, pdf_out: Path, author: str, timeout: float = 3
         _kill_ours(pids)
         raise RuntimeError("Word завершился без результата")
     p.join(10)
-    status, cont, warnings = result
+    status, cont, warnings, *rest = result
     if status != "ok":
         _kill_ours(pids)
         raise RuntimeError("; ".join(warnings))
     _remember_pids(_remembered_pids() - pids)  # Word закрылся сам
-    return WordReport(cont, warnings)
+    return WordReport(cont, warnings, rest[0] if rest else -1)

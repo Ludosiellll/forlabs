@@ -4,8 +4,22 @@ import pymupdf
 import pytest
 
 from forlabs.render import finalize as fin
+from forlabs.render import freeze
 from forlabs.render import word_com
 from forlabs.render.docx_builder import build_lab
+
+
+def _texts_of(data: bytes) -> list[str]:
+    import io
+    import re
+    import zipfile
+
+    xml = zipfile.ZipFile(io.BytesIO(data)).read("word/document.xml").decode("utf-8")
+    return ["".join(re.findall(r"<w:t[^>]*>([^<]*)</w:t>", p)) for p in re.findall(r"<w:p[ >].*?</w:p>", xml, re.S)]
+
+
+def _texts(path) -> list[str]:
+    return _texts_of(path.read_bytes())
 
 
 def _pdf(path):
@@ -45,7 +59,9 @@ def test_word_failure_leaves_original_untouched(sample_doc, tmp_path, monkeypatc
     monkeypatch.setattr(fin.libreoffice, "to_pdf", lambda docx, workdir, soffice=None: (_pdf(workdir / "report.pdf"),
                                                                                         workdir / "report.pdf")[1])
     rep = fin.finalize(out, "x", tmp_path / "render")
-    assert rep.engine == "libreoffice" and out.read_bytes() == before
+    assert rep.engine == "libreoffice"
+    # недописанная Word копия не попала на место; документ тот же, только без настроек «не отрывать»
+    assert _texts(out) == _texts_of(before) and freeze.flags_left(out) == 0
 
 
 def test_hanging_word_is_killed_by_pid(tmp_path, monkeypatch):

@@ -12,7 +12,7 @@ from pathlib import Path
 from lxml import etree
 
 from forlabs.core.fs import durable_replace
-from forlabs.render import libreoffice, word_com
+from forlabs.render import freeze, libreoffice, word_com
 from forlabs.render.conformance import q
 from forlabs.render.preview import heading_pages, pdf_to_pngs
 
@@ -93,6 +93,8 @@ def finalize(docx: Path, author: str, workdir: Path, soffice: str | None = None,
         shutil.copyfile(docx, work)
         try:
             rep = word_com.finalize_isolated(work, pdf, author)
+            if rep.marks >= 0:  # Word отметил, где абзацы ушли на новую страницу: разрывы вместо «квадратов»
+                freeze.apply(work)
             durable_replace(work, docx)
             return FinalizeReport("word", pdf, pdf_to_pngs(pdf, workdir / "pages"), rep.continuations, rep.warnings)
         except Exception as e:  # Word завис или упал — доводим исходный документ через LibreOffice
@@ -120,6 +122,11 @@ def finalize(docx: Path, author: str, workdir: Path, soffice: str | None = None,
         hp = heading_pages(pdf, list(marks.values()))
         patch_toc_pages(docx, {name: hp[text] for name, text in marks.items() if text in hp})
         pdf = libreoffice.to_pdf(docx, workdir, soffice)
+    try:  # разрывы страниц вместо настроек «не отрывать» — без чёрных квадратов в Word
+        freeze.apply(docx, freeze.page_starts_from_pdf(docx, pdf))
+        pdf = libreoffice.to_pdf(docx, workdir, soffice)
+    except Exception as e:  # noqa: BLE001 — документ остаётся с прежними настройками, разбивка та же
+        warnings.append(f"Не удалось закрепить разрывы страниц ({e}).")
     return FinalizeReport("libreoffice", pdf, pdf_to_pngs(pdf, workdir / "pages"), 0, warnings)
 
 
