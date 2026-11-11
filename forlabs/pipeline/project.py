@@ -751,6 +751,15 @@ def _alike(a: str, b: str) -> bool:
     return bool(a) and bool(b) and difflib.SequenceMatcher(None, a, b, autojunk=False).ratio() >= 0.6
 
 
+def _fragment_of_whole(new: ListingRef, old: ListingRef | None, old_file: str, new_file: str) -> bool:
+    """Модель после исправления прислала в листинге только изменённый кусок (один метод), хотя листинг отчёта —
+    весь файл: без своего кода или с кодом почти всего файла. Такой обрывок вместо программы в отчёт не идёт."""
+    if old is None or not new.code.strip() or not new_file.strip():
+        return False
+    was_whole = not old.code.strip() or (bool(old_file) and len(_squash(old.code)) >= 0.9 * len(_squash(old_file)))
+    return was_whole and len(_squash(new.code)) < 0.6 * len(_squash(new_file))
+
+
 def _apply_fix(plan: ProjectPlan, out: FixOut, scenarios: bool) -> ProjectPlan:
     """Ответ модели на исправление — в план: изменённые, перенесённые и убранные файлы, листинги, деление на
     программы и то, какую программу запускает снимок. scenarios — можно менять и сами сценарии снимков (исправление
@@ -805,6 +814,9 @@ def _apply_fix(plan: ProjectPlan, out: FixOut, scenarios: bool) -> ProjectPlan:
         if find(r.file) is None and programs and (src := find(Path(r.file).name)) is not None and outside(src):
             move(src, r.file)  # листинг назван по новому месту, а сам файл остался на старом: переносим файл
         if find(r.file) is not None:  # листинг про файл, которого нет, — описка: остаётся прежняя ссылка
+            old = refs.get((r.section, r.block))
+            if _fragment_of_whole(r, old, before.get(old.file.lower(), "") if old else "", by_path[find(r.file)].content):
+                r = r.model_copy(update={"code": ""})  # листинг возьмётся из исправленного файла целиком
             refs[(r.section, r.block)] = r
     if programs:
         if plan.language == "csharp":  # файл остался вне программ: его место — программа с именем его namespace

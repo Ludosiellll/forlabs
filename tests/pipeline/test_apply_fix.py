@@ -158,3 +158,21 @@ def test_one_program_named_in_the_answer_does_not_turn_a_plain_project_into_fold
     fixed = apply(programs=one, files=[{"path": "Program.cs", "content": APP + "// правка\n"}])
     assert fixed.programs == [] and validate(fixed) == []
     assert fixed.file("Program.cs").content.endswith("// правка\n")
+
+
+def test_fix_that_returns_only_the_changed_method_keeps_the_whole_file_listing():
+    fixed_app = APP.replace("Calculator.Summ(2, 3)", "Calculator.Summ(2, 4)")
+    part = "            Console.WriteLine(\"Сумма: \" + Calculator.Summ(2, 4));"
+    fixed = apply(scenarios=False, files=[{"path": "Program.cs", "content": fixed_app}],
+                  listings=[{"section": 1, "block": 5, "file": "Program.cs", "code": part}])
+    ref = next(r for r in fixed.listings if (r.section, r.block) == (1, 5))
+    assert ref.code == ""  # обрывок не заменяет листинг всего файла: он возьмётся из исправленного файла
+    assert fixed.file("Program.cs").content == fixed_app
+
+
+def test_fix_may_still_return_a_listing_that_is_the_whole_new_file():
+    fixed_app = APP.replace("Calculator.Summ(2, 3)", "Calculator.Summ(2, 4)")
+    fixed = apply(scenarios=False, files=[{"path": "Program.cs", "content": fixed_app}],
+                  listings=[{"section": 1, "block": 5, "file": "Program.cs", "code": fixed_app}])
+    ref = next(r for r in fixed.listings if (r.section, r.block) == (1, 5))
+    assert ref.code.strip() == fixed_app.strip()
