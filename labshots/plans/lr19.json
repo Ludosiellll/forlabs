@@ -1,0 +1,188 @@
+{
+ "language": "csharp",
+ "kind": "winforms",
+ "name": "ЛР19",
+ "entry": "CalculatorApp/Program.cs",
+ "programs": [
+  {
+   "name": "ClassLibrary1",
+   "kind": "library",
+   "entry": "",
+   "uses": []
+  },
+  {
+   "name": "ExampleApp",
+   "kind": "winforms",
+   "entry": "ExampleApp/Program.cs",
+   "uses": [
+    "ClassLibrary1"
+   ]
+  },
+  {
+   "name": "CalculatorApp",
+   "kind": "winforms",
+   "entry": "CalculatorApp/Program.cs",
+   "uses": [
+    "ClassLibrary1"
+   ]
+  }
+ ],
+ "files": [
+  {
+   "path": "CalculatorApp/Form1.cs",
+   "content": "using System;\nusing System.Drawing;\nusing System.Globalization;\nusing System.Windows.Forms;\nusing ClassLibrary1;\n\nnamespace CalculatorApp\n{\n    public class Form1 : Form\n    {\n        private TextBox display;\n        private Label history;\n        private double accumulator = 0;\n        private string pending = \"\";\n        private bool newEntry = true;\n\n        public Form1()\n        {\n            Text = \"Калькулятор\";\n            ClientSize = new Size(300, 400);\n            Font = new Font(\"Segoe UI\", 12);\n            FormBorderStyle = FormBorderStyle.FixedSingle;\n            MaximizeBox = false;\n\n            history = new Label();\n            history.Name = \"history\";\n            history.Bounds = new Rectangle(10, 8, 280, 22);\n            history.TextAlign = ContentAlignment.MiddleRight;\n            history.ForeColor = Color.DimGray;\n            Controls.Add(history);\n\n            display = new TextBox();\n            display.Name = \"display\";\n            display.Bounds = new Rectangle(10, 32, 280, 40);\n            display.Font = new Font(\"Segoe UI\", 20);\n            display.TextAlign = HorizontalAlignment.Right;\n            display.ReadOnly = true;\n            display.Text = \"0\";\n            Controls.Add(display);\n\n            string[,] keys =\n            {\n                { \"C\", \"←\", \"±\", \"÷\" },\n                { \"7\", \"8\", \"9\", \"×\" },\n                { \"4\", \"5\", \"6\", \"−\" },\n                { \"1\", \"2\", \"3\", \"+\" },\n                { \"0\", \",\", \"=\", \"\" }\n            };\n            for (int row = 0; row < 5; row++)\n            {\n                for (int col = 0; col < 4; col++)\n                {\n                    if (keys[row, col] != \"\")\n                    {\n                        AddKey(keys[row, col], col, row);\n                    }\n                }\n            }\n        }\n\n        private void AddKey(string text, int col, int row)\n        {\n            Button b = new Button();\n            b.Text = text;\n            b.Name = \"key\" + row + col;\n            int width = text == \"=\" ? 140 : 68;\n            b.Bounds = new Rectangle(10 + col * 72, 84 + row * 62,\n                width, 56);\n            b.Click += Key_Click;\n            Controls.Add(b);\n        }\n\n        private void Key_Click(object sender, EventArgs e)\n        {\n            string key = ((Button)sender).Text;\n            if (char.IsDigit(key[0]))\n            {\n                display.Text = newEntry || display.Text == \"0\"\n                    ? key : display.Text + key;\n                newEntry = false;\n            }\n            else if (key == \",\")\n            {\n                if (newEntry)\n                {\n                    display.Text = \"0\";\n                    newEntry = false;\n                }\n                if (!display.Text.Contains(\",\"))\n                {\n                    display.Text += \",\";\n                }\n            }\n            else if (key == \"C\")\n            {\n                accumulator = 0;\n                pending = \"\";\n                history.Text = \"\";\n                display.Text = \"0\";\n                newEntry = true;\n            }\n            else if (key == \"←\")\n            {\n                string t = display.Text;\n                display.Text = t.Length > 1\n                    ? t.Substring(0, t.Length - 1) : \"0\";\n            }\n            else if (key == \"±\")\n            {\n                double v = Value();\n                display.Text = Format(-v);\n            }\n            else if (key == \"=\")\n            {\n                if (pending != \"\")\n                {\n                    history.Text = Format(accumulator) + \" \"\n                        + pending + \" \" + display.Text + \" =\";\n                    Calculate();\n                    pending = \"\";\n                }\n            }\n            else\n            {\n                if (pending != \"\" && !newEntry)\n                {\n                    Calculate();\n                }\n                else\n                {\n                    accumulator = Value();\n                }\n                pending = key;\n                history.Text = Format(accumulator) + \" \" + key;\n                newEntry = true;\n            }\n        }\n\n        private static CultureInfo ru = new CultureInfo(\"ru-RU\");\n\n        private double Value()\n        {\n            return double.Parse(display.Text, ru);\n        }\n\n        private string Format(double v)\n        {\n            return v.ToString(\"0.##########\", ru);\n        }\n\n        private void Calculate()\n        {\n            double b = Value();\n            try\n            {\n                double a = accumulator;\n                if (pending == \"+\") a = Calculator.Add(a, b);\n                if (pending == \"−\") a = Calculator.Subtract(a, b);\n                if (pending == \"×\") a = Calculator.Mult(a, b);\n                if (pending == \"÷\") a = Calculator.Divide(a, b);\n                accumulator = a;\n                display.Text = Format(accumulator);\n            }\n            catch (DivideByZeroException)\n            {\n                display.Text = \"Деление на 0\";\n                accumulator = 0;\n                pending = \"\";\n            }\n            newEntry = true;\n        }\n    }\n}\n"
+  },
+  {
+   "path": "CalculatorApp/Program.cs",
+   "content": "using System;\nusing System.Windows.Forms;\n\nnamespace CalculatorApp\n{\n    internal static class Program\n    {\n        [STAThread]\n        static void Main()\n        {\n            Application.EnableVisualStyles();\n            Application.SetCompatibleTextRenderingDefault(false);\n            Application.Run(new Form1());\n        }\n    }\n}\n"
+  },
+  {
+   "path": "ClassLibrary1/Calculator.cs",
+   "content": "using System;\n\nnamespace ClassLibrary1\n{\n    /// <summary>\n    /// Математический класс\n    /// </summary>\n    public class Calculator\n    {\n        /// <summary>\n        /// Метод возвращает сумму двух целых чисел\n        /// </summary>\n        public static int Summ(int firstNumber, int secondNumber)\n        {\n            return firstNumber + secondNumber;\n        }\n\n        /// <summary>\n        /// Метод возвращает разность двух целых чисел\n        /// </summary>\n        public static int Division(int firstNumber,\n            int secondNumber)\n        {\n            return firstNumber - secondNumber;\n        }\n\n        /// <summary>\n        /// Метод возвращает произведение двух чисел\n        /// </summary>\n        public static long Multiply(long x, long y)\n        {\n            return (x * y);\n        }\n\n        /// <summary>\n        /// Метод возвращает деление двух чисел\n        /// </summary>\n        public static int Residual(int firstNumber,\n            int secondNumber)\n        {\n            return (firstNumber / secondNumber);\n        }\n\n        /// <summary>\n        /// Сумма двух дробных чисел\n        /// </summary>\n        public static double Add(double a, double b)\n        {\n            return a + b;\n        }\n\n        /// <summary>\n        /// Разность двух дробных чисел\n        /// </summary>\n        public static double Subtract(double a, double b)\n        {\n            return a - b;\n        }\n\n        /// <summary>\n        /// Произведение двух дробных чисел\n        /// </summary>\n        public static double Mult(double a, double b)\n        {\n            return a * b;\n        }\n\n        /// <summary>\n        /// Частное двух дробных чисел\n        /// </summary>\n        public static double Divide(double a, double b)\n        {\n            if (b == 0)\n            {\n                throw new DivideByZeroException(\n                    \"Деление на ноль\");\n            }\n            return a / b;\n        }\n    }\n}\n"
+  },
+  {
+   "path": "ExampleApp/Form1.cs",
+   "content": "using System;\nusing System.Drawing;\nusing System.Windows.Forms;\nusing ClassLibrary1;\n\nnamespace ExampleApp\n{\n    public class Form1 : Form\n    {\n        private TextBox txtFirst;\n        private TextBox txtSecond;\n        private Label lblResult;\n\n        public Form1()\n        {\n            Text = \"Проверка библиотеки ClassLibrary1\";\n            ClientSize = new Size(380, 170);\n            Font = new Font(\"Segoe UI\", 10);\n            FormBorderStyle = FormBorderStyle.FixedSingle;\n            MaximizeBox = false;\n\n            Controls.Add(MakeLabel(\"Первое число:\", 15, 18));\n            txtFirst = MakeBox(\"txtFirst\", 150, 15);\n            Controls.Add(MakeLabel(\"Второе число:\", 15, 53));\n            txtSecond = MakeBox(\"txtSecond\", 150, 50);\n\n            string[] ops = { \"+\", \"-\", \"*\", \"/\" };\n            for (int i = 0; i < ops.Length; i++)\n            {\n                Button b = new Button();\n                b.Name = \"btnOp\" + i;\n                b.Text = ops[i];\n                b.Bounds = new Rectangle(15 + i * 90, 88, 80, 32);\n                b.Click += Operation_Click;\n                Controls.Add(b);\n            }\n\n            lblResult = MakeLabel(\"Результат:\", 15, 133);\n            lblResult.Name = \"lblResult\";\n            lblResult.AutoSize = true;\n        }\n\n        private Label MakeLabel(string text, int x, int y)\n        {\n            Label l = new Label();\n            l.Text = text;\n            l.Location = new Point(x, y);\n            l.AutoSize = true;\n            Controls.Add(l);\n            return l;\n        }\n\n        private TextBox MakeBox(string name, int x, int y)\n        {\n            TextBox t = new TextBox();\n            t.Name = name;\n            t.Bounds = new Rectangle(x, y, 210, 27);\n            Controls.Add(t);\n            return t;\n        }\n\n        private void Operation_Click(object sender, EventArgs e)\n        {\n            int a, b;\n            if (!int.TryParse(txtFirst.Text, out a)\n                || !int.TryParse(txtSecond.Text, out b))\n            {\n                lblResult.Text = \"Результат: введите целые числа\";\n                return;\n            }\n            string op = ((Button)sender).Text;\n            try\n            {\n                long result = 0;\n                if (op == \"+\") result = Calculator.Summ(a, b);\n                if (op == \"-\") result = Calculator.Division(a, b);\n                if (op == \"*\") result = Calculator.Multiply(a, b);\n                if (op == \"/\") result = Calculator.Residual(a, b);\n                lblResult.Text = \"Результат: \" + a + \" \" + op\n                    + \" \" + b + \" = \" + result;\n            }\n            catch (DivideByZeroException)\n            {\n                lblResult.Text = \"Результат: деление на ноль\";\n            }\n        }\n    }\n}\n"
+  },
+  {
+   "path": "ExampleApp/Program.cs",
+   "content": "using System;\nusing System.Windows.Forms;\n\nnamespace ExampleApp\n{\n    internal static class Program\n    {\n        [STAThread]\n        static void Main()\n        {\n            Application.EnableVisualStyles();\n            Application.SetCompatibleTextRenderingDefault(false);\n            Application.Run(new Form1());\n        }\n    }\n}\n"
+  }
+ ],
+ "listings": [],
+ "shots": [
+  {
+   "section": 1,
+   "block": 1,
+   "mode": "window",
+   "program": "ExampleApp",
+   "expect": "Результат: 15 + 4 = 19",
+   "steps": [
+    {
+     "action": "set",
+     "target": "txtFirst",
+     "value": "15"
+    },
+    {
+     "action": "set",
+     "target": "txtSecond",
+     "value": "4"
+    },
+    {
+     "action": "click",
+     "target": "+"
+    }
+   ]
+  },
+  {
+   "section": 1,
+   "block": 2,
+   "mode": "window",
+   "program": "ExampleApp",
+   "expect": "Результат: 15 * 4 = 60",
+   "steps": [
+    {
+     "action": "set",
+     "target": "txtFirst",
+     "value": "15"
+    },
+    {
+     "action": "set",
+     "target": "txtSecond",
+     "value": "4"
+    },
+    {
+     "action": "click",
+     "target": "*"
+    }
+   ]
+  },
+  {
+   "section": 2,
+   "block": 1,
+   "mode": "window",
+   "program": "CalculatorApp",
+   "expect": "500",
+   "steps": [
+    {
+     "action": "click",
+     "target": "1"
+    },
+    {
+     "action": "click",
+     "target": "2"
+    },
+    {
+     "action": "click",
+     "target": "5"
+    },
+    {
+     "action": "click",
+     "target": "×"
+    },
+    {
+     "action": "click",
+     "target": "4"
+    },
+    {
+     "action": "click",
+     "target": "="
+    }
+   ]
+  },
+  {
+   "section": 2,
+   "block": 2,
+   "mode": "window",
+   "program": "CalculatorApp",
+   "expect": "6,25",
+   "steps": [
+    {
+     "action": "click",
+     "target": "2"
+    },
+    {
+     "action": "click",
+     "target": "5"
+    },
+    {
+     "action": "click",
+     "target": "÷"
+    },
+    {
+     "action": "click",
+     "target": "4"
+    },
+    {
+     "action": "click",
+     "target": "="
+    }
+   ]
+  },
+  {
+   "section": 2,
+   "block": 3,
+   "mode": "window",
+   "program": "CalculatorApp",
+   "expect": "Деление на 0",
+   "steps": [
+    {
+     "action": "click",
+     "target": "7"
+    },
+    {
+     "action": "click",
+     "target": "÷"
+    },
+    {
+     "action": "click",
+     "target": "0"
+    },
+    {
+     "action": "click",
+     "target": "="
+    }
+   ]
+  }
+ ]
+}

@@ -1,0 +1,38 @@
+name: Lab shots
+
+on:
+  push:
+    branches: [labshots]
+    paths: ["labshots/plans/**", "tools/labshots.py", ".github/workflows/labshots.yml"]
+
+permissions:
+  contents: write
+
+env:
+  PYTHONUTF8: "1"
+  PYTHONIOENCODING: utf-8
+
+jobs:
+  shots:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Зависимости
+        run: python -m pip install ".[windows]"
+      - name: Сборка и снимки
+        run: python tools/labshots.py
+      - name: Результаты обратно в ветку
+        if: always()
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add labshots/out
+          git commit -m "Снимки лаб с Windows"
+          git push origin HEAD:labshots
