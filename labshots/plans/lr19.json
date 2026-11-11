@@ -25,6 +25,20 @@
    "uses": [
     "ClassLibrary1"
    ]
+  },
+  {
+   "name": "CapacitorLibrary",
+   "kind": "library",
+   "entry": "",
+   "uses": []
+  },
+  {
+   "name": "CapacitorApp",
+   "kind": "winforms",
+   "entry": "CapacitorApp/Program.cs",
+   "uses": [
+    "CapacitorLibrary"
+   ]
   }
  ],
  "files": [
@@ -47,6 +61,18 @@
   {
    "path": "ExampleApp/Program.cs",
    "content": "using System;\nusing System.Windows.Forms;\n\nnamespace ExampleApp\n{\n    internal static class Program\n    {\n        [STAThread]\n        static void Main()\n        {\n            Application.EnableVisualStyles();\n            Application.SetCompatibleTextRenderingDefault(false);\n            Application.Run(new Form1());\n        }\n    }\n}\n"
+  },
+  {
+   "path": "CapacitorLibrary/Capacitor.cs",
+   "content": "using System;\n\nnamespace CapacitorLibrary\n{\n    /// <summary>\n    /// Расчёт ёмкости плоского конденсатора\n    /// (задание 1 лабораторной работы №4)\n    /// </summary>\n    public class Capacitor\n    {\n        /// <summary>\n        /// Ёмкость C = eps * S / (4 * pi * d)\n        /// </summary>\n        /// <param name=\"eps\">проницаемость, не меньше 1</param>\n        /// <param name=\"s\">площадь одной пластины, больше 0</param>\n        /// <param name=\"d\">расстояние между пластинами, больше 0</param>\n        public static double Capacity(double eps, double s, double d)\n        {\n            if (s <= 0)\n            {\n                throw new ArgumentException(\n                    \"Площадь S должна быть больше нуля\");\n            }\n            if (d <= 0)\n            {\n                throw new ArgumentException(\n                    \"Расстояние d должно быть больше нуля\");\n            }\n            if (eps < 1)\n            {\n                throw new ArgumentException(\n                    \"Проницаемость eps должна быть не меньше 1\");\n            }\n            return eps * s / (4.0 * Math.PI * d);\n        }\n    }\n}\n"
+  },
+  {
+   "path": "CapacitorApp/Form1.cs",
+   "content": "using System;\nusing System.Drawing;\nusing System.Globalization;\nusing System.Windows.Forms;\nusing CapacitorLibrary;\n\nnamespace CapacitorApp\n{\n    public class Form1 : Form\n    {\n        private TextBox txtS;\n        private TextBox txtD;\n        private TextBox txtEps;\n        private TextBox txtResult;\n        private static CultureInfo ru = new CultureInfo(\"ru-RU\");\n\n        public Form1()\n        {\n            Text = \"Ёмкость плоского конденсатора\";\n            ClientSize = new Size(400, 215);\n            Font = new Font(\"Segoe UI\", 10);\n            FormBorderStyle = FormBorderStyle.FixedSingle;\n            MaximizeBox = false;\n\n            txtS = AddRow(\"Площадь пластины S:\", \"txtS\", 15);\n            txtD = AddRow(\"Расстояние d:\", \"txtD\", 50);\n            txtEps = AddRow(\"Проницаемость eps:\", \"txtEps\", 85);\n\n            Button calc = new Button();\n            calc.Name = \"btnCalculate\";\n            calc.Text = \"Вычислить\";\n            calc.Bounds = new Rectangle(15, 125, 180, 32);\n            calc.Click += btnCalculate_Click;\n            Controls.Add(calc);\n\n            Button clear = new Button();\n            clear.Name = \"btnClear\";\n            clear.Text = \"Очистить\";\n            clear.Bounds = new Rectangle(205, 125, 180, 32);\n            clear.Click += btnClear_Click;\n            Controls.Add(clear);\n\n            txtResult = AddRow(\"Ёмкость C:\", \"txtResult\", 172);\n            txtResult.ReadOnly = true;\n        }\n\n        // Подпись и поле ввода в одной строке формы\n        private TextBox AddRow(string caption, string name, int y)\n        {\n            Label l = new Label();\n            l.Text = caption;\n            l.Location = new Point(15, y + 3);\n            l.AutoSize = true;\n            Controls.Add(l);\n\n            TextBox t = new TextBox();\n            t.Name = name;\n            t.Bounds = new Rectangle(185, y, 200, 27);\n            Controls.Add(t);\n            return t;\n        }\n\n        // Число можно ввести и с запятой, и с точкой\n        private static bool ReadNumber(TextBox box, out double value)\n        {\n            string text = box.Text.Replace('.', ',');\n            return double.TryParse(text, NumberStyles.Float, ru,\n                out value);\n        }\n\n        private void btnCalculate_Click(object sender, EventArgs e)\n        {\n            double s, d, eps;\n            if (!ReadNumber(txtS, out s) || !ReadNumber(txtD, out d)\n                || !ReadNumber(txtEps, out eps))\n            {\n                MessageBox.Show(\"Введите числа в поля S, d и eps!\",\n                    \"Ошибка\");\n                return;\n            }\n            try\n            {\n                // расчёт выполняет метод библиотеки CapacitorLibrary\n                double c = Capacitor.Capacity(eps, s, d);\n                txtResult.Text = c.ToString(\"F6\", ru);\n            }\n            catch (ArgumentException ex)\n            {\n                txtResult.Text = \"\";\n                MessageBox.Show(ex.Message + \"!\", \"Ошибка\");\n            }\n        }\n\n        private void btnClear_Click(object sender, EventArgs e)\n        {\n            txtS.Text = \"\";\n            txtD.Text = \"\";\n            txtEps.Text = \"\";\n            txtResult.Text = \"\";\n        }\n    }\n}\n"
+  },
+  {
+   "path": "CapacitorApp/Program.cs",
+   "content": "using System;\nusing System.Windows.Forms;\n\nnamespace CapacitorApp\n{\n    internal static class Program\n    {\n        [STAThread]\n        static void Main()\n        {\n            Application.EnableVisualStyles();\n            Application.SetCompatibleTextRenderingDefault(false);\n            Application.Run(new Form1());\n        }\n    }\n}\n"
   }
  ],
  "listings": [],
@@ -181,6 +207,90 @@
     {
      "action": "click",
      "target": "="
+    }
+   ]
+  },
+  {
+   "section": 3,
+   "block": 1,
+   "mode": "window",
+   "program": "CapacitorApp",
+   "expect": "41,778173",
+   "steps": [
+    {
+     "action": "set",
+     "target": "txtS",
+     "value": "50"
+    },
+    {
+     "action": "set",
+     "target": "txtD",
+     "value": "0,2"
+    },
+    {
+     "action": "set",
+     "target": "txtEps",
+     "value": "2,1"
+    },
+    {
+     "action": "click",
+     "target": "Вычислить"
+    }
+   ]
+  },
+  {
+   "section": 3,
+   "block": 2,
+   "mode": "window",
+   "program": "CapacitorApp",
+   "expect": "133,690152",
+   "steps": [
+    {
+     "action": "set",
+     "target": "txtS",
+     "value": "120"
+    },
+    {
+     "action": "set",
+     "target": "txtD",
+     "value": "0,5"
+    },
+    {
+     "action": "set",
+     "target": "txtEps",
+     "value": "7"
+    },
+    {
+     "action": "click",
+     "target": "Вычислить"
+    }
+   ]
+  },
+  {
+   "section": 3,
+   "block": 3,
+   "mode": "window",
+   "program": "CapacitorApp",
+   "expect": "не меньше 1",
+   "steps": [
+    {
+     "action": "set",
+     "target": "txtS",
+     "value": "50"
+    },
+    {
+     "action": "set",
+     "target": "txtD",
+     "value": "0,2"
+    },
+    {
+     "action": "set",
+     "target": "txtEps",
+     "value": "0,5"
+    },
+    {
+     "action": "click",
+     "target": "Вычислить"
     }
    ]
   }
