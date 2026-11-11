@@ -1,0 +1,35 @@
+{
+ "shots": {
+  "1_1": {
+   "ok": true,
+   "reason": "",
+   "seen": "Проверка библиотеки ClassLibrary1 | Первое число: | Первое число: | 15 | Второе число: | Второе число: | 4 | + | - | * | / | Результат: 15 + 4 = 19 | Проверка библиотеки ClassLibrary1 | System Menu Bar | System | Minimize | Maximize | Close",
+   "ui": ""
+  },
+  "1_2": {
+   "ok": true,
+   "reason": "",
+   "seen": "Проверка библиотеки ClassLibrary1 | Первое число: | Первое число: | 15 | Второе число: | Второе число: | 4 | + | - | * | / | Результат: 15 * 4 = 60 | Проверка библиотеки ClassLibrary1 | System Menu Bar | System | Minimize | Maximize | Close",
+   "ui": ""
+  },
+  "2_1": {
+   "ok": true,
+   "reason": "",
+   "seen": "Калькулятор | 125 × 4 = | 125 × 4 = | 500 | C | ← | ± | ÷ | 7 | 8 | 9 | × | 4 | 5 | 6 | − | 1 | 2 | 3 | + | 0 | , | = | Калькулятор | System Menu Bar | System | Minimize | Maximize | Close",
+   "ui": ""
+  },
+  "2_2": {
+   "ok": true,
+   "reason": "",
+   "seen": "Калькулятор | 25 ÷ 4 = | 25 ÷ 4 = | 6,25 | C | ← | ± | ÷ | 7 | 8 | 9 | × | 4 | 5 | 6 | − | 1 | 2 | 3 | + | 0 | , | = | Калькулятор | System Menu Bar | System | Minimize | Maximize | Close",
+   "ui": ""
+  },
+  "2_3": {
+   "ok": true,
+   "reason": "",
+   "seen": "Калькулятор | 7 ÷ 0 = | 7 ÷ 0 = | Деление на 0 | C | ← | ± | ÷ | 7 | 8 | 9 | × | 4 | 5 | 6 | − | 1 | 2 | 3 | + | 0 | , | = | Калькулятор | System Menu Bar | System | Minimize | Maximize | Close",
+   "ui": ""
+  }
+ },
+ "build_ok": true
+}
