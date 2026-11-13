@@ -1,6 +1,6 @@
 """Версия ForLabs (установщик, сборка и /health берут её отсюда)."""
 
-__version__ = "1.0.17"
+__version__ = "1.0.18"
 
 
 def frozen() -> bool:
