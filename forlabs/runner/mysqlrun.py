@@ -146,7 +146,15 @@ class _Proc:
         if self.launched is not None:
             self.launched.close()
         elif self.popen.poll() is None:
-            self.popen.kill()
+            if WINDOWS:  # mysqld MySQL 8 в Windows — наблюдатель и рабочий процесс: убираем всё дерево, иначе
+                # рабочий процесс живёт дальше и держит файлы папки данных
+                try:
+                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(self.popen.pid)], capture_output=True,
+                                   timeout=30, creationflags=NO_WINDOW)
+                except (OSError, subprocess.SubprocessError):
+                    pass
+            if self.popen.poll() is None:
+                self.popen.kill()
             self.popen.wait(10)
 
 
