@@ -199,7 +199,8 @@ class LabServer:
 
     def stop(self) -> None:
         self.proc.kill()
-        remove_tree(self.data, tries=10)  # файлы сервера освобождаются не мгновенно; ключи — «только для чтения»
+        remove_tree(self.data, tries=30)  # файлы сервера освобождаются не мгновенно (в Windows их ещё держит
+        # антивирус); ключи — «только для чтения»
         if self.root is not None:
             remove_tree(self.root, tries=3)
 
