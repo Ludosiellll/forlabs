@@ -198,3 +198,50 @@ def test_without_word_layout_is_kept_by_page_breaks(tmp_path, monkeypatch):
     with pymupdf.open(rep.pdf) as d:
         assert d.page_count == pages_before  # разбивка та же
     assert _caption_alone(rep.pdf) == []
+
+
+def _pdf_stub(path):
+    with pymupdf.open() as d:
+        d.new_page()
+        d.save(path)
+
+
+def test_without_word_and_libreoffice_the_flags_are_still_removed(sample_doc, tmp_path, monkeypatch):
+    monkeypatch.setattr(word_com, "available", lambda: False)
+    monkeypatch.setattr(fin.libreoffice, "find_soffice", lambda path=None: None)
+    out = build_lab(sample_doc, tmp_path / "report.docx", author="x")
+    assert freeze.flags_left(out) > 0
+    rep = fin.finalize(out, "x", tmp_path / "render")
+    assert rep.engine == "none" and freeze.flags_left(out) == 0
+
+
+def test_libreoffice_failure_still_removes_the_flags(sample_doc, tmp_path, monkeypatch):
+    monkeypatch.setattr(word_com, "available", lambda: False)
+    monkeypatch.setattr(fin.libreoffice, "find_soffice", lambda path=None: "soffice")
+
+    def boom(docx, workdir, soffice=None):
+        raise RuntimeError("soffice упал")
+
+    monkeypatch.setattr(fin.libreoffice, "to_pdf", boom)
+    out = build_lab(sample_doc, tmp_path / "report.docx", author="x")
+    rep = fin.finalize(out, "x", tmp_path / "render")
+    assert rep.engine == "none" and freeze.flags_left(out) == 0
+
+
+def test_word_that_could_not_mark_pages_still_leaves_no_flags(sample_doc, tmp_path, monkeypatch):
+    def fake_isolated(docx, pdf_out, author, timeout=300.0):
+        _pdf_stub(pdf_out)
+        return word_com.WordReport(0, [])  # marks = -1: разметка страниц не удалась
+
+    monkeypatch.setattr(word_com, "available", lambda: True)
+    monkeypatch.setattr(word_com, "finalize_isolated", fake_isolated)
+    out = build_lab(sample_doc, tmp_path / "report.docx", author="x")
+    rep = fin.finalize(out, "x", tmp_path / "render")
+    assert rep.engine == "word" and freeze.flags_left(out) == 0
+
+
+def test_clean_copy_has_no_flags_and_the_original_is_untouched(sample_doc, tmp_path):
+    out = build_lab(sample_doc, tmp_path / "report.docx", author="x")
+    before = out.read_bytes()
+    dst = freeze.clean_copy(out, tmp_path / "copy.docx")
+    assert freeze.flags_left(dst) == 0 and out.read_bytes() == before

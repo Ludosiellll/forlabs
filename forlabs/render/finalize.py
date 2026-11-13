@@ -93,8 +93,9 @@ def finalize(docx: Path, author: str, workdir: Path, soffice: str | None = None,
         shutil.copyfile(docx, work)
         try:
             rep = word_com.finalize_isolated(work, pdf, author)
-            if rep.marks >= 0:  # Word отметил, где абзацы ушли на новую страницу: разрывы вместо «квадратов»
-                freeze.apply(work)
+            # разрывы там, где Word отметил перенос, вместо «квадратов»; не отметил (сбой разметки) — настройки
+            # всё равно снимаются: квадратов в готовом документе не должно быть ни при каком исходе
+            freeze.apply(work)
             durable_replace(work, docx)
             return FinalizeReport("word", pdf, pdf_to_pngs(pdf, workdir / "pages"), rep.continuations, rep.warnings)
         except Exception as e:  # Word завис или упал — доводим исходный документ через LibreOffice
@@ -112,10 +113,12 @@ def finalize(docx: Path, author: str, workdir: Path, soffice: str | None = None,
 
     if not libreoffice.find_soffice(soffice):
         # ни Word, ни LibreOffice: документ уже собран и годится для сдачи — только без предпросмотра
+        _drop_flags(docx, warnings)
         return FinalizeReport("none", None, [], 0, warnings + [NO_OFFICE_WARNING])
     try:
         pdf = libreoffice.to_pdf(docx, workdir, soffice)
     except Exception as e:
+        _drop_flags(docx, warnings)
         return FinalizeReport("none", None, [], 0, warnings + [f"Предпросмотр не получился ({e}). Документ готов."])
     marks = toc_bookmarks(docx)
     if marks:
@@ -125,9 +128,20 @@ def finalize(docx: Path, author: str, workdir: Path, soffice: str | None = None,
     try:  # разрывы страниц вместо настроек «не отрывать» — без чёрных квадратов в Word
         freeze.apply(docx, freeze.page_starts_from_pdf(docx, pdf))
         pdf = libreoffice.to_pdf(docx, workdir, soffice)
-    except Exception as e:  # noqa: BLE001 — документ остаётся с прежними настройками, разбивка та же
+    except Exception as e:  # noqa: BLE001 — разбивка не закреплена, но квадратов всё равно не оставляем
         warnings.append(f"Не удалось закрепить разрывы страниц ({e}).")
+        _drop_flags(docx, warnings)
     return FinalizeReport("libreoffice", pdf, pdf_to_pngs(pdf, workdir / "pages"), 0, warnings)
+
+
+def _drop_flags(docx: Path, warnings: list[str]) -> None:
+    """Вёрстки нет (ни Word, ни LibreOffice) или она не удалась: настройки «не отрывать от следующего» и т. п.
+    всё равно снимаются — в Word они видны чёрными квадратами слева. Без разбивки подпись может изредка уйти на
+    другую страницу от своей таблицы или листинга; это заметнее квадратов не бывает и правится в Word."""
+    try:
+        freeze.apply(docx)
+    except Exception as e:  # noqa: BLE001
+        warnings.append(f"Не удалось убрать настройки «не отрывать от следующего» ({e}).")
 
 
 def has_slots(docx: Path) -> bool:

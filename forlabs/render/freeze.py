@@ -193,3 +193,15 @@ def flags_left(docx: Path) -> int:
     with zipfile.ZipFile(docx) as z:
         return sum(len(_FLAG_RE.findall(z.read(n))) for n in ("word/document.xml", "word/styles.xml")
                    if n in z.namelist())
+
+
+def clean_copy(src: Path, dst: Path) -> Path:
+    """Копия документа без настроек «с квадратом» (для сдачи и скачивания документа, свёрстанного старой версией
+    ForLabs); исходный файл не меняется."""
+    import shutil
+
+    src, dst = Path(src), Path(dst)
+    shutil.copyfile(src, dst)
+    if flags_left(dst):
+        apply(dst)
+    return dst

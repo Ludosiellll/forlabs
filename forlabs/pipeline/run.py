@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import os
 import shutil
 import threading
@@ -48,6 +49,7 @@ from forlabs.pipeline.write import refresh_derived, section_has_content, write_r
 from forlabs.render.conformance import compare
 from forlabs.render.docx_builder import build_lab, build_semester
 from forlabs.render.finalize import finalize, has_slots
+from forlabs.render import freeze
 from forlabs.spec.extract import extract_spec, verify_verbatim
 
 JOURNAL_MAX = 256_000  # байт журнала на одну лабу
@@ -1205,6 +1207,7 @@ class Pipeline:
             raise PipelineError("Чат правок работает после выполнения лабы")
         if not lab_complete(st):
             raise PipelineError("Лаба дописана не до конца — сначала нажми «Продолжить», потом пиши правки.")
+        squares = bool(SQUARES_RE.search(message))  # «убери квадраты / невидимые символы» — это не текст отчёта
         with self.lock(st):
             msg_id = uuid.uuid4().hex[:8]
             rels = self._save_images(st, images, f"chat_{msg_id}") if images else []
@@ -1274,6 +1277,8 @@ class Pipeline:
                     if vid is not None and not (touched and applied):  # правка не применилась: откатывать нечего
                         st.versions, vid = [v for v in st.versions if v.id != vid], None
                     if mine:  # листинги отчёта теперь из его файлов: документ собирается заново
+                        touched = True
+                    if squares:  # квадраты снимает сборка документа — собираем заново и проверяем результат
                         touched = True
                         shots += "\nВзял твои правки из папки проекта: " + ", ".join(mine[:6]) + "."
                     note = remember_rule()
@@ -1366,11 +1371,31 @@ class Pipeline:
             st.docx_sha = None  # документ устарел, пока вёрстка не закончится
             self._save(st)  # правка сохранена до вёрстки: выключение во время вёрстки её не потеряет
         st = self.render(st)
+        if squares:
+            reply.text += "\n" + self._squares_note(st)
         if st.status == "failed":
             reply.text += (f"\nПравку сохранил, но документ не собрался: {st.error} "
                            "Когда исправишь, нажми «Пересобрать документ».")
+        if squares or st.status == "failed":
             st = self._save(st)
         return st
+
+    def _squares_note(self, st: LabState) -> str:
+        """Что на самом деле с квадратами после сборки — по самому документу, а не со слов модели."""
+        docx = self.lab_dir(st) / "report.docx"
+        what = ("Чёрные квадраты слева — это не символы текста, а отметки настроек абзаца в Word («не отрывать "
+                "от следующего», «не разрывать абзац»).")
+        if st.status == "failed" or not docx.exists():
+            return what + " Они уберутся, когда документ соберётся."
+        try:
+            left = freeze.flags_left(docx)
+        except Exception:  # noqa: BLE001
+            left = -1
+        if left == 0:
+            return (what + " Пересобрал документ — в нём их не осталось. Если Word ещё показывает старый файл, "
+                           "закрой его и открой заново.")
+        return (what + " Убрать их не получилось — это ошибка ForLabs. Напиши в «Поддержку», приложив этот "
+                       "отчёт.")
 
     def apply_profile_change(self, st: LabState, msg_id: str, apply: bool) -> LabState:
         """Ответ на предложение чата поменять данные профиля: применить (профиль, затем пересборка этой лабы;
@@ -1542,6 +1567,25 @@ class Pipeline:
         except Exception as e:  # не удалилось — не страшно
             logging.getLogger("forlabs").info("Старый снимок %s не удалён: %s", rel, e)
 
+    def clean_marks(self, st: LabState) -> LabState:
+        """Документ, свёрстанный версией до 1.0.17, ещё хранит настройки «не отрывать от следующего» и т. п. —
+        в Word это чёрные квадраты слева. Перед сдачей, скачиванием и открытием в Word они снимаются на месте
+        (разбивка от этого не меняется), документ остаётся свежим. Файл занят Word — ничего не делаем."""
+        d = self.lab_dir(st)
+        docx = d / "report.docx"
+        if not docx.exists() or not docx_fresh(st, d):
+            return st
+        try:
+            if not freeze.flags_left(docx):
+                return st
+            freeze.apply(docx)
+        except Exception as e:  # noqa: BLE001 — файл открыт в Word или повреждён: остаётся как был
+            logging.getLogger("forlabs").warning("Квадраты не сняты: %s", e)
+            return st
+        st.docx_sha = file_sha(docx)
+        self._sync(st, ["report.docx"])
+        return self._save(st)
+
     def render(self, st: LabState) -> LabState:
         try:
             if st.spec is not None and not lab_complete(st):
@@ -1613,6 +1657,7 @@ class Pipeline:
                            "warn")
             except OSError:
                 pass
+        st = self.clean_marks(st)
         profile_now = self._profile(st)
         stale_inputs = st.render_inputs != render_inputs(profile_now, self._enrollment(profile_now, st.subject_id))
         if not docx_fresh(st, d) or has_slots(docx) or stale_inputs:
@@ -1630,7 +1675,8 @@ class Pipeline:
         tmp = target.with_name(target.name + ".tmp")
         try:
             out_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(docx, tmp)  # сначала копия, потом замена — выключение не оставит обрезанный файл
+            # сначала копия, потом замена — выключение не оставит обрезанный файл; в копии квадратов нет никогда
+            freeze.clean_copy(docx, tmp)
             durable_replace(tmp, target)
         except PermissionError as e:
             tmp.unlink(missing_ok=True)
@@ -1783,6 +1829,10 @@ def render_inputs(profile: Profile, enrollment) -> str:
 
     raw = profile.model_dump_json() + (enrollment.model_dump_json() if enrollment is not None else "")
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+SQUARES_RE = re.compile(r"квадрат|невидим\w*\s+(?:символ|знак)|непечата\w*|знак\w*\s+форматировани|"
+                        r"скрыт\w*\s+символ", re.IGNORECASE)
 
 
 def file_sha(path: Path) -> str:

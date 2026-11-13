@@ -990,11 +990,23 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
                                       "попробуй снова")
         return redirect(back, msg=f"ЛР {n} удалена")
 
+    def _without_squares(p: str, s: str, n: str, st):
+        """Документ старой версии — без чёрных квадратов перед скачиванием и открытием в Word (пока лаба не занята
+        другой работой)."""
+        key = f"{p}/{s}/{n}"
+        if ctx.claim(key):
+            try:
+                st = ctx.pipeline.clean_marks(st)
+            finally:
+                ctx.release(key)
+        return st
+
     @app.get("/labs/{p}/{s}/{n}/docx")
     def lab_docx(p: str, s: str, n: str):
         st = load(p, s, n, strict=False)
         if not docx_fresh(st, ctx.store.lab_dir(p, s, n)):
             return redirect(lab_url(p, s, n), err="Документ устарел или ещё не свёрстан. Нажми «Пересобрать документ».")
+        st = _without_squares(p, s, n, st)
         subj = get_subject(s)
         return FileResponse(st.docx_path, filename=f"ЛР{n}_{subj.short_name}.docx",
                             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
@@ -1004,6 +1016,8 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         st = load(p, s, n, strict=False)
         if what == "docx" and not docx_fresh(st, ctx.store.lab_dir(p, s, n)):
             return redirect(lab_url(p, s, n), err="Документ устарел или ещё не свёрстан. Нажми «Пересобрать документ».")
+        if what == "docx":
+            st = _without_squares(p, s, n, st)
         target = st.docx_path if what == "docx" else str(ctx.store.lab_dir(p, s, n))
         if target and Path(target).exists():
             _open_local(target)

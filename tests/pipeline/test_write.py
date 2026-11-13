@@ -239,3 +239,49 @@ def test_needs_reach_the_writer(tmp_path):
     asked = _asked_for(spec, tmp_path)
     assert "практической работы №6" in asked and "не утверждай" in asked
     assert "Для работы нужно" not in _asked_for(SPEC, tmp_path)
+
+
+NOTE = ("Пояснительная записка к проекту политики информационной безопасности SPA-салона.\n"
+        "1. Структура организации и границы системы. SPA-салон оказывает услуги массажа, ухода за кожей и "
+        "косметологии. Штат: директор, администратор, два мастера, бухгалтер.\n"
+        "2. Защищаемые ресурсы. К ним относятся база записей клиентов, данные об оплате и рабочие места.\n"
+        "- резервное копирование базы записей раз в неделю;\n"
+        "- антивирусная защита на всех компьютерах.\n"
+        "3. Ответственность. За соблюдение политики отвечает администратор салона.")
+
+
+def test_document_written_as_a_listing_becomes_ordinary_text(tmp_path):
+    from forlabs.core.models import DashList, Listing, Paragraph
+    from forlabs.pipeline.write import BlockDraft, SectionDraft, draft_to_blocks
+
+    draft = SectionDraft(blocks=[BlockDraft(type="listing", topic="Пояснительная записка к проекту политики",
+                                            language="text", code=NOTE)])
+    blocks = draft_to_blocks(draft, tmp_path, 1, render_diagrams=False)
+    assert not any(isinstance(b, Listing) for b in blocks)
+    paras = [b.text for b in blocks if isinstance(b, Paragraph)]
+    assert paras[0].startswith("Пояснительная записка") and any(p.startswith("2. Защищаемые") for p in paras)
+    lists = [b for b in blocks if isinstance(b, DashList)]
+    assert len(lists) == 1 and len(lists[0].items) == 2
+
+
+def test_code_and_file_contents_stay_listings(tmp_path):
+    from forlabs.core.models import Listing
+    from forlabs.pipeline.write import BlockDraft, SectionDraft, draft_to_blocks
+
+    code = "static void Main()\n{\n    Console.WriteLine(\"Привет, мир! Это первая программа.\");\n}"
+    data = ("Иванов Иван Петрович, группа РС02-24, средний балл 8.\n"
+            "Петрова Анна Сергеевна, группа РС02-24, средний балл 9.")
+    draft = SectionDraft(blocks=[
+        BlockDraft(type="listing", topic="Исходный код программы", language="csharp", code=code),
+        BlockDraft(type="listing", topic="Содержимое файла students.txt", language="text", code=data),
+        BlockDraft(type="listing", topic="Вывод программы", language="text",
+                   code="Введите ключ: ключ принят.\nШифротекст: 85E813540F0AB405")])
+    blocks = draft_to_blocks(draft, tmp_path, 1, render_diagrams=False)
+    assert [type(b) for b in blocks] == [Listing, Listing, Listing]
+
+
+def test_writer_is_told_documents_are_text_not_listings():
+    from forlabs.pipeline.prompts import CHAT_REVISE_SYSTEM, WRITE_SYSTEM
+
+    for prompt in (WRITE_SYSTEM, CHAT_REVISE_SYSTEM):
+        assert "пояснительн" in prompt.lower() and "listing" in prompt

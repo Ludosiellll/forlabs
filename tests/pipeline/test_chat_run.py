@@ -163,3 +163,50 @@ def test_too_many_photos_refused(tmp_home, tmp_path):
     with pytest.raises(PipelineError):
         pipe.chat(st, "смотри", images=[("x.png", b"not an image")])
     assert st.chat == []
+
+
+def _old_document_with_squares(pipe, st):
+    """Документ, свёрстанный версией до 1.0.17: у абзацев стоят настройки «не отрывать от следующего»."""
+    import shutil
+
+    from forlabs.pipeline.run import file_sha
+    from forlabs.render import freeze
+
+    docx = Path(st.docx_path)
+    with zipfile.ZipFile(docx) as z:
+        infos = z.infolist()
+        data = {i.filename: z.read(i.filename) for i in infos}
+    data["word/document.xml"] = data["word/document.xml"].decode().replace("<w:pPr>", "<w:pPr><w:keepNext/>",
+                                                                           5).encode()
+    tmp = docx.with_name("old.docx")
+    with zipfile.ZipFile(tmp, "w") as z:
+        for i in infos:
+            z.writestr(i, data[i.filename])
+    shutil.move(tmp, docx)
+    st.docx_sha = file_sha(docx)
+    assert freeze.flags_left(docx) > 0
+    return docx
+
+
+def test_request_to_remove_squares_rebuilds_and_says_what_really_happened(tmp_home, tmp_path):
+    from forlabs.render import freeze
+
+    pipe, fake, st = ready(tmp_home, tmp_path, [{"kind": "answer", "reply": "Сейчас посмотрю."}])
+    docx = _old_document_with_squares(pipe, st)
+    st = pipe.chat(st, "убери квадраты слева, невидимые символы по всему тексту")
+    assert freeze.flags_left(docx) == 0 and st.status == "rendered", st.error
+    assert "квадрат" in fake.calls[-1][0]["content"].lower()  # чат знает, что это не текст отчёта
+    text = st.chat[-1].text
+    assert "не осталось" in text and st.versions == []
+
+
+def test_submitting_an_old_document_hands_in_one_without_squares(tmp_home, tmp_path):
+    from forlabs.pipeline.run import docx_fresh
+    from forlabs.render import freeze
+
+    pipe, fake, st = ready(tmp_home, tmp_path, [])
+    docx = _old_document_with_squares(pipe, st)
+    st = pipe.mark_final(st)
+    handed = list((tmp_path / "сдача").rglob("*.docx"))
+    assert handed and all(freeze.flags_left(f) == 0 for f in handed)
+    assert freeze.flags_left(docx) == 0 and docx_fresh(st, pipe.lab_dir(st))

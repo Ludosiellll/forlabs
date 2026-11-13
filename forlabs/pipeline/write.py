@@ -125,6 +125,52 @@ def section_text(sec: TaskSection) -> str:
     return "\n".join(out)
 
 
+_DOC_TOPIC = re.compile(r"записк|политик|положени|регламент|инструкци|приказ|\bплан\b|описани|концепци|памятк|"
+                        r"требовани|устав|договор|соглашени", re.IGNORECASE)
+_DATA_TOPIC = re.compile(r"\bкод|файл|вывод|скрипт|запрос|настро|конфиг|консол|журнал|\bлог|результат", re.IGNORECASE)
+_BULLET = re.compile(r"^[-–—•*]\s+(.+)$")
+
+
+def document_as_listing(topic: str, language: str, code: str) -> bool:
+    """Модель оформила листингом связный русский текст (пояснительную записку, политику, регламент), который в
+    отчёте должен идти обычными абзацами. Код, файлы данных и вывод программы остаются листингами."""
+    if language.strip().lower() not in ("", "text", "txt", "plain", "markdown", "md"):
+        return False
+    if _DATA_TOPIC.search(topic) and not _DOC_TOPIC.search(topic):
+        return False
+    text = code.strip()
+    letters = [c for c in text if c.isalpha()]
+    if len(text) < 200 or not letters:
+        return False
+    if sum(c.lower() in "абвгдеёжзийклмнопрстуфхцчшщъыьэюя" for c in letters) / len(letters) < 0.6:
+        return False
+    if sum(text.count(c) for c in "{};=<>[]#$\\") > len(text) * 0.01:
+        return False
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    ends = sum(1 for ln in lines if re.search(r"[.!?;:]$", ln))
+    return ends >= max(2, len(lines) // 2)
+
+
+def text_blocks(text: str) -> list:
+    """Строки текста — абзацами, подряд идущие пункты «- …» — маркированным списком."""
+    out: list = []
+    items: list[str] = []
+    for line in text.splitlines():
+        s = line.strip()
+        m = _BULLET.match(s)
+        if m:
+            items.append("- " + m.group(1).strip())
+            continue
+        if items:
+            out.append(DashList(items=items))
+            items = []
+        if s:
+            out.append(Paragraph(text=s))
+    if items:
+        out.append(DashList(items=items))
+    return out
+
+
 def draft_to_blocks(draft: SectionDraft, assets_dir: Path, sec_n: int, render_diagrams: bool = True,
                     name_suffix: str = "") -> list:
     blocks = []
@@ -135,8 +181,11 @@ def draft_to_blocks(draft: SectionDraft, assets_dir: Path, sec_n: int, render_di
             cls = DashList if b.type == "dash_list" else NumberedList
             blocks.append(cls(items=[x.strip() for x in b.items if x.strip()]))
         elif b.type == "listing" and (b.code or "").strip():
-            blocks.append(Listing(topic=b.topic or "Исходный код программы", code=b.code.rstrip(),
-                                  language=b.language or ""))
+            if document_as_listing(b.topic or "", b.language or "", b.code):
+                blocks.extend(text_blocks(b.code))  # пояснительная записка, политика — обычным текстом
+            else:
+                blocks.append(Listing(topic=b.topic or "Исходный код программы", code=b.code.rstrip(),
+                                      language=b.language or ""))
         elif b.type == "table" and b.rows:
             rows = [[str(c).strip() for c in r] for r in b.rows]
             width = max(len(r) for r in rows)
