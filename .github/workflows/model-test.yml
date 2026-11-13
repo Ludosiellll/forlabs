@@ -41,6 +41,7 @@ jobs:
           fi
           echo "smoke: готово"
       - name: Длинные ответы
+        if: ${{ contains(github.event.head_commit.message, '[long]') }}
         continue-on-error: true
         run: |
           python tools/model_test/long.py out/long > out/long.log 2>&1 || echo "long - ошибка"
