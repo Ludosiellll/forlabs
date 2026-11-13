@@ -42,7 +42,8 @@ jobs:
           echo "smoke: готово"
       - name: Токенизаторы
         continue-on-error: true
-        run: python tools/model_test/tok_more.py out/smoke > out/smoke/tok_more.log 2>&1 || echo "tok: ошибка"
+        run: |
+          python tools/model_test/tok_more.py out/smoke > out/smoke/tok_more.log 2>&1 || echo "tok - ошибка"
       - name: Результаты быстрой проверки
         if: always()
         run: tools/model_test/push_results.sh smoke-done
