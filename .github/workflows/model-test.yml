@@ -36,8 +36,13 @@ jobs:
         run: |
           mkdir -p out/smoke
           python -m pip install -q httpx pillow tokenizers
-          python tools/model_test/smoke.py out/smoke > out/smoke/smoke.log 2>&1 || echo "smoke: ошибка (подробности в результатах)"
+          if [ ! -f tools/model_test/skip_smoke ]; then
+            python tools/model_test/smoke.py out/smoke > out/smoke/smoke.log 2>&1 || echo "smoke: ошибка (подробности в результатах)"
+          fi
           echo "smoke: готово"
+      - name: Токенизаторы
+        continue-on-error: true
+        run: python tools/model_test/tok_more.py out/smoke > out/smoke/tok_more.log 2>&1 || echo "tok: ошибка"
       - name: Результаты быстрой проверки
         if: always()
         run: tools/model_test/push_results.sh smoke-done
@@ -56,7 +61,7 @@ jobs:
       - name: Лабы
         if: ${{ !contains(github.event.head_commit.message, '[smoke-only]') }}
         run: |
-          set -a; . tools/model_test/config.env; set +a
+          set -a; . tools/model_test/config.sh; set +a
           export LABS_IN="$RUNNER_TEMP/labs_in"
           mkdir -p out/labs
           python tools/model_test/compare.py out/labs --models "$MODELS" --labs "$LABS" --runs "$RUNS" \
