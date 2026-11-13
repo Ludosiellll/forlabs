@@ -28,8 +28,26 @@ from forlabs.report.standard import check_standard
 
 # замечания, которые модель исправить не может (их делает код или пользователь)
 STRUCTURAL = {"header.missing", "header.date_format", "task.sequence", "task.title_mismatch", "qa.not_in_spec",
-              "conclusion.formula", "qa.missing", "qa.empty", "text.check_screen"}
+              "conclusion.formula", "qa.missing", "qa.empty", "text.check_screen", "report.no_code"}
 _LOC = re.compile(r"Задание (\d+), блок (\d+)")
+# задание просит написать программу, скрипт или запросы: в отчёте должен быть их код
+_NEEDS_CODE = re.compile(r"\b(?:созда|напис|разработа|реализова|составь|состави|выполни)\w*\s+(?:[\w-]+\s+){0,2}?"
+                         r"(?:программ|приложени|скрипт|sql|запрос|класс|функци|процедур|триггер)", re.IGNORECASE)
+
+
+def missing_code(doc: ReportDoc, spec: LabSpec) -> list[Finding]:
+    """Методичка требует программу (скрипт, запросы), а в отчёте нет ни одного листинга: модель описала программу
+    словами. Такой отчёт сдавать нельзя — замечание держит «Сдать», пока код не добавят в «Правках»."""
+    if any(isinstance(b, Listing) and b.code.strip() for s in doc.sections for b in s.blocks):
+        return []
+    texts = [(None, spec.assignment or "")] + [(t.n, t.text) for t in spec.tasks]
+    hit = next(((n, t) for n, t in texts if _NEEDS_CODE.search(t or "")), None)
+    if hit is None:
+        return []
+    n = hit[0] or (doc.sections[0].n if doc.sections else 1)
+    return [Finding(stage="check", rule_id="report.no_code", location=f"Задание {n}", text=hit[1][:200],
+                    message="Задание требует программу, а в отчёте нет её кода — только описание словами",
+                    suggestion="напиши в «Правках»: «добавь листинг с кодом программы»")]
 
 
 def report_text(doc: ReportDoc) -> str:
@@ -88,6 +106,7 @@ def check_all(doc: ReportDoc, spec: LabSpec, profile: Profile, others: dict[str,
                         out.append(Finding(stage="antiai", rule_id="code.java_class_name", location=loc, text=bad,
                                            message="Имя публичного класса не совпадает с именем файла — javac не "
                                                    "скомпилирует", suggestion="назвать класс как файл"))
+    out += missing_code(doc, spec)
     for q in doc.questions:
         out += scan_text(q.answer, f"Вопрос {q.n}")
     out += scan_paragraph_openings(paragraphs)

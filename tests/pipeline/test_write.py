@@ -285,3 +285,29 @@ def test_writer_is_told_documents_are_text_not_listings():
 
     for prompt in (WRITE_SYSTEM, CHAT_REVISE_SYSTEM):
         assert "пояснительн" in prompt.lower() and "listing" in prompt
+
+
+def _doc(blocks):
+    from forlabs.core.models import ReportDoc, TaskSection
+
+    return ReportDoc(lab_number="5", header={}, sections=[TaskSection(n=1, title="Зашифровать текст", blocks=blocks)],
+                     conclusion="Научилась шифровать.")
+
+
+def test_program_lab_without_any_code_is_flagged():
+    spec = SPEC.model_copy(update={"assignment": "Создать программу по шифрованию текста, используя криптосистему DES.",
+                                   "tasks": [Task(n=1, text="Зашифровать исходный текст (не менее 8 символов).")]})
+    words = _doc([Paragraph(text="Создала консольное приложение, которое шифрует текст алгоритмом DES.")])
+    found = [f for f in check_all(words, spec, PROFILE, {}) if f.rule_id == "report.no_code"]
+    assert len(found) == 1 and found[0].severity == "error" and found[0].location == "Задание 1"
+    with_code = _doc([Paragraph(text="Код программы представлен в листинге 1."),
+                      Listing(topic="Исходный код программы", code="class P { static void Main() {} }",
+                              language="csharp")])
+    assert not [f for f in check_all(with_code, spec, PROFILE, {}) if f.rule_id == "report.no_code"]
+
+
+def test_lab_without_a_program_task_needs_no_code():
+    spec = SPEC.model_copy(update={"assignment": "Изучить программное обеспечение компьютера и составить отчёт.",
+                                   "tasks": [Task(n=1, text="Создать базу данных и модель с помощью Reverse Engineer.")]})
+    doc = _doc([Paragraph(text="Изучила установленное программное обеспечение.")])
+    assert not [f for f in check_all(doc, spec, PROFILE, {}) if f.rule_id == "report.no_code"]
