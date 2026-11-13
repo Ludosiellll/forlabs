@@ -1278,9 +1278,9 @@ class Pipeline:
                         st.versions, vid = [v for v in st.versions if v.id != vid], None
                     if mine:  # листинги отчёта теперь из его файлов: документ собирается заново
                         touched = True
+                        shots += "\nВзял твои правки из папки проекта: " + ", ".join(mine[:6]) + "."
                     if squares:  # квадраты снимает сборка документа — собираем заново и проверяем результат
                         touched = True
-                        shots += "\nВзял твои правки из папки проекта: " + ", ".join(mine[:6]) + "."
                     note = remember_rule()
                     reply = ChatMessage(id=uuid.uuid4().hex[:8], role="assistant",
                                         text=(plan.reply + shots + note).strip(), at=_now(), kind=plan.kind,
