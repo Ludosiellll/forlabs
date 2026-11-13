@@ -1,0 +1,73 @@
+name: Model test
+
+# Проверка провайдера модели на лабах ForLabs. Методички и результаты в репозитории только зашифрованы
+# ключом провайдера (секрет NEUROGATE_KEY); в журнале — только ход работы, без текстов.
+on:
+  push:
+    branches: [model-test]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: model-test
+  cancel-in-progress: true
+
+env:
+  PYTHONUTF8: "1"
+  PYTHONIOENCODING: utf-8
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 340
+    env:
+      NG_KEY: ${{ secrets.NEUROGATE_KEY }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Секрет на месте
+        run: test -n "$NG_KEY" || { echo "нет секрета NEUROGATE_KEY"; exit 1; }
+      - name: Быстрая проверка модели
+        continue-on-error: true
+        run: |
+          mkdir -p out/smoke
+          python -m pip install -q httpx pillow tokenizers
+          python tools/model_test/smoke.py out/smoke > out/smoke/smoke.log 2>&1 || echo "smoke: ошибка (подробности в результатах)"
+          echo "smoke: готово"
+      - name: Результаты быстрой проверки
+        if: always()
+        run: tools/model_test/push_results.sh smoke-done
+      - name: Окружение для лаб
+        if: ${{ !contains(github.event.head_commit.message, '[smoke-only]') }}
+        run: |
+          sudo systemctl stop mysql || true
+          sudo apparmor_parser -R /etc/apparmor.d/usr.sbin.mysqld || true
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libreoffice-writer-nogui fonts-liberation fonts-dejavu > /dev/null
+          python -m pip install -q -e .
+          mkdir -p "$RUNNER_TEMP/labs_in"
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:NG_KEY -in tools/model_test/inputs.enc \
+            | tar xzf - -C "$RUNNER_TEMP/labs_in"
+          which mysql mysqld dotnet java soffice
+      - name: Лабы
+        if: ${{ !contains(github.event.head_commit.message, '[smoke-only]') }}
+        run: |
+          set -a; . tools/model_test/config.env; set +a
+          export LABS_IN="$RUNNER_TEMP/labs_in"
+          mkdir -p out/labs
+          python tools/model_test/compare.py out/labs --models "$MODELS" --labs "$LABS" --runs "$RUNS" \
+            --parallel "$PARALLEL" > out/labs/compare.log 2>&1 &
+          pid=$!
+          while kill -0 $pid 2>/dev/null; do
+            sleep 600
+            echo "ход: $(cat out/labs/progress.txt 2>/dev/null || echo 0)"
+            tools/model_test/push_results.sh running || true
+          done
+          wait $pid || echo "compare завершился с ошибкой"
+      - name: Итоговые результаты
+        if: always()
+        run: tools/model_test/push_results.sh finished
