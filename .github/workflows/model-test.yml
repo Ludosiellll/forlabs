@@ -40,10 +40,10 @@ jobs:
             python tools/model_test/smoke.py out/smoke > out/smoke/smoke.log 2>&1 || echo "smoke: ошибка (подробности в результатах)"
           fi
           echo "smoke: готово"
-      - name: Токенизаторы
+      - name: Длинные ответы
         continue-on-error: true
         run: |
-          python tools/model_test/tok_more.py out/smoke > out/smoke/tok_more.log 2>&1 || echo "tok - ошибка"
+          python tools/model_test/long.py out/long > out/long.log 2>&1 || echo "long - ошибка"
       - name: Результаты быстрой проверки
         if: always()
         run: tools/model_test/push_results.sh smoke-done
