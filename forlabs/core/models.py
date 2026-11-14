@@ -212,6 +212,7 @@ class Material(BaseModel):
 
     name: str
     text: str
+    assets: list[str] = Field(default_factory=list)  # картинки и другие файлы из архива (пути от папки лабы)
 
 
 class ProjectInfo(BaseModel):

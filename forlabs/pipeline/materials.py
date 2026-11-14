@@ -21,7 +21,7 @@ RAW_EXT = {".txt", ".md", ".csv", ".tsv", ".json", ".xml", ".yaml", ".yml", ".in
            ".py", ".cs", ".java", ".kt", ".js", ".ts", ".jsx", ".tsx", ".html", ".htm", ".css", ".scss", ".php",
            ".c", ".cpp", ".cc", ".h", ".hpp", ".go", ".rb", ".rs", ".swift", ".pas", ".dpr", ".bas", ".vb",
            ".bat", ".cmd", ".ps1", ".sh", ".asm", ".r", ".m", ".pl", ".lua", ".dart", ".xaml", ".resx"}
-ACCEPT = ".pdf,.docx,.xlsx," + ",".join(sorted(RAW_EXT | IMAGE_EXT))
+ACCEPT = ".pdf,.docx,.rtf,.xlsx,.zip," + ",".join(sorted(RAW_EXT | IMAGE_EXT))
 
 
 def pages(chars: int) -> int:
@@ -36,9 +36,9 @@ def read_material(path: Path, tesseract: str | None = None) -> str:
         return CONTROL_CHARS.sub("", read_text_file(path).replace("\r\n", "\n").replace("\r", "\n")).strip()
     if ext == ".xlsx":
         return _xlsx(path)
-    if ext in {".pdf", ".docx"} | IMAGE_EXT:
+    if ext in {".pdf", ".docx", ".rtf"} | IMAGE_EXT:
         return extract_text(path, tesseract).text.strip()
-    raise ValueError(f"формат {ext or 'без расширения'} не читается: сохрани как DOCX, PDF, XLSX, TXT или CSV")
+    raise ValueError(f"формат {ext or 'без расширения'} не читается: сохрани как DOCX, PDF, RTF, XLSX, TXT, CSV или ZIP")
 
 
 _NS = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",

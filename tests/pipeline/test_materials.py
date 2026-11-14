@@ -134,3 +134,56 @@ def test_huge_xlsx_rejected_without_reading_it_all(tmp_path):
     else:
         raise AssertionError("огромная таблица должна отклоняться")
     assert time.monotonic() - t < 3  # читает до лимита и останавливается
+
+
+def _zip_bytes(entries):
+    import io
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for name, data in entries:
+            z.writestr(name, data)
+    return buf.getvalue()
+
+
+def test_zip_in_lab_files_is_unpacked_read_and_kept_as_assets(tmp_home, tmp_path):
+    pipe, _ = setup(tmp_home, tmp_path, [RAW])
+    st = pipe.create_lab("ivanov", "psip", [(FIXTURE.name, FIXTURE.read_bytes())], number="7")
+    png = b"\x89PNG\r\n\x1a\n" + b"0" * 64
+    data = _zip_bytes([("point-click/key.png", png), ("point-click/readme.txt", "Ключ открывает сейф".encode()),
+                       ("Scripts/Door.cs", b"public class Door { }")])
+    st, problems = pipe.add_materials(st, [("point-click-images.zip", data)])
+    assert problems == []
+    m = st.materials[0]
+    assert m.name == "point-click-images.zip"
+    assert "point-click/key.png" in m.text and "Ключ открывает сейф" in m.text and "public class Door" in m.text
+    assert m.assets == ["assets_in/point-click-images/point-click/key.png"]
+    assert (pipe.lab_dir(st) / m.assets[0]).read_bytes() == png
+    assert "point-click/key.png" in pipe._memory_text(st)  # модель знает имена картинок
+    st = pipe.remove_material(st, m.name)
+    assert st.materials == [] and not (pipe.lab_dir(st) / "assets_in" / "point-click-images").exists()
+
+
+def test_broken_zip_is_reported(tmp_home, tmp_path):
+    pipe, _ = setup(tmp_home, tmp_path, [RAW])
+    st = pipe.create_lab("ivanov", "psip", [(FIXTURE.name, FIXTURE.read_bytes())], number="7")
+    st, problems = pipe.add_materials(st, [("сломан.zip", b"not a zip")])
+    assert st.materials == [] and any("сломан.zip" in p and "ZIP" in p for p in problems)
+
+
+def test_archive_pictures_go_into_the_program_folder(tmp_home, tmp_path):
+    from forlabs.pipeline.project import _put_assets
+    from forlabs.runner.plan import ProjectFile, ProjectPlan
+
+    pipe, _ = setup(tmp_home, tmp_path, [RAW])
+    st = pipe.create_lab("ivanov", "psip", [(FIXTURE.name, FIXTURE.read_bytes())], number="7")
+    st, _ = pipe.add_materials(st, [("site.zip", _zip_bytes([("images/logo.png", b"PNGDATA"),
+                                                            ("images/bg.png", b"BG")]))])
+    plan = ProjectPlan(language="web", kind="web", name="site", entry="index.html",
+                       files=[ProjectFile(path="index.html", content='<img src="images/logo.png">'),
+                              ProjectFile(path="images/bg.png.txt", content="x")])
+    work = tmp_path / "src"
+    (work / "images").mkdir(parents=True)
+    (work / "images" / "bg.png").write_bytes(b"MINE")  # своё не заменяется
+    assert _put_assets(pipe, st, plan, work) == 1
+    assert (work / "images" / "logo.png").read_bytes() == b"PNGDATA" and (work / "images" / "bg.png").read_bytes() == b"MINE"

@@ -768,7 +768,14 @@ class Pipeline:
                 name = Path(name or "").name or "файл"
                 tmp_dir.mkdir(parents=True, exist_ok=True)
                 tmp = tmp_dir / safe_file_name(name)
-                tmp.write_bytes(data)
+                if isinstance(data, Path):
+                    shutil.copyfile(data, tmp)
+                else:
+                    tmp.write_bytes(data)
+                if name.lower().endswith(".zip"):
+                    self._add_archive(st, name, tmp, problems)
+                    tmp.unlink(missing_ok=True)
+                    continue
                 try:
                     text = read_material(tmp, self.tesseract)
                 except ValueError as e:
@@ -789,8 +796,72 @@ class Pipeline:
             st = self._save(st)
         return st, problems
 
+    def _add_archive(self, st: LabState, name: str, path: Path, problems: list[str], skip_docs: bool = False) -> bool:
+        """ZIP — в обычную папку лабы (assets_in/<имя>): код, тексты и таблицы читаются (одним материалом), картинки и
+        прочие файлы остаются ресурсами — ForLabs кладёт их в папку проекта программы. skip_docs — документы из
+        архива уже стали методичкой."""
+        from forlabs.ingest.archive import unpack
+        from forlabs.ingest.uploads import DOC_EXT
+        from forlabs.pipeline.materials import MATERIALS_MAX, RAW_EXT, read_material
+
+        lab = self.lab_dir(st)
+        folder = lab / "assets_in" / safe_file_name(Path(name).stem)
+        shutil.rmtree(folder, ignore_errors=True)
+        try:
+            files = unpack(path, folder)
+        except ValueError as e:
+            problems.append(f"«{name}» не добавлен: {e}.")
+            return False
+        readable = RAW_EXT | {".xlsx", ".pdf", ".docx", ".rtf"}
+        texts, assets, listing = [], [], []
+        for f in sorted(files):
+            rel = f.relative_to(folder).as_posix()
+            ext = f.suffix.lower()
+            listing.append(f"- {rel} ({max(1, f.stat().st_size // 1024)} КБ)")
+            if skip_docs and ext in DOC_EXT:
+                continue
+            if ext in readable:
+                try:
+                    text = read_material(f, self.tesseract)
+                except Exception:  # noqa: BLE001 — нечитаемый файл остаётся в списке
+                    text = ""
+                if text.strip():
+                    texts.append((rel, text))
+                    continue
+            assets.append(f.relative_to(lab).as_posix())
+        if not files:
+            problems.append(f"«{name}» не добавлен: архив пустой.")
+            return False
+        head = f"Архив «{name}» распакован, в нём {len(files)} файл(ов):\n" + "\n".join(listing)
+        if assets:
+            head += ("\nКартинки и другие файлы из архива ForLabs кладёт в папку проекта программы (по тем же "
+                     "путям); в коде ссылайся на них по этим именам.")
+        used = sum(len(m.text) for m in st.materials if m.name != name)
+        body, cut = [], False
+        for rel, text in texts:
+            part = f"\n\nФайл {rel}:\n<<<\n{text}\n>>>"
+            if used + len(head) + sum(map(len, body)) + len(part) > MATERIALS_MAX:
+                cut = True
+                continue
+            body.append(part)
+        if cut:
+            problems.append(f"Из «{name}» прочитаны не все файлы: на файлы к лабе есть ограничение объёма. Лишнее "
+                            "из архива лучше убрать.")
+        if self._put_material(st, name, head + "".join(body), problems, assets=assets):
+            return True
+        shutil.rmtree(folder, ignore_errors=True)
+        return False
+
+    def add_archive(self, st: LabState, name: str, path: Path, skip_docs: bool = False) -> tuple[LabState, list[str]]:
+        """Архив к лабе (из поля «Методичка» — документы уже ушли в методичку, skip_docs)."""
+        problems: list[str] = []
+        with self.lock(st):
+            self._add_archive(st, name, Path(path), problems, skip_docs=skip_docs)
+            st = self._save(st)
+        return st, problems
+
     @staticmethod
-    def _put_material(st: LabState, name: str, text: str, problems: list[str]) -> bool:
+    def _put_material(st: LabState, name: str, text: str, problems: list[str], assets: list[str] | None = None) -> bool:
         """Материал в лабу, если влезает в общий лимит (модель перечитывает материалы в каждом задании)."""
         from forlabs.core.models import Material
         from forlabs.pipeline.materials import MATERIALS_MAX, MAX_FILES, PAGE_CHARS, pages
@@ -808,7 +879,7 @@ class Pipeline:
         if len(others) >= MAX_FILES:
             problems.append(f"«{name}» не добавлен: к лабе можно приложить до {MAX_FILES} файлов и ссылок.")
             return False
-        st.materials = [*others, Material(name=name, text=text)]
+        st.materials = [*others, Material(name=name, text=text, assets=assets or [])]
         return True
 
     def add_link(self, st: LabState, url: str, http=None) -> tuple[LabState, list[str]]:
@@ -827,7 +898,12 @@ class Pipeline:
 
     def remove_material(self, st: LabState, name: str) -> LabState:
         with self.lock(st):
+            gone = [m for m in st.materials if m.name == name]
             st.materials = [m for m in st.materials if m.name != name]
+            for m in gone:
+                if m.assets:  # распакованный архив — вместе с материалом
+                    shutil.rmtree(self.lab_dir(st) / "assets_in" / safe_file_name(Path(m.name).stem),
+                                  ignore_errors=True)
             return self._save(st)
 
     def _materials_text(self, st: LabState) -> str:

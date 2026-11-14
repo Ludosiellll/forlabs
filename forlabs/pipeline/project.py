@@ -1202,6 +1202,7 @@ def _build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm, emit, retake: b
         инструментов над ним. Сеть — не опасность, если программа работает в песочнице."""
         shutil.rmtree(work, ignore_errors=True)
         languages.materialize(candidate, work, tools)
+        _put_assets(pipe, st, candidate, work)
         info.placeholders = _own_pictures(pipe, st, candidate, work)
         blocked, net = _blocked(pipe, candidate)
         res = None
@@ -1221,6 +1222,7 @@ def _build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm, emit, retake: b
                 candidate = fixed
                 shutil.rmtree(work, ignore_errors=True)
                 languages.materialize(candidate, work, tools)
+                _put_assets(pipe, st, candidate, work)
                 info.placeholders = _own_pictures(pipe, st, candidate, work)
                 blocked, net = _blocked(pipe, candidate)  # исправление тоже проверяется до сборки
                 if blocked:
@@ -1469,6 +1471,32 @@ def _build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm, emit, retake: b
 
 
 BACKUP = ".bak"  # прежняя версия файла студента рядом с новой: «main.py.bak» (компилятор её не берёт)
+
+
+def _put_assets(pipe, st: LabState, plan: ProjectPlan, work: Path) -> int:
+    """Картинки и другие файлы из архивов преподавателя — в папку программы, по путям из архива (на снимки и в
+    папку сдачи). Файл проекта с тем же путём не заменяется. → сколько файлов положено."""
+    from forlabs.core.store import safe_file_name
+
+    lab = pipe.lab_dir(st)
+    folders = [p.name for p in plan.programs if p.runs] or [""]
+    placed = 0
+    for m in st.materials:
+        root = lab / "assets_in" / safe_file_name(Path(m.name).stem)
+        for rel in m.assets:
+            src = lab / rel
+            try:
+                inner = src.relative_to(root)
+            except ValueError:
+                continue
+            for folder in folders:
+                dst = work / folder / inner
+                if dst.exists() or not src.is_file():
+                    continue
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst)
+                placed += 1
+    return placed
 
 
 def _own_pictures(pipe, st: LabState, plan: ProjectPlan, work: Path) -> list[str]:
