@@ -33,15 +33,15 @@ WINFORMS = {
 def test_folder_is_copied_without_build_output(tmp_path):
     own = read_own(_tree(tmp_path / "src", WINFORMS), tmp_path / "lab" / "own")
     assert own.language == "csharp" and own.engine is None and own.name == "src"
-    # общая верхняя папка «Calc» снята, «bin», «obj», «.vs» не взяты
-    assert sorted(own.files) == ["Calc/Form1.Designer.cs", "Calc/Form1.cs", "Calc/Form1.resx", "Calc/Program.cs",
-                                 "Calc/Properties/AssemblyInfo.cs"]
-    assert own.assets == ["Calc/icon.png"]
-    assert (tmp_path / "lab" / "own" / "Calc" / "Program.cs").read_text(encoding="utf-8").startswith("static class")
-    assert not (tmp_path / "lab" / "own" / "Calc" / "bin").exists()
+    # корень — папка проекта Visual Studio (Calc/Calc), «bin», «obj», «.vs», .sln не взяты
+    assert sorted(own.files) == ["Form1.Designer.cs", "Form1.cs", "Form1.resx", "Program.cs",
+                                 "Properties/AssemblyInfo.cs"]
+    assert own.assets == ["icon.png"] and own.project_name == "Calc"
+    assert (tmp_path / "lab" / "own" / "Program.cs").read_text(encoding="utf-8").startswith("static class")
+    assert not (tmp_path / "lab" / "own" / "bin").exists()
     assert not list((tmp_path / "lab" / "own").rglob("*.csproj"))
     # код для модели: главный файл первым, ресурсы перечислены по имени
-    assert own.text.index("Calc/Program.cs") < own.text.index("Calc/Form1.cs")
+    assert own.text.index("Program.cs") < own.text.index("Form1.cs")
     assert "static void Main" in own.text and "icon.png" in own.text
 
 
@@ -102,3 +102,99 @@ def test_replacing_clears_the_old_copy(tmp_path):
     read_own(_tree(tmp_path / "a", {"main.py": "print(1)"}), tmp_path / "own")
     own = read_own(_tree(tmp_path / "b", {"app.js": "console.log(1)"}), tmp_path / "own")
     assert own.files == ["app.js"] and not (tmp_path / "own" / "main.py").exists()
+
+
+# --- по проверке кода ---
+
+def test_flask_app_is_python_not_web(tmp_path):
+    own = read_own(_tree(tmp_path / "f", {"app.py": "from flask import Flask", "templates/index.html": "<p>",
+                                          "static/style.css": "p{}"}), tmp_path / "own")
+    assert own.language == "python"
+
+
+def test_plain_site_is_web(tmp_path):
+    own = read_own(_tree(tmp_path / "s", {"index.html": "<p>", "app.js": "x()", "style.css": "p{}"}), tmp_path / "own")
+    assert own.language == "web"
+
+
+def test_visual_studio_project_folder_becomes_the_root(tmp_path):
+    files = dict(WINFORMS)
+    files["Calc/Calc/Calc.csproj"] = "<Project><PropertyGroup><RootNamespace>CalcApp</RootNamespace></PropertyGroup></Project>"
+    own = read_own(_tree(tmp_path / "src", files), tmp_path / "own")
+    assert "Program.cs" in own.files and "Form1.resx" in own.files  # без «Calc/»: ресурсы получат имя студента
+    assert own.project_name == "CalcApp"
+
+
+def test_project_name_from_csproj_file_name(tmp_path):
+    own = read_own(_tree(tmp_path / "p", {"Lab3/Lab3.csproj": "<Project/>", "Lab3/Program.cs": "class P {}"}),
+                   tmp_path / "own")
+    assert own.project_name == "Lab3" and own.files == ["Program.cs"]
+
+
+def test_ordinary_folders_named_like_unity_ones_are_kept(tmp_path):
+    own = read_own(_tree(tmp_path / "lib", {"main.py": "import library.books", "library/books.py": "B = 1",
+                                            "logs/parse.py": "x = 1"}), tmp_path / "own")
+    assert sorted(own.files) == ["library/books.py", "logs/parse.py", "main.py"]
+
+
+def test_unity_library_is_not_walked(tmp_path, monkeypatch):
+    import forlabs.ingest.own as own_mod
+
+    monkeypatch.setattr(own_mod, "MAX_WALK", 50)
+    files = {f"Library/Artifacts/{i}.bin": b"x" for i in range(200)}
+    files.update({"Assets/Player.cs": "using UnityEngine;", "ProjectSettings/ProjectVersion.txt": "x"})
+    own = read_own(_tree(tmp_path / "G", files), tmp_path / "own")
+    assert own.engine == "Unity" and own.files == ["Assets/Player.cs"]
+
+
+def test_encrypted_or_unsupported_zip_is_a_plain_error(tmp_path, monkeypatch):
+    import forlabs.ingest.archive as archive
+
+    z = tmp_path / "p.zip"
+    with zipfile.ZipFile(z, "w") as f:
+        f.writestr("main.py", "print(1)")
+    real_open = zipfile.ZipFile.open
+
+    def locked(self, *a, **k):
+        raise RuntimeError("File is encrypted, password required for extraction")
+
+    monkeypatch.setattr(zipfile.ZipFile, "open", locked)
+    with pytest.raises(ValueError, match="парол|не поддерж"):
+        read_own(z, tmp_path / "own")
+    monkeypatch.setattr(zipfile.ZipFile, "open", real_open)
+    assert archive  # модуль тот же
+
+
+def test_failed_replace_keeps_the_previous_copy(tmp_path, monkeypatch):
+    import shutil as sh
+
+    read_own(_tree(tmp_path / "a", {"main.py": "print(1)"}), tmp_path / "own")
+    real = sh.copyfile
+
+    def broken(src, dst, *a, **k):
+        raise PermissionError(13, "занят")
+
+    monkeypatch.setattr("forlabs.ingest.own.shutil.copyfile", broken)
+    with pytest.raises(OSError):
+        read_own(_tree(tmp_path / "b", {"app.py": "print(2)"}), tmp_path / "own")
+    monkeypatch.setattr("forlabs.ingest.own.shutil.copyfile", real)
+    assert (tmp_path / "own" / "main.py").exists()
+
+
+def test_generated_files_go_last_in_the_model_text(tmp_path):
+    own = read_own(_tree(tmp_path / "w", {"Program.cs": "class P {}", "Form1.cs": "class F {}",
+                                          "Form1.Designer.cs": "partial class F {}", "Form1.resx": "<root/>",
+                                          "Logic.cs": "class L {}"}), tmp_path / "own")
+    t = own.text
+    assert t.index("Logic.cs") < t.index("Form1.Designer.cs") and t.index("Logic.cs") < t.index("Form1.resx")
+
+
+def test_text_with_control_characters_is_not_code(tmp_path):
+    own = read_own(_tree(tmp_path / "c", {"main.py": "print(1)", "weird.py": "x = 1\x01\n"}), tmp_path / "own")
+    assert own.files == ["main.py"]
+
+
+def test_fingerprint_changes_with_the_code(tmp_path):
+    a = read_own(_tree(tmp_path / "a", {"main.py": "print(1)"}), tmp_path / "own")
+    b = read_own(_tree(tmp_path / "b", {"main.py": "print(2)"}), tmp_path / "own")
+    assert a.sha and b.sha and a.sha != b.sha

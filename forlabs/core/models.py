@@ -224,6 +224,8 @@ class OwnProgram(BaseModel):
     files: list[str] = Field(default_factory=list)  # код и данные, пути от own/
     assets: list[str] = Field(default_factory=list)  # картинки и прочие файлы, пути от own/
     text: str = ""  # код для модели (главные файлы первыми; что не влезло — перечислено по имени)
+    project_name: str | None = None  # имя проекта C# студента (RootNamespace): имена его ресурсов
+    sha: str = ""  # отпечаток файлов: другая программа — проект составляется заново
 
 
 class ProjectInfo(BaseModel):
@@ -242,6 +244,7 @@ class ProjectInfo(BaseModel):
     programs: list[str] = Field(default_factory=list)  # несколько программ в лабе: их имена (папки проекта)
     placeholders: list[str] = Field(default_factory=list)  # картинки сайта, вместо которых лежат заглушки
     report_sha: str = ""  # листинги и рисунки отчёта, по которым собран проект (правка в чате — проект устарел)
+    own_sha: str = ""  # отпечаток своей программы студента, из которой собран проект ("" — проект ForLabs)
 
 
 class LabState(BaseModel):

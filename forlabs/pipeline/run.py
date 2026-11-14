@@ -919,8 +919,12 @@ class Pipeline:
             except ValueError as e:
                 return st, [f"Программа «{name}» не добавлена: {e}."]
             except OSError as e:
-                return st, [f"Программа «{name}» не прочиталась ({e.strerror or e}). Закрой её в среде разработки и "
-                            "добавь снова."]
+                return st, [f"Программа «{name}» не добавлена: не прочиталась ({e.strerror or e}). Закрой её в среде "
+                            "разработки и добавь снова."]
+            except Exception as e:  # noqa: BLE001 — странный архив и т. п.: лаба остаётся, студент видит причину
+                logging.getLogger("forlabs").warning("своя программа: %s", e, exc_info=True)
+                return st, [f"Программа «{name}» не добавлена ({type(e).__name__}). Пересохрани её обычным ZIP или "
+                            "выбери папку."]
             if own.engine is None:
                 own.engine = proj.engine_in_text(own.text)  # скрипты Unity и без папок проекта
             st.own = own
@@ -990,6 +994,15 @@ class Pipeline:
         why = ""  # почему не вышло — словами для студента
         before, was_built = None, st.project is not None and st.project.built
         try:
+            if plan is None and fix and own:
+                # программа студента: план — из его файлов, просьба — исправлением поверх них (иначе файлы
+                # студента молча заменили бы то, что модель написала по просьбе)
+                emit("Составляю проект программы")
+                plan = proj.plan_project(st, llm, self._memory_text(st, own=False), previous=previous, own=own)
+                if found := proj.validate(plan):
+                    if not all(x.startswith("Снимок ") for x in found):
+                        raise PipelineError("план проекта не прошёл проверку: " + "; ".join(found[:3]))
+                    plan = proj.drop_bad_shots(plan)
             if plan is not None and fix:
                 emit("Исправляю программу")
                 log = st.project.build_log if st.project else ""
@@ -1009,7 +1022,8 @@ class Pipeline:
                 emit("Составляю проект программы")
                 plan = proj.plan_project(st, llm, self._memory_text(st, own=False), wish=fix, previous=previous, own=own)
                 outcome = "applied" if fix else ""
-                if st.project is not None and st.project.name:  # план составлен заново: проект остаётся в своей папке
+                if st.project is not None and st.project.name and not (st.own and st.own.project_name):
+                    # план составлен заново: проект остаётся в своей папке (у программы студента — его имя)
                     plan = plan.model_copy(update={"name": st.project.name})
                 def checked(candidate):
                     found = proj.validate(candidate)
@@ -1022,7 +1036,7 @@ class Pipeline:
                     emit("План проекта не прошёл проверку — составляю заново", "warn")
                     plan = proj.plan_project(st, llm, self._memory_text(st, own=False), wish=fix,
                                              rejected="; ".join(problems[:5]), previous=previous, own=own)
-                    if st.project is not None and st.project.name:
+                    if st.project is not None and st.project.name and not (st.own and st.own.project_name):
                         plan = plan.model_copy(update={"name": st.project.name})
                     plan, problems = checked(plan)
                 if problems:
@@ -1112,10 +1126,12 @@ class Pipeline:
         from forlabs.pipeline import project as proj
 
         old = proj.load_plan(self, st)
-        plan = None if fresh else old
+        moved = proj.own_moved(st)  # своя программа добавлена, заменена или убрана: прежний проект — не её
+        plan = None if fresh or moved else old
         if plan is not None and proj.stale(st, plan):
             plan = None
-        return self._project(st, llm, plan=plan, retake=retake, fix=fix, previous=old if plan is None else None)
+        previous = old if plan is None and not moved else None
+        return self._project(st, llm, plan=plan, retake=retake, fix=fix, previous=previous)
 
     def _chat_reshoot(self, st: LabState, llm, code_changed: bool = False,
                       force: bool = True, fix: str = "") -> tuple[LabState, str, bool]:

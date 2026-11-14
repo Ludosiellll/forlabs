@@ -59,7 +59,11 @@ def unpack(zip_path: Path, dest: Path) -> list[Path]:
             if not str(target.resolve()).startswith(str(root)):
                 raise ValueError(f"в архиве есть файл вне папки архива («{'/'.join(parts)}»)")
             target.parent.mkdir(parents=True, exist_ok=True)
-            with z.open(info) as src, open(target, "wb") as dst:
-                shutil.copyfileobj(src, dst, 1024 * 1024)
+            try:
+                with z.open(info) as src, open(target, "wb") as dst:
+                    shutil.copyfileobj(src, dst, 1024 * 1024)
+            except (RuntimeError, NotImplementedError) as e:  # пароль, Deflate64 и прочие способы сжатия
+                raise ValueError("архив защищён паролем или сжат способом, который ForLabs не поддерживает — "
+                                 "пересохрани его обычным ZIP без пароля") from e
             out.append(target)
     return out

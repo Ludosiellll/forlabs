@@ -349,11 +349,18 @@ def report_sha(st: LabState) -> str:
     return hashlib.sha1("\n".join(parts).encode("utf-8")).hexdigest()
 
 
+def own_moved(st: LabState) -> bool:
+    """Своя программа студента не та, из которой собран проект: её добавили, заменили или убрали."""
+    return st.project is not None and (st.own.sha if st.own is not None else "") != (st.project.own_sha or "")
+
+
 def stale(st: LabState, plan: ProjectPlan | None = None) -> bool:
     """Проект собран по другому отчёту: код или рисунки с тех пор меняли (в чате правок). У лабы, сделанной до
     появления отпечатка, сверяется сам план: код листинга отчёта должен стоять в файле, на который план ссылается."""
     if st.project is None:
         return False
+    if own_moved(st):
+        return True
     if st.project.report_sha:
         return st.project.report_sha != report_sha(st)
     if plan is None:
@@ -647,13 +654,13 @@ def _plan_in_parts(user: str, llm, ready: dict[str, str] | None = None) -> Proje
                           max_tokens=PLAN_MAX_TOKENS, think=True))
     if ready:
         head = with_own(head, ready)
-    todo = [f for f in head.files if not f.content.strip()]
+    todo = [f for f in head.files if not f.content.strip() and f.path not in ready]
     if len(todo) > MAX_PART_FILES:
         raise LLMError("bad_response", f"{len(todo)} файлов", "Проект программы слишком большой.")
     refs = "; ".join(f"[{r.section}.{r.block}] → {r.file}" for r in head.listings) or "нет"
     manifest = (f"План проекта: язык {head.language}, вид {head.kind}. {programs_text(head)}\n"
                 f"Файлы: {', '.join(f.path for f in head.files)}.\nЛистинги отчёта: {refs}.")
-    done: dict[str, ProjectFile] = {f.path: f for f in head.files if f.content.strip()}
+    done: dict[str, ProjectFile] = {f.path: f for f in head.files if f.content.strip() or f.path in ready}
     for f in todo:
         mine = ", ".join(f"[{r.section}.{r.block}]" for r in head.listings if r.file == f.path) or "нет"
         written = _files_text(done.values())
@@ -741,7 +748,13 @@ def plan_project(st: LabState, llm, memory: str = "", wish: str = "", rejected: 
             raise
         plan = _plan_in_parts(user, llm, own)  # ответ обрезан по длине или JSON не собрался
     if own:
-        plan = with_own(plan, own, previous)
+        upd: dict = {}
+        if st.own is not None and st.own.language and plan.language != st.own.language:
+            kinds = plan_rules.KINDS.get(st.own.language, ("console",))
+            upd = {"language": st.own.language, "kind": plan.kind if plan.kind in kinds else kinds[0]}
+        if st.own is not None and st.own.project_name:  # имя проекта — как у студента: имена его ресурсов
+            upd["name"] = st.own.project_name
+        plan = with_own(plan.model_copy(update=upd), own, previous)
     return _quiet_console(_trusted_expects(_tidy(plan), st))
 
 
@@ -791,13 +804,32 @@ def _dotnet_leftover(rel: str, own: dict[str, str]) -> bool:
 
 def with_own(plan: ProjectPlan, own: dict[str, str], previous: ProjectPlan | None = None) -> ProjectPlan:
     """Файлы проекта — программа студента дословно: что модель переписала, заменяется, что дописала, убирается, что
-    пропустила, добавляется. Файл, который прежний проект уже исправлял (чтобы собралось), берётся исправленным."""
+    пропустила, добавляется. В план идёт код языка проекта; ресурсы и данные — пока план не упирается в пределы
+    проверки, а файлы другого вида (шаблоны .html у Flask, .sql у программы на C#) и то, что не влезло, ForLabs кладёт
+    в папку программы как есть (_put_assets). previous — прежний проект из этих же файлов: исправленное для сборки
+    берётся исправленным."""
     from forlabs.ingest.own import _main_first
 
+    lang = plan.language
+    code_ext = plan_rules.CODE_EXT.get(lang, set())
+    extra_ext = plan_rules.EXTRA_EXT.get(lang, set()) | DATA_EXT
     before = {f.path: f.content for f in previous.files} if previous is not None else {}
-    files = {rel: before.get(rel) or text for rel, text in own.items()
-             if not (plan.language == "csharp" and _dotnet_leftover(rel, own))}
-    code = [rel for rel in files if PurePosixPath(rel).suffix.lower() in plan_rules.CODE_EXT.get(plan.language, ())]
+    files: dict[str, str] = {}
+    for rel, text in own.items():
+        if PurePosixPath(rel).suffix.lower() in code_ext and not (lang == "csharp" and _dotnet_leftover(rel, own)):
+            files[rel] = before.get(rel, text)
+    total = sum(len(t.encode("utf-8")) for t in files.values())
+    for rel in sorted(own, key=lambda r: len(own[r])):  # мелкие первыми: в план войдёт больше
+        text = before.get(rel, own[rel])
+        size = len(text.encode("utf-8"))
+        if (rel in files or PurePosixPath(rel).suffix.lower() not in extra_ext or len(files) >= plan_rules.MAX_FILES
+                or size > plan_rules.MAX_FILE or total + size > plan_rules.MAX_TOTAL
+                or plan_rules._path_problem(rel) is not None):
+            continue
+        files[rel] = text
+        total += size
+    files = {rel: files[rel] for rel in own if rel in files}  # порядок — как у студента
+    code = [rel for rel in files if PurePosixPath(rel).suffix.lower() in code_ext]
     entry = plan.entry if plan.entry in files else (sorted(code, key=_main_first) or [""])[0]
     listings = [r for r in plan.listings if r.file in files]
     return plan.model_copy(update={"files": [ProjectFile(path=p, content=c) for p, c in files.items()],
@@ -1545,6 +1577,7 @@ def _build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm, emit, retake: b
     except Exception:
         pass
     info.report_sha = report_sha(st)
+    info.own_sha = st.own.sha if st.own is not None else ""
     st.project = info
     st.docx_sha = None
     return st
@@ -1576,8 +1609,11 @@ def _put_assets(pipe, st: LabState, plan: ProjectPlan, work: Path) -> int:
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(src, dst)
                 placed += 1
-    if st.own is not None:  # картинки и ресурсы своей программы — по её же путям
-        for rel in st.own.assets:
+    if st.own is not None:  # картинки, ресурсы и всё, что не вошло в план, — по путям программы студента
+        planned = {f.path for f in plan.files}
+        code_ext = plan_rules.CODE_EXT.get(plan.language, set())
+        rest = [rel for rel in st.own.files if rel not in planned and PurePosixPath(rel).suffix.lower() not in code_ext]
+        for rel in [*st.own.assets, *rest]:
             src, dst = lab / "own" / rel, work / rel
             if src.is_file() and not dst.exists():
                 dst.parent.mkdir(parents=True, exist_ok=True)
