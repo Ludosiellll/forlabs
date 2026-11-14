@@ -1,7 +1,9 @@
 // Запуск: node --experimental-strip-types --test supabase/functions/llm/logic.test.ts
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { decideAccess, labTag, ownKeyError, parseBalance, pickKey } from "./logic.ts";
+import {
+  chooseModel, decideAccess, directAllowed, isTrial, labTag, ownKeyError, parseBalance, parseUsage, pickKey, tuneBody,
+} from "./logic.ts";
 
 const NOW = new Date("2026-11-08T12:00:00Z");
 
@@ -67,4 +69,56 @@ test("ошибки личного ключа участника — понятн
   assert.equal(ownKeyError("own", 403, "model_not_allowed: x"), null);
   assert.equal(ownKeyError("shared", 401, "invalid key"), null); // общий ключ — дело администратора, как раньше
   assert.equal(ownKeyError("own", 500, "upstream"), null);
+});
+
+const MODELS = ["deepseek-v4.1-flash-1017", "glm-5.3-flash"];
+
+test("модель: выбранная в админке, если она в списке", () => {
+  assert.equal(chooseModel("deepseek-v4.1-flash-1017", "glm-5.3-flash", MODELS), "glm-5.3-flash");
+});
+
+test("модель: выбранной нет в списке — запрошенная; запрошенной нет — первая", () => {
+  assert.equal(chooseModel("glm-5.3-flash", "kimi-k3", MODELS), "glm-5.3-flash");
+  assert.equal(chooseModel("gpt-x", null, MODELS), "deepseek-v4.1-flash-1017");
+  assert.equal(chooseModel("gpt-x", "kimi-k3", MODELS), "deepseek-v4.1-flash-1017");
+});
+
+test("GLM: короткое рассуждение по умолчанию и запас на рассуждение", () => {
+  const b = tuneBody({ model: "glm-5.3-flash", max_tokens: 1500 }, 16000);
+  assert.equal(b.reasoning_effort, "low");
+  assert.equal(b.max_tokens, 5500);
+});
+
+test("GLM: заданный уровень сохраняется, предел не выше потолка", () => {
+  const b = tuneBody({ model: "glm-5.3", reasoning_effort: "medium" }, 16000);
+  assert.equal(b.reasoning_effort, "medium");
+  assert.equal(b.max_tokens, 16000);
+  assert.equal(tuneBody({ model: "glm-5.3", max_tokens: 15000 }, 16000).max_tokens, 16000);
+});
+
+test("не GLM: рассуждение не добавляется, предел не выше потолка", () => {
+  const b = tuneBody({ model: "deepseek-v4.1-flash-1017", max_tokens: 50000 }, 16000);
+  assert.equal(b.reasoning_effort, undefined);
+  assert.equal(b.max_tokens, 16000);
+  assert.equal(tuneBody({ model: "deepseek-v4.1-flash-1017" }, 16000).max_tokens, 16000);
+});
+
+test("пробный доступ и прямой доступ", () => {
+  assert.equal(isTrial({ trial_labs: 3, trial_chat: null }), true);
+  assert.equal(isTrial({ trial_labs: null, trial_chat: 5 }), true);
+  assert.equal(isTrial({ trial_labs: null, trial_chat: null }), false);
+  assert.equal(directAllowed({ trial_labs: 3, trial_chat: null }, "sk-own"), false);
+  assert.equal(directAllowed({ trial_labs: null, trial_chat: null }, "sk-own"), true);
+  assert.equal(directAllowed({ trial_labs: null, trial_chat: null }, null), false);
+  assert.equal(directAllowed({ trial_labs: null, trial_chat: null }, "  "), false);
+});
+
+test("расход прямого запроса: проверка полей", () => {
+  const ok = parseUsage({ model: "glm-5.3-flash", prompt_tokens: 1200, completion_tokens: 300, lab: "a%2Fb", chat: null }, MODELS);
+  assert.deepEqual(ok, { model: "glm-5.3-flash", prompt_tokens: 1200, completion_tokens: 300, lab: "a/b", chat: null });
+  assert.equal(parseUsage({ model: "gpt-x", prompt_tokens: 1, completion_tokens: 1 }, MODELS), null);
+  assert.equal(parseUsage({ model: "glm-5.3-flash", prompt_tokens: -1, completion_tokens: 1 }, MODELS), null);
+  assert.equal(parseUsage({ model: "glm-5.3-flash", prompt_tokens: 1_000_001, completion_tokens: 1 }, MODELS), null);
+  assert.equal(parseUsage({ model: "glm-5.3-flash", prompt_tokens: 1.5, completion_tokens: 1 }, MODELS), null);
+  assert.equal(parseUsage("x", MODELS), null);
 });

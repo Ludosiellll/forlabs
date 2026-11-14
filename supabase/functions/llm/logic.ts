@@ -58,3 +58,55 @@ export function ownKeyError(kind: "own" | "shared", status: number, body: string
   if (status === 401 || status === 403) return { status: 402, message: `member key rejected: ${status}` };
   return null;
 }
+
+type Trial = { trial_labs: number | null; trial_chat: number | null };
+
+/** Пробный доступ: заданы лимиты лаб или сообщений чата. */
+export function isTrial(m: Trial): boolean {
+  return m.trial_labs !== null && m.trial_labs !== undefined || m.trial_chat !== null && m.trial_chat !== undefined;
+}
+
+/** Прямой доступ к провайдеру: у участника свой ключ и он не в пробном доступе. */
+export function directAllowed(m: Trial, own: string | null): boolean {
+  return !!own && own.trim() !== "" && !isTrial(m);
+}
+
+/** Модель запроса: выбранная в админке (если она в списке), иначе запрошенная (если в списке), иначе первая. */
+export function chooseModel(requested: string, chosen: string | null, models: string[]): string {
+  if (chosen && models.includes(chosen)) return chosen;
+  if (models.includes(requested)) return requested;
+  return models[0];
+}
+
+/** Предел ответа не выше потолка; GLM рассуждает всегда — короткое рассуждение по умолчанию и запас 4000 на него. */
+export function tuneBody(body: Record<string, unknown>, cap: number): Record<string, unknown> {
+  const out = { ...body };
+  const asked = Number(out.max_tokens ?? cap);
+  const base = Number.isFinite(asked) && asked > 0 ? asked : cap;
+  if (String(out.model ?? "").startsWith("glm")) {
+    if (!out.reasoning_effort) out.reasoning_effort = "low";
+    out.max_tokens = Math.min(base + 4000, cap);
+  } else {
+    out.max_tokens = Math.min(base, cap);
+  }
+  return out;
+}
+
+export type UsageReport = {
+  model: string; prompt_tokens: number; completion_tokens: number; lab: string | null; chat: string | null;
+};
+
+/** Расход прямого запроса от приложения: модель из списка, целые числа 0…1 000 000. */
+export function parseUsage(body: unknown, models: string[]): UsageReport | null {
+  if (!body || typeof body !== "object") return null;
+  const b = body as Record<string, unknown>;
+  const model = String(b.model ?? "");
+  if (!models.includes(model)) return null;
+  const ok = (v: unknown) => typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= 1_000_000;
+  if (!ok(b.prompt_tokens) || !ok(b.completion_tokens)) return null;
+  const tag = (v: unknown) => (typeof v === "string" ? labTag(v) : null);
+  return {
+    model, prompt_tokens: b.prompt_tokens as number, completion_tokens: b.completion_tokens as number,
+    lab: tag(b.lab), chat: tag(b.chat),
+  };
+}
