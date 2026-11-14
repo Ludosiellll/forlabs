@@ -24,6 +24,8 @@ MAX_ASSETS = 200 * 1024 * 1024
 TEXT_MAX = 60_000  # знаков кода для модели: она перечитывает его в каждом задании
 DATA_PREVIEW = 3_000  # знаков от файла данных
 MAIN_NAMES = ("program", "main", "app", "index", "form1", "mainwindow", "mainform", "game")
+LANG_TITLES = {"csharp": "C#", "cpp": "C++", "python": "Python", "java": "Java", "javascript": "JavaScript",
+               "web": "HTML, CSS, JS", "php": "PHP", "go": "Go", "mysql": "SQL"}
 LANG_ORDER = ("csharp", "java", "cpp", "python", "php", "go", "javascript", "web", "mysql")
 
 
@@ -177,3 +179,14 @@ def read_own(src: Path, dest: Path, name: str | None = None) -> OwnProgram:
             shutil.rmtree(tmp, ignore_errors=True)
     raise ValueError("нужна папка с программой или ZIP-архив с ней")
 
+
+
+def summary(own: OwnProgram) -> str:
+    """Одной строкой для страницы лабы: «Calc · 5 файлов кода · C#»."""
+    n = len(own.files)
+    word = "файл" if n % 10 == 1 and n % 100 != 11 else \
+        "файла" if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14 else "файлов"
+    parts = [own.name, f"{n} {word} кода"]
+    if own.language:
+        parts.append(LANG_TITLES.get(own.language, own.language))
+    return " · ".join(parts)

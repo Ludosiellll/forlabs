@@ -65,7 +65,7 @@
     {% endif %}
 
     <details class="fold lab-inputs"{{ ' open' if link_notes }}>
-      <summary>Файлы и прошлые лабы{% if st.linked or materials %} · {{ st.linked|length + materials|length }}{% endif %}</summary>
+      <summary>Файлы, своя программа, прошлые лабы{% if st.linked or materials or st.own %} · {{ st.linked|length + materials|length + (1 if st.own else 0) }}{% endif %}</summary>
       <form method="post" action="{{ base_url }}/links" enctype="multipart/form-data" class="stack" data-once>
         <label class="small" for="linked">Прошлые лабы, на которых строится эта</label>
         <input id="linked" name="linked" type="text" maxlength="60" value="{{ st.linked|join(', ') }}" placeholder="например: 1, 27">
@@ -76,6 +76,21 @@
       </form>
       {% if auto_refs %}<div class="small muted">Методичка ссылается на {{ auto_refs|join(', ') }}.</div>{% endif %}
       {% if link_notes %}<ul class="small">{% for m in link_notes %}<li>{{ m }}</li>{% endfor %}</ul>{% endif %}
+
+      <h3 class="small" style="margin:12px 0 4px">Своя программа</h3>
+      {% if own_summary %}<ul class="small mats">
+        <li><span>{{ own_summary }}{% if st.own.engine %} · {{ st.own.engine }}: код — в листинги, снимки — твои{% endif %}</span>
+          <form method="post" action="{{ base_url }}/own/remove" class="inline">
+            <button class="btn link small" type="submit">Убрать</button></form></li></ul>{% endif %}
+      <form method="post" action="{{ base_url }}/own" enctype="multipart/form-data" class="row until" data-once>
+        {% if ctx.pick %}<button type="button" class="btn small" data-pick="folder" data-pick-for="own-path">{{ 'Другая папка…' if own_summary else 'Выбрать папку…' }}</button>{% endif %}
+        <label class="btn small filebtn">ZIP
+          <input class="visually-hidden" type="file" name="own_zip" accept=".zip" data-autosubmit></label>
+        <label class="visually-hidden" for="own-path">Папка с программой</label>
+        <input id="own-path" name="own_path" type="text" maxlength="500" placeholder="Путь к папке программы">
+        <button class="btn small" type="submit">Добавить</button>
+      </form>
+      <div class="hint">Если программу ты уже написал: листинги будут из её кода, снимки — запуском её.</div>
 
       <h3 class="small" style="margin:12px 0 4px">Файлы к лабе</h3>
       {% if materials %}<ul class="small mats">{% for name, pg in materials %}

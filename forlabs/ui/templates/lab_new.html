@@ -39,6 +39,14 @@
         <textarea id="text" name="text" rows="7" placeholder="Лабораторная работа №…&#10;Тема: …&#10;Цель: …"></textarea>
       </details>
     </div>
+    <div class="field"><span class="label">Своя программа <span class="muted small">— если уже написал: отчёт и снимки будут по ней</span></span>
+      <div class="row attach-row">
+        {% if ctx.pick %}<button type="button" class="btn small" data-pick="folder" data-pick-for="own-path">Выбрать папку…</button>{% endif %}
+        <label class="btn small">ZIP с программой<input id="own-zip" class="visually-hidden" type="file" name="own_zip" accept=".zip" data-images-input></label>
+        <span class="small muted" data-images-picked="own-zip"></span>
+      </div>
+      <label class="visually-hidden" for="own-path">Папка с программой</label>
+      <input id="own-path" name="own_path" type="text" maxlength="500" placeholder="или путь к папке проекта, например C:\Users\…\source\repos\Calc"></div>
     <div class="field"><label for="wishes">Пожелания <span class="muted small">— если что-то не как в методичке</span></label>
       <textarea id="wishes" name="wishes" rows="2" maxlength="4000" placeholder="Вариант мне дали 7; код на C#, а не на Java" data-paste-images="wish-images"></textarea>
       <div class="row attach-row">

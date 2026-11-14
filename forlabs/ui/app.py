@@ -50,6 +50,7 @@ from forlabs.core.settings import (
 from forlabs.core.store import safe_file_name, safe_name
 from forlabs.core.subjects import Subject, all_subjects, get_subject
 from forlabs.pipeline.images import MAX_IMAGES, normalize_screenshot, prepare_image
+from forlabs.ingest.own import summary as own_summary
 from forlabs.pipeline.materials import ACCEPT as MATERIALS_ACCEPT, MATERIALS_MAX, PAGE_CHARS, pages
 from forlabs.pipeline.labnum import shown_names, split_by_lab
 from forlabs.pipeline.memory import parse_numbers
@@ -162,6 +163,16 @@ async def material_uploads(ups, folder: Path) -> list:
         else:
             out.append((uf.filename, await uf.read()))
     return out
+async def own_upload(own_zip, own_path: str, folder: Path) -> tuple[str, Path] | None:
+    """«Своя программа» из формы: ZIP (на диск потоком) или папка на этом компьютере. → (имя, путь) или None."""
+    if own_zip is not None and own_zip.filename:
+        return Path(own_zip.filename).name, await spool(own_zip, folder)
+    if own_path.strip():
+        path = Path(own_path.strip().strip('"'))
+        return path.name or str(path), path
+    return None
+
+
 ELSEWHERE = ("Эта лаба сейчас выполняется на другом компьютере. Дождись окончания там (или 15 минут, если тот "
              "компьютер выключили) и обнови страницу.")
 BUSY_MESSAGE = "Сейчас идёт работа над лабой. Дождись её окончания, потом меняй настройки или выходи."
@@ -594,7 +605,8 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
                       text: str = Form(""), wishes: str = Form(""), files: list[UploadFile] | None = File(None),
                       wish_images: list[UploadFile] | None = File(None), form_token: str = Form(""),
                       linked: str = Form(""), linked_report: UploadFile | None = File(None),
-                      materials: list[UploadFile] | None = File(None)):
+                      materials: list[UploadFile] | None = File(None), own_zip: UploadFile | None = File(None),
+                      own_path: str = Form("")):
         if form_token:  # двойной клик или повторная отправка формы — одна лаба
             with ctx._lock:
                 done = ctx.form_tokens.get(form_token)
@@ -609,6 +621,8 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         for uf in [*(files or []), *(materials or [])]:
             if err := too_big(uf):
                 return redirect(back, err=err + ". Оставь только страницы своей лабы или сожми его.")
+        if own_zip is not None and (err := too_big(own_zip)):
+            return redirect(back, err=err + ". Убери из архива папки bin, obj, Library и прочие результаты сборки.")
         for uf in [*(wish_images or []), *([linked_report] if linked_report else [])]:
             if uf.filename and (uf.size or 0) > MAX_UPLOAD:
                 return redirect(back, err=f"Файл «{uf.filename}» больше {MAX_UPLOAD // 1_000_000} МБ. Оставь только "
@@ -627,6 +641,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         extra = await material_uploads([uf for uf in (materials or []) if uf.filename], tmp)
         report = (linked_report.filename, await linked_report.read()) if linked_report and linked_report.filename else None
         numbers = parse_numbers(linked)
+        own_src = await own_upload(own_zip, own_path, tmp)
 
         async def start(st, hint: str | None = None):
             """Файлы к лабе, затем разбор в фоне; связи — после разбора. → (лаба, замечания)."""
@@ -644,6 +659,9 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
                 except Exception as e:
                     notes.append(f"Файлы к лабе не добавились ({getattr(e, 'message_ru', None) or e}). Добавь их на "
                                  "странице лабы, слева.")
+            if own_src and hint is None:  # своя программа — к единственной лабе формы
+                st, problems = await asyncio.to_thread(ctx.pipeline.set_own, st, own_src[1], own_src[0])
+                notes += problems
             key = ctx.pipeline.key(st)
             result = {}
 
@@ -694,6 +712,8 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
                 if isinstance(failed[0], PipelineError):
                     return redirect(back, err=str(failed[0]))
                 raise failed[0]
+            if own_src:
+                problems.append("Свою программу добавь на странице нужной лабы: методичек было несколько.")
             url = (f"/?profile={_q(profile_id)}&subject={_q(subject_id)}&msg="
                    + _q(f"Методички разных лаб — создал отдельные: {', '.join('ЛР ' + n for n in made)}. "
                         "Проверь разбор у каждой.")
@@ -797,6 +817,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
                       auto_refs=[("предыдущую лабу" if r == "previous" else f"ЛР {r}") for r in ctx.pipeline._auto_refs(st)],
                       materials=[(m.name, pages(len(m.text))) for m in st.materials],
                       materials_accept=MATERIALS_ACCEPT, materials_pages=MATERIALS_MAX // PAGE_CHARS,
+                      own_summary=own_summary(st.own) if st.own else "",
                       preview_here=preview_here, docx_here=docx_here, teacher_rules=teacher_rules,
                       elsewhere=running_elsewhere(st),
                       complete=lab_complete(st),
@@ -981,6 +1002,36 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
             return redirect(lab_url(p, s, n), err=BUSY)
         ctx.pipeline.remove_material(load(p, s, n), name)
         return redirect(lab_url(p, s, n), msg="Файл убран")
+
+    @app.post("/labs/{p}/{s}/{n}/own")
+    async def lab_own(p: str, s: str, n: str, own_zip: UploadFile | None = File(None), own_path: str = Form("")):
+        if busy_lab(p, s, n):
+            return redirect(lab_url(p, s, n), err=BUSY)
+        if own_zip is not None and (err := too_big(own_zip)):
+            return redirect(lab_url(p, s, n), err=err + ". Убери из архива папки bin, obj, Library и прочие "
+                                                        "результаты сборки.")
+        st = await asyncio.to_thread(load, p, s, n)
+        tmp = upload_dir()
+        try:
+            src = await own_upload(own_zip, own_path, tmp)
+            if src is None:
+                return redirect(lab_url(p, s, n), err="Выбери папку с программой или ZIP")
+            st, problems = await asyncio.to_thread(ctx.pipeline.set_own, st, src[1], src[0])
+        finally:
+            await asyncio.to_thread(shutil.rmtree, tmp, True)
+        if problems:
+            return redirect(lab_url(p, s, n), err=" ".join(problems))
+        msg = "Программа добавлена"
+        if st.report:
+            msg += ". Чтобы отчёт и снимки перешли на неё, нажми «Выполнить заново»"
+        return redirect(lab_url(p, s, n), msg=msg)
+
+    @app.post("/labs/{p}/{s}/{n}/own/remove")
+    def lab_own_remove(p: str, s: str, n: str):
+        if busy_lab(p, s, n):
+            return redirect(lab_url(p, s, n), err=BUSY)
+        ctx.pipeline.remove_own(load(p, s, n))
+        return redirect(lab_url(p, s, n), msg="Своя программа убрана")
 
     @app.post("/labs/{p}/{s}/{n}/memory/theme")
     def lab_memory_theme(p: str, s: str, n: str, theme: str = Form("")):

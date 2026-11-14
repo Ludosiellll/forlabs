@@ -331,3 +331,46 @@ def test_zip_methodology_gives_source_and_lab_files(client, tmp_path, tmp_home):
     assert "лаба7.zip" in page  # архив — среди файлов к лабе (картинка из него)
     assert [p.name for p in Path(tmp_home).rglob("source/*")] == ["методичка.txt"]
     assert any(p.name == "фон.png" for p in Path(tmp_home).rglob("assets_in/*/*/*/*"))
+
+
+def _new_lab_with(client, data=None, files=None):
+    form = {"profile_id": "ivanov_ivan_petrovich", "subject_id": "psip", "number": "", "text": "", **(data or {})}
+    return client.post("/labs/new", data=form, files={"files": (FIXTURE.name, FIXTURE.read_bytes(), "text/plain"),
+                                                      **(files or {})}, follow_redirects=False)
+
+
+def test_own_program_folder_on_the_new_lab_form(client, tmp_path, tmp_home):
+    make_profile(client, tmp_path)
+    assert "Своя программа" in client.get("/labs/new").text
+    src = tmp_path / "Calc"
+    (src / "bin").mkdir(parents=True)
+    (src / "main.py").write_text("print('калькулятор')\n", encoding="utf-8")
+    (src / "bin" / "x.pyc").write_bytes(b"\0")
+    r = _new_lab_with(client, {"own_path": str(src)})
+    assert r.status_code == 303 and "err=" not in r.headers["location"], r.headers["location"]
+    page = client.get(r.headers["location"]).text
+    assert "Своя программа" in page and "Calc" in page and "1 файл" in page
+    assert [p.name for p in Path(tmp_home).rglob("own/*")] == ["main.py"]
+
+
+def test_own_program_zip_and_problems_on_the_lab_page(client, tmp_path, tmp_home):
+    import zipfile
+
+    make_profile(client, tmp_path)
+    r = _new_lab_with(client, {"own_path": str(tmp_path / "нет такой")})
+    url = r.headers["location"]
+    assert "err=" in url  # лаба создана, а про папку — замечание
+    lab = url.split("?")[0]
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("Game/Program.cs", "class P { static void Main() { } }")
+    r = client.post(f"{lab}/own", files={"own_zip": ("Game.zip", buf.getvalue(), "application/zip")},
+                    follow_redirects=False)
+    assert r.status_code == 303 and "err=" not in r.headers["location"], r.headers["location"]
+    page = client.get(lab).text
+    assert "Game.zip" in page and "C#" in page
+    r = client.post(f"{lab}/own/remove", follow_redirects=False)
+    assert r.status_code == 303 and not list(Path(tmp_home).rglob("own/*"))
+    r = client.post(f"{lab}/own", files={"own_zip": ("pics.zip", b"not a zip", "application/zip")},
+                    follow_redirects=False)
+    assert "err=" in r.headers["location"]
