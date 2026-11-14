@@ -22,7 +22,7 @@ env:
 jobs:
   tests:
     runs-on: windows-latest
-    timeout-minutes: 40
+    timeout-minutes: 60  # набор растёт: 1.0.19 шёл 39 мин 41 с, 1.0.21 упёрся в прежние 40
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
