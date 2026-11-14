@@ -297,13 +297,20 @@ def register_admin(app: FastAPI, ctx, render, redirect) -> None:
     def admin_model(action: str = Form(...), model: str = Form("")):
         if current_admin() is None:
             return home()
-        if action == "clear":
-            ctx.store.admin_clear_model()
-            return redirect("/admin", msg="Модель для всех сброшена: работает первая из списка LLM_MODELS на сервере")
+        from forlabs.cloud.auth import CloudError
+
         try:
+            if action == "clear":
+                ctx.store.admin_clear_model()
+                return redirect("/admin", msg="Модель для всех сброшена: работает первая из списка LLM_MODELS на сервере")
             chosen = ctx.store.admin_set_model(model)
         except ValueError as e:
             return redirect("/admin", err=str(e))
+        except CloudError as e:
+            if e.offline:
+                raise
+            return redirect("/admin", err="Сервер ещё не обновлён для выбора модели (миграция 0013) — модель пока "
+                                          "задаётся переменной LLM_MODELS в Supabase.")
         return redirect("/admin", msg=f"Модель для всех: {chosen}. Через минуту она работает у всех участников")
 
     @app.get("/admin/u/{uid}")

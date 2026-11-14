@@ -254,3 +254,14 @@ def test_cloud_client_gets_one_direct_access_for_the_whole_app(fake, tmp_home):
     ctx.auth = auth
     first, second = ctx.llm(), ctx.llm()
     assert isinstance(first.direct, DirectAccess) and first.direct is second.direct
+
+
+def test_model_form_before_the_server_is_updated_says_so(admin, monkeypatch):
+    from forlabs.cloud.auth import CloudError
+
+    def missing(self, model):
+        raise CloudError("Ошибка сервера", detail="function public.admin_set_model(model) does not exist")
+
+    monkeypatch.setattr(CloudStore, "admin_set_model", missing)
+    r = admin.post("/admin/model", data={"action": "set", "model": "glm-5.3-flash"}, follow_redirects=False)
+    assert r.status_code == 303 and "err=" in r.headers["location"]
