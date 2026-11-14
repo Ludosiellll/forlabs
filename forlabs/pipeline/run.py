@@ -906,6 +906,40 @@ class Pipeline:
                                   ignore_errors=True)
             return self._save(st)
 
+    def set_own(self, st: LabState, src: Path, name: str) -> tuple[LabState, list[str]]:
+        """«Своя программа»: папка или ZIP студента → копия в лабе (own/). Отчёт и проект дальше — по ней.
+        → (лаба, что не так — словами для студента)."""
+        from forlabs.ingest.own import read_own
+        from forlabs.pipeline import project as proj
+
+        name = Path(name or Path(src).name).name or "программа"
+        with self.lock(st):
+            try:
+                own = read_own(Path(src), self.lab_dir(st) / "own", name)
+            except ValueError as e:
+                return st, [f"Программа «{name}» не добавлена: {e}."]
+            except OSError as e:
+                return st, [f"Программа «{name}» не прочиталась ({e.strerror or e}). Закрой её в среде разработки и "
+                            "добавь снова."]
+            if own.engine is None:
+                own.engine = proj.engine_in_text(own.text)  # скрипты Unity и без папок проекта
+            st.own = own
+            st = self._save(st)
+        return st, []
+
+    def remove_own(self, st: LabState) -> LabState:
+        with self.lock(st):
+            shutil.rmtree(self.lab_dir(st) / "own", ignore_errors=True)
+            st.own = None
+            return self._save(st)
+
+    def _own_text(self, st: LabState) -> str:
+        if st.own is None or not st.own.text:
+            return ""
+        return ("Программа студента — она уже написана, отчёт пишется по ней. Листинги — только её код, дословно (файл "
+                "целиком или нужный фрагмент, ничего не меняя и не дописывая). Что программа делает, как работает и что "
+                "выводит — описывай по её коду; другой программы не придумывай.\n" + st.own.text)
+
     def _materials_text(self, st: LabState) -> str:
         if not st.materials:
             return ""
@@ -949,6 +983,9 @@ class Pipeline:
         if not self.projects or not st.report or (plan is None and not proj.needs_project(st)):
             return st
         emit = lambda text, kind="info": self._emit(st, text, kind, step="check")  # noqa: E731
+        own = proj.own_sources(self, st)
+        if st.own is not None and own is None and not st.own.engine and st.own.language:
+            emit("Файлов твоей программы нет на этом компьютере — добавь её заново на странице лабы", "warn")
         outcome = ""  # чем кончилась просьба исправить: applied, rejected (не сложилось в план), broke (не собралось)
         why = ""  # почему не вышло — словами для студента
         before, was_built = None, st.project is not None and st.project.built
@@ -970,7 +1007,7 @@ class Pipeline:
                     before, plan, outcome = plan, fixed, "applied"
             if plan is None:
                 emit("Составляю проект программы")
-                plan = proj.plan_project(st, llm, self._memory_text(st), wish=fix, previous=previous)
+                plan = proj.plan_project(st, llm, self._memory_text(st, own=False), wish=fix, previous=previous, own=own)
                 outcome = "applied" if fix else ""
                 if st.project is not None and st.project.name:  # план составлен заново: проект остаётся в своей папке
                     plan = plan.model_copy(update={"name": st.project.name})
@@ -983,8 +1020,8 @@ class Pipeline:
                 plan, problems = checked(plan)
                 if problems:  # модель узнаёт, что не так, и составляет план ещё раз
                     emit("План проекта не прошёл проверку — составляю заново", "warn")
-                    plan = proj.plan_project(st, llm, self._memory_text(st), wish=fix,
-                                             rejected="; ".join(problems[:5]), previous=previous)
+                    plan = proj.plan_project(st, llm, self._memory_text(st, own=False), wish=fix,
+                                             rejected="; ".join(problems[:5]), previous=previous, own=own)
                     if st.project is not None and st.project.name:
                         plan = plan.model_copy(update={"name": st.project.name})
                     plan, problems = checked(plan)
@@ -996,6 +1033,9 @@ class Pipeline:
                 emit("Исправление не собралось — возвращаю прежнюю программу", "warn")
                 st = proj.build_and_shoot(self, st, before, None, emit, retake=retake)
                 outcome = "broke"
+            if own and (final := proj.load_plan(self, st)) is not None and (changed := proj.own_changed(final, own)):
+                emit("Чтобы твоя программа собралась, ForLabs поправил: " + ", ".join(changed[:6])
+                     + ". Посмотри эти файлы в папке сдачи", "warn")
             left = [f for f in self.slots(st)]
             sql = st.project.language == "mysql"
             if st.project.built:
@@ -1242,7 +1282,8 @@ class Pipeline:
         return "\n\n".join(f"ЛР №{n}" + (f" «{topic}»" if topic else "") + f"\n{text[:cut]}"
                             for n, _, topic, text in found)
 
-    def _memory_text(self, st: LabState) -> str:
+    def _memory_text(self, st: LabState, own: bool = True) -> str:
+        """own=False — без программы студента (план проекта получает её целиком отдельно)."""
         text = ""
         if self.memory is not None:
             try:
@@ -1269,6 +1310,9 @@ class Pipeline:
         materials = self._materials_text(st)
         if materials:
             text = f"{materials}\n\n{text}".strip()
+        program = self._own_text(st) if own else ""
+        if program:
+            text = f"{program}\n\n{text}".strip()
         return text
 
     # чат правок

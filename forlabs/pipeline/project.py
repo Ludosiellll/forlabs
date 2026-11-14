@@ -17,7 +17,7 @@ import shutil
 import sys
 import tempfile
 import uuid
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -380,12 +380,17 @@ ENGINES = {
 
 def engine_in(listings) -> str | None:
     """Среда, без которой код листингов не собрать (Unity, Android Studio, Arduino…), или None."""
-    code = "\n".join(b.code or "" for b in listings)
-    return next((name for name, pat in ENGINES.items() if re.search(pat, code, re.M)), None)
+    return engine_in_text("\n".join(b.code or "" for b in listings))
 
 
 def engine_of(st: LabState) -> str | None:
+    if st.own is not None and st.own.engine:
+        return st.own.engine
     return engine_in([b for _, _, b in _blocks(st) if isinstance(b, Listing)])
+
+
+def engine_in_text(code: str) -> str | None:
+    return next((name for name, pat in ENGINES.items() if re.search(pat, code, re.M)), None)
 
 
 def mark_engine(st: LabState, engine: str) -> bool:
@@ -420,6 +425,8 @@ def foreign_app(shot: ShotPlan, fig: Figure) -> str | None:
 def needs_project(st: LabState) -> bool:
     """Есть ли в отчёте программа, которую ForLabs соберёт сам: листинг на поддерживаемом языке и не код среды,
     которой у ForLabs нет (Unity, Android, Arduino)."""
+    if st.own is not None and not st.own.engine and st.own.language in plan_rules.CODE_EXT:
+        return True  # своя программа студента: собирается она, а не код из листингов
     listings = [b for _, _, b in _blocks(st) if isinstance(b, Listing)]
     return any((b.language or "").strip().lower() in CODE_LANGS for b in listings) and engine_in(listings) is None
 
@@ -631,11 +638,15 @@ def _files_text(files) -> str:
                         if Path(f.path).suffix.lower() not in DATA_EXT or f.content.strip())
 
 
-def _plan_in_parts(user: str, llm) -> ProjectPlan:
-    """Большой проект, который не влез в один ответ: сначала план без текстов файлов, затем каждый файл отдельно."""
+def _plan_in_parts(user: str, llm, ready: dict[str, str] | None = None) -> ProjectPlan:
+    """Большой проект, который не влез в один ответ: сначала план без текстов файлов, затем каждый файл отдельно.
+    ready — файлы, текст которых уже есть (программа студента): их модель не пишет."""
+    ready = ready or {}
     head = _tidy(llm.json([{"role": "system", "content": PROJECT_SYSTEM},
                            {"role": "user", "content": f"{user}\n\n{PARTS_NOTE}"}], ProjectPlan,
                           max_tokens=PLAN_MAX_TOKENS, think=True))
+    if ready:
+        head = with_own(head, ready)
     todo = [f for f in head.files if not f.content.strip()]
     if len(todo) > MAX_PART_FILES:
         raise LLMError("bad_response", f"{len(todo)} файлов", "Проект программы слишком большой.")
@@ -711,8 +722,11 @@ def previous_text(previous: ProjectPlan) -> str:
 
 
 def plan_project(st: LabState, llm, memory: str = "", wish: str = "", rejected: str = "",
-                 previous: ProjectPlan | None = None) -> ProjectPlan:
+                 previous: ProjectPlan | None = None, own: dict[str, str] | None = None) -> ProjectPlan:
+    """own — файлы программы студента (путь → текст): проект — ровно они, модель планирует листинги и снимки."""
     user = lab_text(st) + (f"\n\nПамять предмета и требования:\n{memory[:6000]}" if memory.strip() else "")
+    if own:
+        user += "\n\n" + own_block(st, own)
     if previous is not None:
         user += "\n\n" + previous_text(previous)
     if wish.strip():  # просьба из чата правок: что в прежнем проекте было не так
@@ -725,8 +739,74 @@ def plan_project(st: LabState, llm, memory: str = "", wish: str = "", rejected: 
     except LLMError as e:
         if e.kind != "bad_response":  # сеть, ключ, лимит — части не помогут
             raise
-        plan = _plan_in_parts(user, llm)  # ответ обрезан по длине или JSON не собрался
+        plan = _plan_in_parts(user, llm, own)  # ответ обрезан по длине или JSON не собрался
+    if own:
+        plan = with_own(plan, own, previous)
     return _quiet_console(_trusted_expects(_tidy(plan), st))
+
+
+OWN_RULE = ("Это программа студента, и проект — ровно она. В files перечисли её файлы (пути — как выше) с пустым "
+            "content: ForLabs подставит их текст сам. Своих файлов кода не добавляй и её код не переписывай. listings "
+            "— ссылки на её файлы; shots — сценарии запуска её программы: что вводить и что нажимать, чтобы окна "
+            "совпали с рисунками отчёта.")
+
+
+def own_block(st: LabState, own: dict[str, str]) -> str:
+    """Программа студента для плана: код (тот же, что видит писатель отчёта) и полный список файлов."""
+    text = st.own.text if st.own is not None else ""
+    return f"{text}\n\nВсе файлы её кода: {', '.join(own)}.\n{OWN_RULE}"
+
+
+def own_sources(pipe, st: LabState) -> dict[str, str] | None:
+    """Файлы программы студента из папки лабы (own/): путь → текст. None — программы нет, её не собрать (движок,
+    язык не тот) или файлов нет на этом компьютере."""
+    own = st.own
+    if own is None or own.engine or own.language not in plan_rules.CODE_EXT:
+        return None
+    root = pipe.lab_dir(st) / "own"
+    out: dict[str, str] = {}
+    for rel in own.files:
+        try:
+            text = decode_text(root.joinpath(*rel.split("/")).read_bytes())
+        except OSError:
+            text = None
+        if text is not None:
+            out[rel] = text
+    return out or None
+
+
+SETTINGS_USE = re.compile(r"\bSettings\.Default\b|\bProperties\.Settings\b")
+
+
+def _dotnet_leftover(rel: str, own: dict[str, str]) -> bool:
+    """Файлы старых проектов .NET Framework, которые мешают сборке SDK: AssemblyInfo.cs повторяет атрибуты, которые
+    SDK пишет сам; Settings.Designer.cs требует пакета, которого нет (он берётся, только если код им пользуется)."""
+    name = PurePosixPath(rel).name.lower()
+    if name == "assemblyinfo.cs":
+        return True
+    if name == "settings.designer.cs":
+        return not any(SETTINGS_USE.search(text) for path, text in own.items() if path != rel)
+    return False
+
+
+def with_own(plan: ProjectPlan, own: dict[str, str], previous: ProjectPlan | None = None) -> ProjectPlan:
+    """Файлы проекта — программа студента дословно: что модель переписала, заменяется, что дописала, убирается, что
+    пропустила, добавляется. Файл, который прежний проект уже исправлял (чтобы собралось), берётся исправленным."""
+    from forlabs.ingest.own import _main_first
+
+    before = {f.path: f.content for f in previous.files} if previous is not None else {}
+    files = {rel: before.get(rel) or text for rel, text in own.items()
+             if not (plan.language == "csharp" and _dotnet_leftover(rel, own))}
+    code = [rel for rel in files if PurePosixPath(rel).suffix.lower() in plan_rules.CODE_EXT.get(plan.language, ())]
+    entry = plan.entry if plan.entry in files else (sorted(code, key=_main_first) or [""])[0]
+    listings = [r for r in plan.listings if r.file in files]
+    return plan.model_copy(update={"files": [ProjectFile(path=p, content=c) for p, c in files.items()],
+                                   "entry": entry, "listings": listings})
+
+
+def own_changed(plan: ProjectPlan, own: dict[str, str]) -> list[str]:
+    """Файлы программы студента, которые ForLabs поправил, чтобы она собралась."""
+    return [f.path for f in plan.files if f.path in own and _squash(f.content) != _squash(own[f.path])]
 
 
 def fix_project(plan: ProjectPlan, log: str, llm) -> ProjectPlan:
@@ -1493,6 +1573,13 @@ def _put_assets(pipe, st: LabState, plan: ProjectPlan, work: Path) -> int:
                 dst = work / folder / inner
                 if dst.exists() or not src.is_file():
                     continue
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst)
+                placed += 1
+    if st.own is not None:  # картинки и ресурсы своей программы — по её же путям
+        for rel in st.own.assets:
+            src, dst = lab / "own" / rel, work / rel
+            if src.is_file() and not dst.exists():
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(src, dst)
                 placed += 1

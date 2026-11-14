@@ -215,6 +215,17 @@ class Material(BaseModel):
     assets: list[str] = Field(default_factory=list)  # картинки и другие файлы из архива (пути от папки лабы)
 
 
+class OwnProgram(BaseModel):
+    """Программа, которую студент написал сам: копия лежит в папке лабы (own/), отчёт пишется по ней."""
+
+    name: str  # что прислал студент: имя архива или папки
+    language: str | None = None  # язык ForLabs (csharp, python…); None — такой ForLabs не собирает
+    engine: str | None = None  # Unity и т. п.: код идёт в листинги, проект не собирается
+    files: list[str] = Field(default_factory=list)  # код и данные, пути от own/
+    assets: list[str] = Field(default_factory=list)  # картинки и прочие файлы, пути от own/
+    text: str = ""  # код для модели (главные файлы первыми; что не влезло — перечислено по имени)
+
+
 class ProjectInfo(BaseModel):
     """Проект программы лабы: что собрано, где лежит, что мешает снимкам."""
     name: str
@@ -260,6 +271,7 @@ class LabState(BaseModel):
     linked_how: dict[str, str] = Field(default_factory=dict)  # каких нашла модель (заголовка не было): «по смыслу» и т.п.
     materials: list[Material] = Field(default_factory=list)  # файлы к лабе (данные, текст, код) — целиком в модель
     project: ProjectInfo | None = None  # программа лабы: собрана ли, где лежит
+    own: OwnProgram | None = None  # своя программа студента: отчёт и проект — по ней
     wish_images: list[str] = Field(default_factory=list)  # фото к пожеланиям
     wish_images_text: str = ""  # что модель прочитала с этих фото
     rev: int = 0  # номер записи в облаке: запись с другого компьютера не затирается молча
