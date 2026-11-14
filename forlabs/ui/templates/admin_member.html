@@ -105,7 +105,18 @@
           {% if card.key %}<button class="btn small danger" type="submit" name="action" value="clear" onclick="return confirm('Убрать ключ участника?')">Убрать ключ</button>{% endif %}
           <button class="btn small link" type="submit" name="action" value="{{ 'shared_off' if m.allow_shared_key else 'shared_on' }}">{{ 'Запретить общий ключ' if m.allow_shared_key else 'Разрешить общий ключ' }}</button>
         </form>
-        <p class="hint">Участник ключ не видит. Он хранится в Supabase зашифрованным, здесь — только последние 4 символа.</p>
+        {% if card.key %}
+        <form method="post" action="/admin/u/{{ m.user_id }}/key" class="stack" style="margin-top:10px">
+          <input type="hidden" name="action" value="model">
+          <label for="key_model">Модель ключа <span class="muted small">— пусто: по умолчанию, как у общего ключа</span></label>
+          <div class="row until">
+            <input id="key_model" name="model" list="key-model-choices" autocomplete="off" spellcheck="false" placeholder="по умолчанию" value="{{ card.key.model or '' }}">
+            <datalist id="key-model-choices">{% for c in model_choices %}<option value="{{ c }}">{% endfor %}</datalist>
+            <button class="btn small" type="submit">Сохранить модель</button>
+          </div>
+        </form>
+        {% endif %}
+        <p class="hint">Участник ключ не видит. Он хранится в Supabase зашифрованным, здесь — только последние 4 символа. Модель — та, под которую куплен ключ (например glm-5.3-flash).</p>
       </section>
 
       <section class="box" aria-labelledby="b-note">

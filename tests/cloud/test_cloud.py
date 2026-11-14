@@ -59,6 +59,7 @@ class FakeSupabase:
         self.no_support = False  # сервер без миграции 0006 и функции support
         self.shared_key = None  # (last4, set_at) общего ключа в админке
         self.model = None  # модель для всех из админки (миграция 0013)
+        self.key_models = {}  # uid -> модель своего ключа (миграция 0014)
         self.autoconfirm = False  # в Supabase выключено «Confirm email»: регистрация сразу даёт вход
         self.support_objects = {}  # бакет support: путь → байты
 
@@ -104,10 +105,19 @@ class FakeSupabase:
                 return httpx.Response(200, json=k[-4:])
             if fn == "admin_clear_key":
                 self.keys.pop(args["target"], None)
+                self.key_models.pop(args["target"], None)  # модель — у ключа: уходит вместе с ним
                 return httpx.Response(204)
             if fn == "admin_keys":
-                return httpx.Response(200, json=[{"user_id": u, "last4": v, "set_at": "2026-11-01T10:00:00+00:00"}
-                                                 for u, v in self.keys.items()])
+                return httpx.Response(200, json=[{"user_id": u, "last4": v, "set_at": "2026-11-01T10:00:00+00:00",
+                                                  "model": self.key_models.get(u)} for u, v in self.keys.items()])
+            if fn == "admin_set_key_model":
+                m = (args.get("model") or "").strip()
+                if m and not re.fullmatch(r"[A-Za-z0-9._:/-]{1,100}", m):
+                    return httpx.Response(400, json={"code": "22023", "message": "invalid model"})
+                if args["target"] not in self.keys:
+                    return httpx.Response(400, json={"code": "22023", "message": "no key"})
+                self.key_models[args["target"]] = m or None
+                return httpx.Response(200, json=m)
             if fn == "admin_usage_daily":
                 return httpx.Response(200, json=self.daily)
             if fn == "admin_usage_by_lab":

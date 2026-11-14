@@ -235,7 +235,7 @@ def test_card_shows_usage_not_tied_to_a_lab(admin, fake):
 
 def test_admin_chooses_the_model_for_everyone(admin, fake):
     page = admin.get("/admin").text
-    assert "Модель для всех" in page and "glm-5.3-flash" in page
+    assert "Модель по умолчанию" in page and "glm-5.3-flash" in page
     r = admin.post("/admin/model", data={"action": "set", "model": "glm-5.3-flash"}, follow_redirects=False)
     assert r.status_code == 303 and fake.model == "glm-5.3-flash"
     assert "Сейчас: <span class=\"mono\">glm-5.3-flash</span>" in admin.get("/admin").text
@@ -265,3 +265,34 @@ def test_model_form_before_the_server_is_updated_says_so(admin, monkeypatch):
     monkeypatch.setattr(CloudStore, "admin_set_model", missing)
     r = admin.post("/admin/model", data={"action": "set", "model": "glm-5.3-flash"}, follow_redirects=False)
     assert r.status_code == 303 and "err=" in r.headers["location"]
+
+
+def test_admin_gives_a_model_to_one_members_key(admin, fake):
+    page = admin.get(f"/admin/u/{M}").text
+    assert "Модель ключа" in page and "по умолчанию" in page
+    r = admin.post(f"/admin/u/{M}/key", data={"action": "model", "model": "glm-5.3-flash"}, follow_redirects=False)
+    assert r.status_code == 303 and "err=" not in r.headers["location"] and fake.key_models[M] == "glm-5.3-flash"
+    assert fake.model is None  # общий ключ и модель по умолчанию не тронуты
+    page = admin.get(f"/admin/u/{M}").text
+    assert 'value="glm-5.3-flash"' in page
+    assert "glm-5.3-flash" in admin.get("/admin").text  # в списке участников видно, у кого какая модель
+    r = admin.post(f"/admin/u/{M}/key", data={"action": "model", "model": "плохая модель"}, follow_redirects=False)
+    assert "err=" in r.headers["location"] and fake.key_models[M] == "glm-5.3-flash"
+    admin.post(f"/admin/u/{M}/key", data={"action": "model", "model": ""})
+    assert fake.key_models[M] is None  # пусто — модель по умолчанию
+
+
+def test_key_model_form_before_the_server_is_updated_says_so(admin, monkeypatch):
+    from forlabs.cloud.auth import CloudError
+
+    def missing(self, uid, model):
+        raise CloudError("Ошибка сервера", detail="function public.admin_set_key_model(uuid, text) does not exist")
+
+    monkeypatch.setattr(CloudStore, "admin_set_key_model", missing)
+    r = admin.post(f"/admin/u/{M}/key", data={"action": "model", "model": "glm-5.3-flash"}, follow_redirects=False)
+    assert r.status_code == 303 and "err=" in r.headers["location"] and "0014" in r.headers["location"]
+
+
+def test_default_model_is_named_as_the_shared_one(admin):
+    page = admin.get("/admin").text
+    assert "Модель по умолчанию" in page and "общий ключ" in page

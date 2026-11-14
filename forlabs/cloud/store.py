@@ -824,6 +824,20 @@ class CloudStore:
                 raise ValueError("Ключ должен быть одной строкой без пробелов, не короче 8 символов.") from e
             raise
 
+    def admin_set_key_model(self, uid: str, model: str) -> str:
+        """Модель своего ключа участника; пусто — модель по умолчанию (как у общего ключа)."""
+        m = (model or "").strip()
+        if m and not re.fullmatch(r"[A-Za-z0-9._:/-]{1,100}", m):
+            raise ValueError("Название модели — одно слово латиницей, как в списке у продавца (например glm-5.3-flash).")
+        try:
+            return str(self._rpc("admin_set_key_model", {"target": uid, "model": m}) or "")
+        except CloudError as e:
+            if "no key" in (e.detail or ""):
+                raise ValueError("Сначала выдай участнику ключ: модель выбирается для его ключа.") from e
+            if "invalid model" in (e.detail or ""):
+                raise ValueError("Название модели — одно слово латиницей, как в списке у продавца.") from e
+            raise
+
     def admin_clear_key(self, uid: str) -> None:
         self._rpc("admin_clear_key", {"target": uid})
 

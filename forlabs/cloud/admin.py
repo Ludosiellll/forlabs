@@ -38,6 +38,7 @@ class KeyInfo(BaseModel):
     user_id: str
     last4: str
     set_at: str | None = None
+    model: str | None = None  # модель этого ключа (миграция 0014); None — модель по умолчанию
 
 
 class LabRow(BaseModel):

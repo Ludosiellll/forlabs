@@ -2,7 +2,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  chooseModel, decideAccess, directAllowed, isTrial, labTag, ownKeyError, parseBalance, parseUsage, pickKey, tuneBody,
+  chooseModel, decideAccess, directAllowed, isTrial, labTag, modelFor, ownKeyError, parseBalance, parseUsage, pickKey,
+  tuneBody,
 } from "./logic.ts";
 
 const NOW = new Date("2026-11-08T12:00:00Z");
@@ -121,4 +122,17 @@ test("расход прямого запроса: проверка полей", 
   assert.equal(parseUsage({ model: "glm-5.3-flash", prompt_tokens: 1_000_001, completion_tokens: 1 }, MODELS), null);
   assert.equal(parseUsage({ model: "glm-5.3-flash", prompt_tokens: 1.5, completion_tokens: 1 }, MODELS), null);
   assert.equal(parseUsage("x", MODELS), null);
+});
+
+test("свой ключ — модель из карточки участника, общий — модель по умолчанию", () => {
+  const MODELS = ["deepseek-v4.1-flash-1017", "deepseek-v4-flash"];
+  // свой ключ с моделью в карточке: она, даже если её нет в LLM_MODELS
+  assert.equal(modelFor("own", "glm-5.3-flash", "deepseek-v4.1-flash-1017", null, MODELS), "glm-5.3-flash");
+  // общий ключ модель из карточки не берёт
+  assert.equal(modelFor("shared", "glm-5.3-flash", "deepseek-v4.1-flash-1017", null, MODELS), "deepseek-v4.1-flash-1017");
+  // без модели в карточке — как раньше: модель по умолчанию из админки или первая из списка
+  assert.equal(modelFor("own", null, "gpt-x", "deepseek-v4-flash", MODELS), "deepseek-v4-flash");
+  assert.equal(modelFor("own", "", "gpt-x", null, MODELS), "deepseek-v4.1-flash-1017");
+  // кривое значение в карточке не уходит провайдеру
+  assert.equal(modelFor("own", "glm 5; drop", "gpt-x", null, MODELS), "deepseek-v4.1-flash-1017");
 });

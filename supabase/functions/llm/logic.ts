@@ -78,6 +78,18 @@ export function chooseModel(requested: string, chosen: string | null, models: st
   return models[0];
 }
 
+const MODEL_NAME = /^[A-Za-z0-9._:/-]{1,100}$/;
+
+/** Модель запроса: у своего ключа — модель из карточки участника (её выбрал администратор под этот ключ, список
+ * LLM_MODELS её не ограничивает); у общего ключа и своего без модели — модель по умолчанию (chooseModel). */
+export function modelFor(
+  kind: "own" | "shared", keyModel: string | null, requested: string, chosen: string | null, models: string[],
+): string {
+  const mine = (keyModel ?? "").trim();
+  if (kind === "own" && MODEL_NAME.test(mine)) return mine;
+  return chooseModel(requested, chosen, models);
+}
+
 /** Предел ответа не выше потолка; GLM рассуждает всегда — короткое рассуждение по умолчанию и запас 4000 на него. */
 export function tuneBody(body: Record<string, unknown>, cap: number): Record<string, unknown> {
   const out = { ...body };

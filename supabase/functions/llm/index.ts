@@ -3,7 +3,8 @@
 // доступе — в пределах лаб и сообщений чата правок), разрешает модели из списка, пишет расход по лабам. /balance — остаток на ключах у провайдера.
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
 import {
-  chooseModel, decideAccess, directAllowed, isTrial, labTag, ownKeyError, parseBalance, parseUsage, pickKey, tuneBody,
+  decideAccess, directAllowed, isTrial, labTag, modelFor, ownKeyError, parseBalance, parseUsage, pickKey,
+  tuneBody,
 } from "./logic.ts";
 
 const BASE = (Deno.env.get("LLM_BASE_URL") ?? "https://api.aikeysforyou.com/v1").replace(/\/$/, "");
@@ -64,6 +65,13 @@ function err(status: number, message: string) {
 async function ownKey(userId: string): Promise<string | null> {
   const { data, error } = await admin.rpc("llm_key_for", { target: userId });
   if (error) throw new Error(`llm_key_for: ${error.message}`);
+  return typeof data === "string" && data ? data : null;
+}
+
+// модель своего ключа участника (выбирает администратор в карточке); нет или сервер без миграции 0014 — null
+async function ownModel(userId: string): Promise<string | null> {
+  const { data, error } = await admin.rpc("llm_key_model_for", { target: userId });
+  if (error) return null;
   return typeof data === "string" && data ? data : null;
 }
 
@@ -143,10 +151,13 @@ Deno.serve(async (req: Request) => {
       return err(500, String((e as Error).message ?? e));
     }
     if (!directAllowed(member as Member, mine)) return err(404, "no direct access");
+    const keyModel = await ownModel(user.id);
+    const model = modelFor("own", keyModel, MODELS[0], await chosenModel(), MODELS);
+    const allowed = MODELS.includes(model) ? MODELS : [model, ...MODELS];
     if (path.endsWith("/direct")) {
       // ключ — только в теле ответа этому участнику; в журнал функции не пишется
       return json(200, {
-        base_url: BASE, model: chooseModel(MODELS[0], await chosenModel(), MODELS), models: MODELS, key: mine!.trim(),
+        base_url: BASE, model, models: allowed, key: mine!.trim(),
         access_until: member.access_until, max_tokens: DIRECT_MAX_TOKENS, timeout_s: DIRECT_TIMEOUT_S,
       });
     }
@@ -156,7 +167,7 @@ Deno.serve(async (req: Request) => {
     } catch {
       return err(400, "bad usage");
     }
-    const usage = parseUsage(raw, MODELS);
+    const usage = parseUsage(raw, allowed);
     if (!usage) return err(400, "bad usage");
     try {
       await admin.from("llm_usage").insert({ user_id: user.id, ...usage, key_kind: "own_direct" });
@@ -185,8 +196,10 @@ Deno.serve(async (req: Request) => {
   } catch {
     return err(400, "bad json");
   }
-  // модель для всех — из админки; старое приложение со своей моделью получает её же (без отказа 403)
-  const model = chooseModel(String(body.model ?? MODELS[0]), await chosenModel(), MODELS);
+  // свой ключ — модель из карточки участника; иначе модель по умолчанию из админки (старое приложение со своей
+  // моделью получает её же, без отказа 403)
+  const keyModel = picked.kind === "own" ? await ownModel(user.id) : null;
+  const model = modelFor(picked.kind, keyModel, String(body.model ?? MODELS[0]), await chosenModel(), MODELS);
   body = tuneBody({ ...body, model, stream: false }, MAX_TOKENS_CAP);
   const bodyChars = JSON.stringify(body.messages ?? "").length;
   if (bodyChars > MAX_BODY_CHARS) return err(413, "request too large");

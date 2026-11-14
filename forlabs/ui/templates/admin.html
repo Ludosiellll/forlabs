@@ -25,7 +25,7 @@
           <td><a class="who-link" href="/admin/u/{{ r.m.user_id }}">{% if r.color %}<i class="dot" style="background:{{ r.color }}" aria-hidden="true"></i>{% endif %}{{ r.m.name }}</a>{% if r.is_me %} <span class="small muted">· это ты</span>{% endif %}
             <div class="small muted">{{ r.m.email }}{% if r.profiles %} · {{ r.profiles|join(', ') }}{% endif %}</div></td>
           <td><span class="sub sub-{{ 'admin' if r.m.role == 'admin' else r.m.access_state }}">{{ r.access }}</span></td>
-          <td class="nowrap">{% if r.key %}<span class="mono">••••{{ r.key.last4 }}</span>{% elif r.m.allow_shared_key %}<span class="muted">общий</span>{% else %}<span class="muted">нет</span>{% endif %}</td>
+          <td class="nowrap">{% if r.key %}<span class="mono">••••{{ r.key.last4 }}</span>{% if r.key.model %} <span class="small muted">{{ r.key.model }}</span>{% endif %}{% elif r.m.allow_shared_key %}<span class="muted">общий</span>{% else %}<span class="muted">нет</span>{% endif %}</td>
           <td class="num nowrap" {% if r.key %}data-balance="{{ r.m.user_id }}"{% endif %}>{{ '…' if r.key else '—' }}</td>
           <td class="num nowrap">{{ fmt_tokens(r.usage) }}</td>
           <td class="num nowrap">{{ r.labs[0] }}{% if r.labs[0] %} <span class="muted">· сдано {{ r.labs[1] }}</span>{% endif %}</td>
@@ -58,7 +58,7 @@
     <p class="hint">Им работают участники без своего ключа, если в их карточке разрешён общий ключ. Хранится на сервере зашифрованным, участникам не виден.</p>
   </details>
   <details class="pane fold-pane">
-    <summary><span>Модель для всех</span><span class="muted small">{{ model[0] if model else 'по умолчанию' }}</span></summary>
+    <summary><span>Модель по умолчанию</span><span class="muted small">{{ model[0] if model else 'по умолчанию' }}</span></summary>
     {% if model %}
       <p class="small">Сейчас: <span class="mono">{{ model[0] }}</span></p>
     {% else %}
@@ -72,7 +72,7 @@
       <button class="btn small primary" type="submit">Сохранить</button>
     </form>
     {% if model %}<form method="post" action="/admin/model" style="margin-top:6px"><button class="btn small link" type="submit" name="action" value="clear">Сбросить</button></form>{% endif %}
-    <p class="hint">Через минуту модель работает у всех: и у тех, кто ходит со своим ключом напрямую, и через общий ключ. Модель должна быть в списке LLM_MODELS на сервере и входить в ключи участников.</p>
+    <p class="hint">На ней работает общий ключ (пробный доступ и участники без своего ключа) и свои ключи, у которых в карточке не выбрана модель. Модель должна быть в списке LLM_MODELS на сервере. Своим ключам модель выбирается в карточке участника.</p>
   </details>
 </main>
 {% endblock %}

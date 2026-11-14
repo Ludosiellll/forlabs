@@ -183,6 +183,8 @@ def event_text(e) -> str:
         return f"Ключ выдан (••••{d.get('last4', '')})"
     if e.kind == "key_clear":
         return "Ключ убран"
+    if e.kind == "key_model":
+        return f"Модель ключа: {d.get('model') or 'по умолчанию'}"
     return e.kind
 
 
@@ -190,7 +192,7 @@ class AdminOffline(Exception):
     """Раздел «Админ» без связи с облаком: объяснить на главной, а не молча уйти."""
 
 
-# подсказка в админке; работает только модель из списка LLM_MODELS функции llm
+# подсказка в админке: модель по умолчанию — из списка LLM_MODELS функции llm, модель ключа — любая
 MODEL_CHOICES = ("glm-5.3-flash", "glm-5.3", "deepseek-v4.1-flash-1017", "deepseek-v4-pro", "deepseek-v4-flash")
 
 
@@ -302,7 +304,7 @@ def register_admin(app: FastAPI, ctx, render, redirect) -> None:
         try:
             if action == "clear":
                 ctx.store.admin_clear_model()
-                return redirect("/admin", msg="Модель для всех сброшена: работает первая из списка LLM_MODELS на сервере")
+                return redirect("/admin", msg="Модель по умолчанию сброшена: работает первая из списка LLM_MODELS на сервере")
             chosen = ctx.store.admin_set_model(model)
         except ValueError as e:
             return redirect("/admin", err=str(e))
@@ -311,7 +313,8 @@ def register_admin(app: FastAPI, ctx, render, redirect) -> None:
                 raise
             return redirect("/admin", err="Сервер ещё не обновлён для выбора модели (миграция 0013) — модель пока "
                                           "задаётся переменной LLM_MODELS в Supabase.")
-        return redirect("/admin", msg=f"Модель для всех: {chosen}. Через минуту она работает у всех участников")
+        return redirect("/admin", msg=f"Модель по умолчанию: {chosen}. Через минуту на ней работает общий ключ "
+                                      "и ключи без своей модели")
 
     @app.get("/admin/u/{uid}")
     def admin_member_page(request: Request, uid: str):
@@ -347,7 +350,7 @@ def register_admin(app: FastAPI, ctx, render, redirect) -> None:
                       access=access_text(m), seen=ago(m.last_seen_at), joined=date_ru(m.created_at),
                       chart=bars([d.strftime("%d.%m") for d in days], values, color=color, name=m.name),
                       labs=labs, avg=avg, events=[(date_ru(e.created_at), event_text(e)) for e in card.events],
-                      key_set=date_ru(card.key.set_at) if card.key else "", subjects=subjects,
+                      key_set=date_ru(card.key.set_at) if card.key else "", subjects=subjects, model_choices=MODEL_CHOICES,
                       trial=trial_view(ctx.store.trial_usage(m), m),
                       daily_limit=fmt_int(m.daily_tokens or DEFAULT_DAILY_TOKENS), daily_own=m.daily_tokens is not None,
                       today_tokens=fmt_int(today_tokens(card.daily)),
@@ -416,9 +419,22 @@ def register_admin(app: FastAPI, ctx, render, redirect) -> None:
         return redirect(card_url(uid), msg=messages[action])
 
     @app.post("/admin/u/{uid}/key")
-    def admin_key(uid: str, action: str = Form(...), api_key: str = Form("")):
+    def admin_key(uid: str, action: str = Form(...), api_key: str = Form(""), model: str = Form("")):
         if current_admin() is None:
             return home()
+        if action == "model":
+            from forlabs.cloud.auth import CloudError
+
+            try:
+                chosen = ctx.store.admin_set_key_model(uid, model)
+            except ValueError as e:
+                return redirect(card_url(uid), err=str(e))
+            except CloudError as e:
+                if e.offline:
+                    raise
+                return redirect(card_url(uid), err="Сервер ещё не обновлён для модели ключа (миграция 0014).")
+            return redirect(card_url(uid), msg=f"Модель ключа: {chosen}. Через минуту участник работает на ней"
+                            if chosen else "Модель ключа сброшена: работает модель по умолчанию")
         if action == "set":
             try:
                 last4 = ctx.store.admin_set_key(uid, api_key)
