@@ -2,7 +2,9 @@
 // или общий секрет LLM_API_KEY. Пускает только вошедших, одобренных и с действующей подпиской (в пробном
 // доступе — в пределах лаб и сообщений чата правок), разрешает модели из списка, пишет расход по лабам. /balance — остаток на ключах у провайдера.
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
-import { decideAccess, labTag, ownKeyError, parseBalance, pickKey } from "./logic.ts";
+import {
+  chooseModel, decideAccess, directAllowed, isTrial, labTag, ownKeyError, parseBalance, parseUsage, pickKey, tuneBody,
+} from "./logic.ts";
 
 const BASE = (Deno.env.get("LLM_BASE_URL") ?? "https://api.aikeysforyou.com/v1").replace(/\/$/, "");
 const KEY = Deno.env.get("LLM_API_KEY") ?? "";
@@ -18,7 +20,10 @@ const MAX_PARALLEL = 4;          // одновременно в работе н�
 // предел ответа: 16 000 — для размышления модели (оно входит в предел); ≈70 с при 230 ток/с, в пределах 140 с
 // ожидания провайдера. Программа узнаёт предел из заголовка x-forlabs-max-tokens и без него не размышляет.
 const MAX_TOKENS_CAP = 16000;
-const MAX_BODY_CHARS = 600_000;  // методичка 30 тыс. символов + правила + отчёт — с большим запасом
+const MAX_BODY_CHARS = 600_000;
+// прямой доступ со своим ключом участника (без этой функции): предел ответа и время одного запроса у приложения
+const DIRECT_MAX_TOKENS = 32000;
+const DIRECT_TIMEOUT_S = 600;  // методичка 30 тыс. символов + правила + отчёт — с большим запасом
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, {
   auth: { persistSession: false },
 });
@@ -36,6 +41,16 @@ async function sharedKey(): Promise<string> {
   const key = typeof data === "string" && data ? data : KEY;
   sharedCache = { key, at: Date.now() };
   return key;
+}
+
+// модель для всех из админки (private.llm_model); минута в памяти функции
+let modelCache: { model: string | null; at: number } | null = null;
+async function chosenModel(): Promise<string | null> {
+  if (modelCache && Date.now() - modelCache.at < 60_000) return modelCache.model;
+  const { data } = await admin.rpc("model_value");
+  const model = typeof data === "string" && data ? data : null;
+  modelCache = { model, at: Date.now() };
+  return model;
 }
 
 function json(status: number, body: unknown) {
@@ -114,10 +129,43 @@ Deno.serve(async (req: Request) => {
   if (!member?.approved) return err(403, "account not approved");
 
   if (path.endsWith("/balance")) return balances(req, user.id, member as Member);
-  if (!path.endsWith("/chat/completions")) return err(404, "only /chat/completions and /balance");
+  const known = ["/chat/completions", "/direct", "/usage"];
+  if (!known.some((k) => path.endsWith(k))) return err(404, "only /chat/completions, /direct, /usage and /balance");
 
   const decision = decideAccess(member as Member, new Date());
   if (!decision.ok) return err(decision.status, decision.message);
+
+  if (path.endsWith("/direct") || path.endsWith("/usage")) {
+    let mine: string | null;
+    try {
+      mine = await ownKey(user.id);
+    } catch (e) {
+      return err(500, String((e as Error).message ?? e));
+    }
+    if (!directAllowed(member as Member, mine)) return err(404, "no direct access");
+    if (path.endsWith("/direct")) {
+      // ключ — только в теле ответа этому участнику; в журнал функции не пишется
+      return json(200, {
+        base_url: BASE, model: chooseModel(MODELS[0], await chosenModel(), MODELS), models: MODELS, key: mine!.trim(),
+        access_until: member.access_until, max_tokens: DIRECT_MAX_TOKENS, timeout_s: DIRECT_TIMEOUT_S,
+      });
+    }
+    let raw: unknown;
+    try {
+      raw = await req.json();
+    } catch {
+      return err(400, "bad usage");
+    }
+    const usage = parseUsage(raw, MODELS);
+    if (!usage) return err(400, "bad usage");
+    try {
+      await admin.from("llm_usage").insert({ user_id: user.id, ...usage, key_kind: "own_direct" });
+      await admin.from("members").update({ last_seen_at: new Date().toISOString() }).eq("user_id", user.id);
+    } catch (_) {
+      // учёт не должен ломать работу приложения
+    }
+    return new Response(null, { status: 204 });
+  }
 
   const lab = labTag(req.headers.get("x-forlabs-lab"));
   const chat = labTag(req.headers.get("x-forlabs-chat"));
@@ -137,19 +185,17 @@ Deno.serve(async (req: Request) => {
   } catch {
     return err(400, "bad json");
   }
-  const model = String(body.model ?? MODELS[0]);
-  if (!MODELS.includes(model)) return err(403, `model_not_allowed: ${model}`);
-  body.model = model;
-  body.stream = false;
-  const asked = Number(body.max_tokens ?? MAX_TOKENS_CAP);
-  body.max_tokens = Number.isFinite(asked) && asked > 0 ? Math.min(asked, MAX_TOKENS_CAP) : MAX_TOKENS_CAP;
+  // модель для всех — из админки; старое приложение со своей моделью получает её же (без отказа 403)
+  const model = chooseModel(String(body.model ?? MODELS[0]), await chosenModel(), MODELS);
+  body = tuneBody({ ...body, model, stream: false }, MAX_TOKENS_CAP);
   const bodyChars = JSON.stringify(body.messages ?? "").length;
   if (bodyChars > MAX_BODY_CHARS) return err(413, "request too large");
   const estTokens = Math.ceil(bodyChars / 3) + (body.max_tokens as number);
 
   // лимиты (день, лаба, пробный доступ): проверка и бронь запроса атомарно в базе (usage_begin, миграция 0008)
   let reserved: number | null = null;
-  if (member.role !== "admin") {
+  // свой ключ участника (не пробный доступ) — без лимитов: его ограничивает баланс ключа
+  if (member.role !== "admin" && !(picked.kind === "own" && !isTrial(member as Member))) {
     const { data: rows, error: limitErr } = await admin.rpc("usage_begin", {
       target: user.id, cur_lab: lab, cur_chat: chat, req_model: model,
       default_daily: DAILY_TOKENS, lab_calls: LAB_CALLS_LIMIT, trial_calls: TRIAL_CALLS_PER_LAB,
