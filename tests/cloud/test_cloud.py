@@ -1,4 +1,5 @@
 import json
+import re
 import time
 
 import httpx
@@ -57,6 +58,7 @@ class FakeSupabase:
         self.support_check: dict = {}  # ответ проверки бота (/support/check)
         self.no_support = False  # сервер без миграции 0006 и функции support
         self.shared_key = None  # (last4, set_at) общего ключа в админке
+        self.model = None  # модель для всех из админки (миграция 0013)
         self.autoconfirm = False  # в Supabase выключено «Confirm email»: регистрация сразу даёт вход
         self.support_objects = {}  # бакет support: путь → байты
 
@@ -119,6 +121,18 @@ class FakeSupabase:
             if fn == "admin_clear_shared_key":
                 self.shared_key = None
                 return httpx.Response(204)
+            if fn == "admin_set_model":
+                m = (args.get("model") or "").strip()
+                if not re.fullmatch(r"[A-Za-z0-9._:/-]{1,100}", m):
+                    return httpx.Response(400, json={"code": "22023", "message": "invalid model"})
+                self.model = m
+                return httpx.Response(200, json=m)
+            if fn == "admin_clear_model":
+                self.model = None
+                return httpx.Response(204)
+            if fn == "admin_model_info":
+                return httpx.Response(200, json=[{"model": self.model, "set_at": "2026-11-14T10:00:00+00:00"}]
+                                      if self.model else [])
             if fn == "admin_shared_key_info":
                 return httpx.Response(200, json=[{"last4": self.shared_key[0], "set_at": self.shared_key[1]}]
                                       if self.shared_key else [])

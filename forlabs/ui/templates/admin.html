@@ -57,5 +57,22 @@
     {% if shared_key %}<form method="post" action="/admin/shared-key" style="margin-top:6px"><button class="btn small link" type="submit" name="action" value="clear" onclick="return confirm('Убрать общий ключ?')">Убрать общий ключ</button></form>{% endif %}
     <p class="hint">Им работают участники без своего ключа, если в их карточке разрешён общий ключ. Хранится на сервере зашифрованным, участникам не виден.</p>
   </details>
+  <details class="pane fold-pane">
+    <summary><span>Модель для всех</span><span class="muted small">{{ model[0] if model else 'по умолчанию' }}</span></summary>
+    {% if model %}
+      <p class="small">Сейчас: <span class="mono">{{ model[0] }}</span></p>
+    {% else %}
+      <p class="small muted">Не выбрана: работает первая модель из списка LLM_MODELS на сервере.</p>
+    {% endif %}
+    <form method="post" action="/admin/model" class="row until">
+      <input type="hidden" name="action" value="set">
+      <label class="visually-hidden" for="model">Модель</label>
+      <input id="model" name="model" list="model-choices" autocomplete="off" spellcheck="false" placeholder="glm-5.3-flash" value="{{ model[0] if model else '' }}" required>
+      <datalist id="model-choices">{% for m in model_choices %}<option value="{{ m }}">{% endfor %}</datalist>
+      <button class="btn small primary" type="submit">Сохранить</button>
+    </form>
+    {% if model %}<form method="post" action="/admin/model" style="margin-top:6px"><button class="btn small link" type="submit" name="action" value="clear">Сбросить</button></form>{% endif %}
+    <p class="hint">Через минуту модель работает у всех: и у тех, кто ходит со своим ключом напрямую, и через общий ключ. Модель должна быть в списке LLM_MODELS на сервере и входить в ключи участников.</p>
+  </details>
 </main>
 {% endblock %}

@@ -114,11 +114,20 @@ class AppContext:
                       http_client=self._llm_http())
             llm.accepts_lab_tag = True
             llm.on_unauthorized = self.auth.refresh
+            llm.direct = self._direct()  # свой ключ участника — к провайдеру напрямую, без предела функции
             return llm
         key = get_api_key()
         if not key:
             raise CloudError("Не задан ключ API. Открой «Настройки» и вставь ключ.")
         return LLM(self.settings, api_key=key, http_client=self._llm_http())
+
+    def _direct(self):
+        """Один на программу: настройка прямого доступа кэшируется, а не спрашивается на каждый запрос."""
+        if getattr(self, "_direct_access", None) is None:
+            from forlabs.core.direct import DirectAccess
+
+            self._direct_access = DirectAccess(self._llm_http(), CLOUD.llm_base_url, token=self.auth.access_token)
+        return self._direct_access
 
     def _llm_http(self):
         """Один HTTP-клиент на все запросы к модели (а не новый на каждый вызов)."""

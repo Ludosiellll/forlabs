@@ -190,6 +190,10 @@ class AdminOffline(Exception):
     """Раздел «Админ» без связи с облаком: объяснить на главной, а не молча уйти."""
 
 
+# подсказка в админке; работает только модель из списка LLM_MODELS функции llm
+MODEL_CHOICES = ("glm-5.3-flash", "glm-5.3", "deepseek-v4.1-flash-1017", "deepseek-v4-pro", "deepseek-v4-flash")
+
+
 def register_admin(app: FastAPI, ctx, render, redirect) -> None:
     @app.exception_handler(AdminOffline)
     async def admin_offline(request: Request, exc: AdminOffline):
@@ -232,8 +236,8 @@ def register_admin(app: FastAPI, ctx, render, redirect) -> None:
                 return None
 
         # всё, что нужно странице, — одновременно: она ждёт самый долгий запрос, а не их сумму
-        ov, shared, telegram_ok = ctx.store.together(ctx.store.admin_overview, ctx.store.admin_shared_key,
-                                                     support_status)
+        ov, shared, telegram_ok, model = ctx.store.together(ctx.store.admin_overview, ctx.store.admin_shared_key,
+                                                            support_status, ctx.store.admin_model_info)
         days = last_days()
         colors = member_colors(ov.members)
         series = daily_series(ov.daily, colors, days)
@@ -256,6 +260,7 @@ def register_admin(app: FastAPI, ctx, render, redirect) -> None:
         active = sum(1 for m in ov.members if m.access_state in ("active", "expiring", "unlimited"))
         return render(request, "admin.html", nav="admin", me=me, rows=rows, active=active, telegram_ok=telegram_ok,
                       shared_key=shared, shared_set=date_ru(shared[1]) if shared and shared[1] else "",
+                      model=model, model_choices=MODEL_CHOICES,
                       total_30=sum(ov.usage_30d.values()), labs_30=len(labs_30),
                       final_30=sum(1 for lab in labs_30 if lab.status == "final"),
                       usage_chart=stacked_bars([d.strftime("%d.%m") for d in days], series),
@@ -287,6 +292,19 @@ def register_admin(app: FastAPI, ctx, render, redirect) -> None:
         except ValueError as e:
             return redirect("/admin", err=str(e))
         return redirect("/admin", msg=f"Общий ключ сохранён (••••{last4})")
+
+    @app.post("/admin/model")
+    def admin_model(action: str = Form(...), model: str = Form("")):
+        if current_admin() is None:
+            return home()
+        if action == "clear":
+            ctx.store.admin_clear_model()
+            return redirect("/admin", msg="Модель для всех сброшена: работает первая из списка LLM_MODELS на сервере")
+        try:
+            chosen = ctx.store.admin_set_model(model)
+        except ValueError as e:
+            return redirect("/admin", err=str(e))
+        return redirect("/admin", msg=f"Модель для всех: {chosen}. Через минуту она работает у всех участников")
 
     @app.get("/admin/u/{uid}")
     def admin_member_page(request: Request, uid: str):

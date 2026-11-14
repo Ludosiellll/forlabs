@@ -794,6 +794,25 @@ class CloudStore:
     def admin_clear_shared_key(self) -> None:
         self._rpc("admin_clear_shared_key")
 
+    def admin_model_info(self) -> tuple[str, str] | None:
+        """Модель для всех из админки: (модель, когда выбрана) или None — тогда первая из LLM_MODELS."""
+        try:
+            rows = self._rpc("admin_model_info") or []
+        except CloudError as e:
+            if e.offline:
+                raise
+            return None  # сервер ещё без миграции 0013
+        return (rows[0]["model"], rows[0].get("set_at") or "") if rows else None
+
+    def admin_set_model(self, model: str) -> str:
+        m = (model or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9._:/-]{1,100}", m):
+            raise ValueError("Название модели — одно слово латиницей, как в списке у продавца (например glm-5.3-flash).")
+        return str(self._rpc("admin_set_model", {"model": m}))
+
+    def admin_clear_model(self) -> None:
+        self._rpc("admin_clear_model")
+
     def admin_set_key(self, uid: str, api_key: str) -> str:
         key = (api_key or "").strip()
         if len(key) < 8 or any(c.isspace() for c in key):

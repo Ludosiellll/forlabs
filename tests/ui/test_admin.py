@@ -231,3 +231,26 @@ def test_card_shows_usage_not_tied_to_a_lab(admin, fake):
                    {"lab": "anna/ssp/удалена", "tokens": 4000, "calls": 2, "last_at": "2026-11-06T09:00:00+00:00"}]
     page = admin.get(f"/admin/u/{M}").text
     assert "Без привязки к лабе" in page and "5 200" in page
+
+
+def test_admin_chooses_the_model_for_everyone(admin, fake):
+    page = admin.get("/admin").text
+    assert "Модель для всех" in page and "glm-5.3-flash" in page
+    r = admin.post("/admin/model", data={"action": "set", "model": "glm-5.3-flash"}, follow_redirects=False)
+    assert r.status_code == 303 and fake.model == "glm-5.3-flash"
+    assert "Сейчас: <span class=\"mono\">glm-5.3-flash</span>" in admin.get("/admin").text
+    r = admin.post("/admin/model", data={"action": "set", "model": "плохая модель"}, follow_redirects=False)
+    assert r.status_code == 303 and "err=" in r.headers["location"] and fake.model == "glm-5.3-flash"
+    admin.post("/admin/model", data={"action": "clear"})
+    assert fake.model is None
+
+
+def test_cloud_client_gets_one_direct_access_for_the_whole_app(fake, tmp_home):
+    from forlabs.core.direct import DirectAccess
+
+    auth = CloudAuth(CFG, http=httpx.Client(transport=httpx.MockTransport(fake)), use_keyring=False)
+    auth.sign_in("a@b.c", "верный")
+    ctx = AppContext(settings=Settings(mode="cloud"), synchronous=True)
+    ctx.auth = auth
+    first, second = ctx.llm(), ctx.llm()
+    assert isinstance(first.direct, DirectAccess) and first.direct is second.direct
