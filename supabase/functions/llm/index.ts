@@ -75,12 +75,18 @@ async function ownModel(userId: string): Promise<string | null> {
   return typeof data === "string" && data ? data : null;
 }
 
-async function providerBalance(key: string): Promise<{ balance: number | null; error?: string }> {
+// провайдер пускает проверку остатка не чаще раза в секунду на ключ: на 429 — один повтор через 1,1 с
+async function providerBalance(key: string, retry = true): Promise<{ balance: number | null; error?: string }> {
   try {
     const r = await fetch(`${BASE}/balance`, {
       headers: { Authorization: `Bearer ${key}` },
       signal: AbortSignal.timeout(10_000),
     });
+    if (r.status === 429 && retry) {
+      await r.body?.cancel();
+      await new Promise((ok) => setTimeout(ok, 1100));
+      return providerBalance(key, false);
+    }
     if (!r.ok) return { balance: null, error: `provider ${r.status}` };
     const balance = parseBalance(await r.json().catch(() => null));
     return balance === null ? { balance, error: "no balance in answer" } : { balance };
@@ -97,6 +103,12 @@ async function balances(req: Request, userId: string, member: Member): Promise<R
     : [userId];
   const result: Record<string, number | null> = {};
   const errors: Record<string, string> = {};
+  // один ключ у нескольких участников — один запрос к провайдеру (иначе второй получает 429)
+  const byKey = new Map<string, Promise<{ balance: number | null; error?: string }>>();
+  const once = (key: string) => {
+    if (!byKey.has(key)) byKey.set(key, providerBalance(key));
+    return byKey.get(key)!;
+  };
   await Promise.all(ids.map(async (id) => {
     try {
       const key = await ownKey(id);
@@ -105,7 +117,7 @@ async function balances(req: Request, userId: string, member: Member): Promise<R
         errors[id] = "no key";
         return;
       }
-      const b = await providerBalance(key);
+      const b = await once(key.trim());
       result[id] = b.balance;
       if (b.error) errors[id] = b.error;
     } catch (e) {
@@ -115,7 +127,7 @@ async function balances(req: Request, userId: string, member: Member): Promise<R
   }));
   const shared = isAdmin && body.shared ? await sharedKey() : "";
   if (shared) {
-    const b = await providerBalance(shared);
+    const b = await once(shared.trim());
     result.shared = b.balance;
     if (b.error) errors.shared = b.error;
   }
