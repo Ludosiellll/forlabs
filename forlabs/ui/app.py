@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
 from datetime import datetime
 import json
 import logging
@@ -88,6 +89,79 @@ STEPS = [("parse", "Разбор"), ("write", "Текст"), ("check", "Пров
 EVENT_WAITERS = __import__("concurrent.futures").futures.ThreadPoolExecutor(max_workers=32,
                                                                             thread_name_prefix="events")
 MAX_UPLOAD = 50_000_000  # байт на файл методички или фото
+# RTF и ZIP разбираются на компьютере потоком (картинки в RTF хранятся без сжатия) — свой, больший предел
+BIG_UPLOAD = {".rtf": 2_000_000_000, ".zip": 1_000_000_000}
+
+
+def upload_limit(name: str | None) -> int:
+    return BIG_UPLOAD.get(Path(name or "").suffix.lower(), MAX_UPLOAD)
+
+
+def too_big(uf) -> str | None:
+    """Текст ошибки, если файл больше своего предела."""
+    if uf.filename and (uf.size or 0) > upload_limit(uf.filename):
+        return f"Файл «{uf.filename}» больше {upload_limit(uf.filename) // 1_000_000} МБ"
+    return None
+
+
+def upload_dir() -> Path:
+    import tempfile
+    import uuid
+
+    d = Path(tempfile.gettempdir()) / "forlabs-uploads" / uuid.uuid4().hex
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+async def spool(uf, folder: Path) -> Path:
+    """Загрузка — на диск потоком (RTF на сотни мегабайт не читается в память целиком)."""
+    from forlabs.core.store import safe_file_name
+
+    path = folder / safe_file_name(Path(uf.filename or "файл").name)
+
+    def copy():
+        uf.file.seek(0)
+        with open(path, "wb") as f:
+            shutil.copyfileobj(uf.file, f, 1024 * 1024)
+
+    await asyncio.to_thread(copy)
+    return path
+
+
+async def methodology_uploads(ups, folder: Path) -> tuple[list, list, str | None]:
+    """Файлы поля «Методичка» → (файлы для разбора, архивы с файлами к лабе, ошибка). RTF → DOCX, ZIP → документы."""
+    from forlabs.ingest.uploads import methodology_files
+
+    data, archives = [], []
+    for uf in ups:
+        if Path(uf.filename or "").suffix.lower() in BIG_UPLOAD:
+            path = await spool(uf, folder)
+            try:
+                docs, archive = await asyncio.to_thread(methodology_files, uf.filename, path, folder / "work")
+            except ValueError as e:
+                return data, archives, f"«{uf.filename}»: {e}."
+            except Exception as e:  # noqa: BLE001 — битый файл
+                return data, archives, f"«{uf.filename}» не прочитался ({type(e).__name__}) — пересохрани его в Word."
+            if not docs:
+                return data, archives, (f"В «{uf.filename}» нет методички (PDF, DOCX, RTF или TXT). Положи её в архив "
+                                        "или загрузи отдельно.")
+            data += docs
+            if archive is not None:
+                archives.append((Path(uf.filename).name, archive))
+        else:
+            data.append((uf.filename, await uf.read()))
+    return data, archives, None
+
+
+async def material_uploads(ups, folder: Path) -> list:
+    """Файлы к лабе: RTF и ZIP — с диска, остальные — в памяти."""
+    out = []
+    for uf in ups:
+        if Path(uf.filename or "").suffix.lower() in BIG_UPLOAD:
+            out.append((uf.filename, await spool(uf, folder)))
+        else:
+            out.append((uf.filename, await uf.read()))
+    return out
 ELSEWHERE = ("Эта лаба сейчас выполняется на другом компьютере. Дождись окончания там (или 15 минут, если тот "
              "компьютер выключили) и обнови страницу.")
 BUSY_MESSAGE = "Сейчас идёт работа над лабой. Дождись её окончания, потом меняй настройки или выходи."
@@ -532,24 +606,37 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
                 return RedirectResponse(done, status_code=303)
         data = []
         back = f"/labs/new?profile={_q(profile_id)}&subject={_q(subject_id)}"
-        for uf in [*(files or []), *(wish_images or []), *(materials or []), *([linked_report] if linked_report else [])]:
+        for uf in [*(files or []), *(materials or [])]:
+            if err := too_big(uf):
+                return redirect(back, err=err + ". Оставь только страницы своей лабы или сожми его.")
+        for uf in [*(wish_images or []), *([linked_report] if linked_report else [])]:
             if uf.filename and (uf.size or 0) > MAX_UPLOAD:
                 return redirect(back, err=f"Файл «{uf.filename}» больше {MAX_UPLOAD // 1_000_000} МБ. Оставь только "
                                           "страницы своей лабы или сожми его.")
-        for uf in files or []:
-            if uf.filename:
-                data.append((uf.filename, await uf.read()))
+        tmp = upload_dir()
+        data, archives, err = await methodology_uploads([uf for uf in files or [] if uf.filename], tmp)
+        if err:
+            shutil.rmtree(tmp, ignore_errors=True)
+            if form_token:
+                ctx.form_tokens.pop(form_token, None)
+            return redirect(back, err=err)
         if not data and not text.strip():
             return redirect(f"/labs/new?profile={_q(profile_id)}&subject={_q(subject_id)}",
                             err="Добавь файл методички или вставь её текст")
         photos = [(uf.filename, await uf.read()) for uf in (wish_images or []) if uf.filename]
-        extra = [(uf.filename, await uf.read()) for uf in (materials or []) if uf.filename]
+        extra = await material_uploads([uf for uf in (materials or []) if uf.filename], tmp)
         report = (linked_report.filename, await linked_report.read()) if linked_report and linked_report.filename else None
         numbers = parse_numbers(linked)
 
         async def start(st, hint: str | None = None):
             """Файлы к лабе, затем разбор в фоне; связи — после разбора. → (лаба, замечания)."""
             notes: list[str] = []
+            for name, path in archives:  # остальное из архива методички: картинки, код, данные
+                try:
+                    st, problems = await asyncio.to_thread(ctx.pipeline.add_archive, st, name, path, True)
+                    notes += problems
+                except Exception as e:  # noqa: BLE001
+                    notes.append(f"Файлы из «{name}» не добавились ({getattr(e, 'message_ru', None) or e}).")
             if extra:  # лаба уже создана: сбой с файлами — замечание, а не брошенный черновик без разбора
                 try:
                     st, problems = await asyncio.to_thread(ctx.pipeline.add_materials, st, extra)
@@ -579,6 +666,9 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
             ctx.run(key, job)
             return result.get("st", st), notes
 
+        async def cleanup():
+            await asyncio.to_thread(shutil.rmtree, tmp, True)
+
         # методички разных лаб («ЛР19…», «ЛР20…») — отдельные лабы; номер, вписанный в форму, — одна лаба на всё
         groups = await asyncio.to_thread(split_by_lab, data, text) if not number.strip() and len(data) >= 2 else []
         if groups:
@@ -598,6 +688,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
                 made.append(n if is_draft(final.number) else final.number)
                 problems += [x for x in notes if x not in problems]
             if not made:
+                await cleanup()
                 if form_token:
                     ctx.form_tokens.pop(form_token, None)
                 if isinstance(failed[0], PipelineError):
@@ -609,6 +700,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
                    + (f"&err={_q(' '.join(problems))}" if problems else ""))
             if form_token:
                 ctx.form_tokens[form_token] = url
+            await cleanup()
             return RedirectResponse(url, status_code=303)
 
         try:
@@ -616,12 +708,14 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
                                          number=number.strip() or None, pasted_text=text, wishes=wishes,
                                          wish_images=photos)
         except Exception as e:  # лаба не создана — форму можно отправить снова
+            await cleanup()
             if form_token:
                 ctx.form_tokens.pop(form_token, None)
             if isinstance(e, PipelineError):
                 return redirect(back, err=str(e))
             raise
         final, notes = await start(st)
+        await cleanup()
         url = lab_url(profile_id, subject_id, final.number)
         if form_token:
             ctx.form_tokens[form_token] = url
@@ -765,15 +859,22 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
             return redirect(back, err=BUSY)
         ups = [uf for uf in files or [] if uf.filename]
         for uf in ups:
-            if (uf.size or 0) > MAX_UPLOAD:
-                return redirect(back, err=f"Файл «{uf.filename}» больше {MAX_UPLOAD // 1_000_000} МБ — оставь только "
-                                          "страницы своей лабы или сожми его.")
+            if err := too_big(uf):
+                return redirect(back, err=err + " — оставь только страницы своей лабы или сожми его.")
         if not ups and not text.strip():
             return redirect(back, err="Добавь файл методички или вставь её текст")
         st = await asyncio.to_thread(load, p, s, n)
         if running_elsewhere(st):
             return redirect(lab_url(p, s, n), err=ELSEWHERE)
-        data = [(uf.filename, await uf.read()) for uf in ups]
+        tmp = upload_dir()
+        try:
+            data, archives, err = await methodology_uploads(ups, tmp)
+            if err:
+                return redirect(back, err=err)
+            for name, path in archives:
+                st, _ = await asyncio.to_thread(ctx.pipeline.add_archive, st, name, path, True)
+        finally:
+            await asyncio.to_thread(shutil.rmtree, tmp, True)
         ctx.run(ctx.pipeline.key(st), ctx.pipeline.replace_source, st, data, text)
         return redirect(lab_url(p, s, n))
 
@@ -849,11 +950,15 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         if not files:
             return redirect(lab_url(p, s, n), err="Выбери файл")
         for uf in files:
-            if (uf.size or 0) > MAX_UPLOAD:
-                return redirect(lab_url(p, s, n), err=f"Файл «{uf.filename}» больше {MAX_UPLOAD // 1_000_000} МБ")
+            if err := too_big(uf):
+                return redirect(lab_url(p, s, n), err=err)
         st = await asyncio.to_thread(load, p, s, n)
-        data = [(uf.filename, await uf.read()) for uf in files]
-        st, problems = await asyncio.to_thread(ctx.pipeline.add_materials, st, data)
+        tmp = upload_dir()
+        try:
+            data = await material_uploads(files, tmp)
+            st, problems = await asyncio.to_thread(ctx.pipeline.add_materials, st, data)
+        finally:
+            await asyncio.to_thread(shutil.rmtree, tmp, True)
         if problems:
             return redirect(lab_url(p, s, n), err=" ".join(problems))
         return redirect(lab_url(p, s, n), msg="Файлы добавлены, модель прочитает их в каждом задании")

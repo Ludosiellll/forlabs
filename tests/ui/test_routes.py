@@ -296,3 +296,38 @@ def test_custom_subjects_follow_the_account(tmp_home):
     assert "oop" in all_subjects()  # добавлен на другом компьютере — есть и здесь
     ctx.add_subject(Subject(id="bd", name="Базы данных", short_name="БД"))
     assert "bd" in all_subjects() and [s.id for s in cloud.rows] == ["oop", "bd"]
+
+
+def _rtf_of(text: str) -> bytes:
+    body = "".join(f"\\u{ord(c)}?" if ord(c) > 127 else c for c in text).replace("\n", "\\par\n")
+    return ("{\\rtf1\\ansi\\ansicpg1251 " + body + "\\par}").encode("ascii")
+
+
+def test_rtf_methodology_is_accepted_and_stored_as_docx(client, tmp_path, tmp_home):
+    make_profile(client, tmp_path)
+    rtf = _rtf_of(FIXTURE.read_text(encoding="utf-8"))
+    r = client.post("/labs/new", data={"profile_id": "ivanov_ivan_petrovich", "subject_id": "psip", "number": "",
+                                       "text": ""},
+                    files={"files": ("Методичка.rtf", rtf, "application/rtf")}, follow_redirects=False)
+    assert r.status_code == 303 and "err=" not in r.headers["location"], r.headers["location"]
+    assert "Создайте 2 простых анимации" in client.get(r.headers["location"]).text
+    stored = [p.name for p in Path(tmp_home).rglob("source/*")]
+    assert stored == ["Методичка.docx"]
+
+
+def test_zip_methodology_gives_source_and_lab_files(client, tmp_path, tmp_home):
+    import zipfile
+
+    make_profile(client, tmp_path)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("ЛР7/методичка.txt", FIXTURE.read_bytes())
+        z.writestr("ЛР7/images/фон.png", b"PNG")
+    r = client.post("/labs/new", data={"profile_id": "ivanov_ivan_petrovich", "subject_id": "psip", "number": "",
+                                       "text": ""},
+                    files={"files": ("лаба7.zip", buf.getvalue(), "application/zip")}, follow_redirects=False)
+    assert r.status_code == 303 and "err=" not in r.headers["location"], r.headers["location"]
+    page = client.get(r.headers["location"]).text
+    assert "лаба7.zip" in page  # архив — среди файлов к лабе (картинка из него)
+    assert [p.name for p in Path(tmp_home).rglob("source/*")] == ["методичка.txt"]
+    assert any(p.name == "фон.png" for p in Path(tmp_home).rglob("assets_in/*/*/*/*"))
