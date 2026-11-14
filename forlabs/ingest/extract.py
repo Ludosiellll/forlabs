@@ -457,11 +457,23 @@ def extract_text(path: Path, tesseract: str | None = None, pictures: bool = Fals
         return _pdf(path, pictures)
     if ext == ".docx":
         return _docx(path, pictures)
+    if ext == ".rtf":  # старые редакторы (WordPad): сначала в DOCX, дальше как обычно
+        import tempfile
+
+        from forlabs.ingest.rtf import rtf_to_docx
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / (path.stem + ".docx")
+            res = rtf_to_docx(path, out)
+            st = _docx(out, pictures)
+        if res.skipped:
+            st.warnings.append(f"Картинок в RTF, которые не удалось прочитать: {res.skipped}.")
+        return st
     if ext in TEXT_EXT:
         return SourceText(normalize(read_text_file(path)))
     if ext in IMAGE_EXT:
         return _image(path, tesseract, pictures)
-    raise ValueError(f"Формат {ext or 'без расширения'} не поддерживается: нужен PDF, DOCX, TXT или картинка")
+    raise ValueError(f"Формат {ext or 'без расширения'} не поддерживается: нужен PDF, DOCX, RTF, TXT или картинка")
 
 
 def extract_many(paths: list[Path], tesseract: str | None = None, pictures: bool = False) -> SourceText:
