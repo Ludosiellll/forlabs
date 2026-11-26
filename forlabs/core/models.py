@@ -19,6 +19,7 @@ class Enrollment(BaseModel):
     variant: int | None = None
     workplace: int | None = None  # номер рабочего места/компьютера, если методичка выбирает вариант по нему
     header_style: HeaderStyle = "long"
+    task_files: bool = False  # работы предмета по умолчанию делаются «заданиями отдельными файлами»
 
 
 class Profile(BaseModel):
@@ -36,6 +37,7 @@ class Profile(BaseModel):
     city: str = "Бобруйск"
     doc_author: str = ""
     output_root: str = ""
+    stamp: str = ""  # картинка-метка студента (PNG в base64): ставится на первую страницу файлов заданий
     enrollments: list[Enrollment] = Field(default_factory=list)
 
     def enrollment(self, subject_id: str) -> Enrollment | None:
@@ -56,6 +58,7 @@ class LabSpec(BaseModel):
     number: str
     work_kind: WorkKind = "lab"  # как работа названа в методичке: от этого заголовок отчёта и имена файлов
     plain_layout: bool = False  # вёрстка без «Продолжение таблицы» и закреплённых разрывов страниц (просьба студента)
+    task_files: bool = False  # задания — отдельными файлами Word, в отчёте — снимки их страниц
     date: str
     topic: str
     goal: str
@@ -128,6 +131,7 @@ class TaskSection(BaseModel):
     n: int
     title: str
     blocks: list[Block] = Field(default_factory=list)
+    doc_title: str = ""  # как назвать документ с результатом задания («Техническое задание на приложение …»)
 
 
 class QA(BaseModel):

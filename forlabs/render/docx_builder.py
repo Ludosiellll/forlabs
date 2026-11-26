@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import io
 import os
 import random
 import re
@@ -270,6 +271,47 @@ def _numbered(i: int, item: str) -> str:
     return item if re.match(r"^\d+[.)]\s", item) else f"{i}. {item}"
 
 
+def _write_blocks(w: _Writer, blocks, number_of, listing_name) -> None:
+    """Блоки задания по порядку. number_of(номер блока) — номер рисунка, листинга или таблицы;
+    listing_name(номер листинга) — имя закладки листинга (по ней Word расставляет «Продолжение листинга»)."""
+    for bi, b in enumerate(blocks):
+        n = number_of(bi)
+        if isinstance(b, Paragraph):
+            if b.text.strip():
+                w.para("body", b.text.strip())
+        elif isinstance(b, DashList):
+            for item in b.items:
+                if item.strip():
+                    w.para("dash_item", _dash(item))
+        elif isinstance(b, NumberedList):
+            for i, item in enumerate(b.items, start=1):
+                if item.strip():
+                    w.para("numbered_item", _numbered(i, item))
+        elif isinstance(b, Figure):
+            keep_next(w.para("figure_ref", figure_intro(b.topic, n)))
+            if b.image_path and Path(b.image_path).exists():
+                keep_next(w.image(b.image_path, b.width_cm))
+            else:
+                keep_next(w.para("body", f"[Вставить скриншот: {b.slot or b.topic}]"))
+            w.para("figure_caption", caption("figure", n, b.topic))
+        elif isinstance(b, Listing):
+            keep_next(w.para("listing_ref", listing_intro(b.topic, n)))
+            keep_next(w.para("listing_caption", caption("listing", n, b.topic)))
+            w.code(b.code, bookmark=listing_name(n))
+        elif isinstance(b, Table):
+            if not any(b.rows):
+                continue
+            keep_next(w.para("table_ref", table_intro(b.topic, n)))
+            keep_next(w.para("table_caption", caption("table", n, b.topic)))
+            w.table(b.rows, b.header_rows)
+
+
+def _write_answers(w: _Writer, questions) -> None:
+    for qa in questions:
+        keep_next(w.para("cq_question", f"{qa.n}. {qa.question.strip()}"))
+        w.para("cq_answer", "Ответ: " + re.sub(r"^\s*Ответ:\s*", "", qa.answer.strip()))
+
+
 def write_lab(w: _Writer, doc: ReportDoc, bookmark: str | None = None) -> None:
     w.heading(f"{work_title(doc.work_kind)} №{doc.lab_number}", bookmark)
     for label, value in doc.header.items():
@@ -278,42 +320,62 @@ def write_lab(w: _Writer, doc: ReportDoc, bookmark: str | None = None) -> None:
     numbers = {(b.section_index, b.block_index): b.n for b in numbered_blocks(doc)}
     for si, sec in enumerate(doc.sections):
         keep_next(w.para("task_heading", sec.title.strip(), label=f"Задание {sec.n}. "))
-        for bi, b in enumerate(sec.blocks):
-            n = numbers.get((si, bi))
-            if isinstance(b, Paragraph):
-                if b.text.strip():
-                    w.para("body", b.text.strip())
-            elif isinstance(b, DashList):
-                for item in b.items:
-                    if item.strip():
-                        w.para("dash_item", _dash(item))
-            elif isinstance(b, NumberedList):
-                for i, item in enumerate(b.items, start=1):
-                    if item.strip():
-                        w.para("numbered_item", _numbered(i, item))
-            elif isinstance(b, Figure):
-                keep_next(w.para("figure_ref", figure_intro(b.topic, n)))
-                if b.image_path and Path(b.image_path).exists():
-                    keep_next(w.image(b.image_path, b.width_cm))
-                else:
-                    keep_next(w.para("body", f"[Вставить скриншот: {b.slot or b.topic}]"))
-                w.para("figure_caption", caption("figure", n, b.topic))
-            elif isinstance(b, Listing):
-                keep_next(w.para("listing_ref", listing_intro(b.topic, n)))
-                keep_next(w.para("listing_caption", caption("listing", n, b.topic)))
-                w.code(b.code, bookmark=listing_bookmark(doc.lab_number, n))
-            elif isinstance(b, Table):
-                if not any(b.rows):
-                    continue
-                keep_next(w.para("table_ref", table_intro(b.topic, n)))
-                keep_next(w.para("table_caption", caption("table", n, b.topic)))
-                w.table(b.rows, b.header_rows)
+        _write_blocks(w, sec.blocks, lambda bi, si=si: numbers.get((si, bi)),
+                      lambda n: listing_bookmark(doc.lab_number, n))
     if doc.questions:
         keep_next(w.para("cq_title", "Ответы на контрольные вопросы:"))
-        for qa in doc.questions:
-            keep_next(w.para("cq_question", f"{qa.n}. {qa.question.strip()}"))
-            w.para("cq_answer", "Ответ: " + re.sub(r"^\s*Ответ:\s*", "", qa.answer.strip()))
+        _write_answers(w, doc.questions)
     w.para("conclusion", re.sub(r"^\s*Вывод:\s*", "", doc.conclusion.strip()), label="Вывод: ")
+
+
+STAMP_CM = 2.6  # сторона картинки-метки на первой странице файла задания
+
+
+def _plain_document():
+    """Основа документа задания: тот же лист и стили, что у отчёта, но без колонтитулов — в них рамка отчёта."""
+    document = _new_document()
+    sect = document.element.body.find(q("sectPr"))
+    for el in list(sect) if sect is not None else []:
+        if el.tag in (q("headerReference"), q("footerReference")):
+            sect.remove(el)
+    return document
+
+
+def _put_stamp(w: _Writer, stamp: bytes | None) -> None:
+    """Метка студента — первой строкой первой страницы, слева, как в файлах, которые студенты делают сами."""
+    if not stamp:
+        return
+    try:
+        with Image.open(io.BytesIO(stamp)) as im:
+            im.verify()
+    except Exception:  # noqa: BLE001 — битая картинка не должна срывать документ
+        return
+    para = w.document.add_paragraph()
+    para.paragraph_format.first_line_indent = Cm(0)
+    para.add_run().add_picture(io.BytesIO(stamp), width=Cm(STAMP_CM), height=Cm(STAMP_CM))
+
+
+def build_task_doc(section, out: Path, author: str = "", stamp: bytes | None = None) -> Path:
+    """Задание отдельным документом Word: заголовок и то же содержимое, что у задания в отчёте. Рисунки, листинги
+    и таблицы нумеруются с единицы — это самостоятельный документ."""
+    document = _plain_document()
+    w = _Writer(document)
+    _put_stamp(w, stamp)
+    title = section.doc_title.strip() or f"Задание {section.n}. {section.title.strip()}"
+    w.heading(title, None)
+    alone = ReportDoc(lab_number="1", sections=[section])
+    numbers = {b.block_index: b.n for b in numbered_blocks(alone)}
+    _write_blocks(w, section.blocks, numbers.get, lambda n: listing_bookmark(f"t{section.n}", n))
+    return _save(document, out, author)
+
+
+def build_answers_doc(questions, out: Path, author: str = "", stamp: bytes | None = None) -> Path:
+    document = _plain_document()
+    w = _Writer(document)
+    _put_stamp(w, stamp)
+    w.heading("Ответы на контрольные вопросы", None)
+    _write_answers(w, questions)
+    return _save(document, out, author)
 
 
 def _new_document():
