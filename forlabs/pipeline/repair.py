@@ -169,6 +169,8 @@ def repair(doc: ReportDoc, findings: list[Finding], llm, rules: RuleBook, spec: 
                 continue
             b = sec.blocks[rb.index - 1]
             if isinstance(b, Paragraph) and rb.text:
+                if "\n" in rb.text.strip() and "\n" not in b.text:
+                    continue  # в абзац дописаны строки (список в заголовке раздела) — это не правка абзаца
                 b.text = rb.text.strip()
             elif isinstance(b, (DashList, NumberedList)) and rb.items:
                 b.items = [x.strip() for x in rb.items if x.strip()]

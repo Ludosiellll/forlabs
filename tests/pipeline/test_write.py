@@ -311,3 +311,62 @@ def test_lab_without_a_program_task_needs_no_code():
                                    "tasks": [Task(n=1, text="Создать базу данных и модель с помощью Reverse Engineer.")]})
     doc = _doc([Paragraph(text="Изучила установленное программное обеспечение.")])
     assert not [f for f in check_all(doc, spec, PROFILE, {}) if f.rule_id == "report.no_code"]
+
+
+def test_repair_does_not_turn_a_paragraph_into_several_lines():
+    """На замечание к абзацу-заголовку модель дописала в него строки списка («…данных\n- значения вводятся…»):
+    абзац — это один абзац, такая «правка» не принимается."""
+    from forlabs.core.models import ReportDoc, TaskSection
+    doc = ReportDoc(lab_number="8", sections=[
+        TaskSection(n=1, title=SPEC.tasks[0].text, blocks=[Paragraph(text="В программе создан массив."),
+                                                            Paragraph(text="В программе описан цикл."),
+                                                            Paragraph(text="В программе выведен результат.")])],
+        conclusion="x")
+    fs = [f for f in check_all(doc, SPEC, PROFILE, {}) if f.rule_id == "ai.same_opening"]
+    fake = FakeLLM([{"blocks": [{"index": 2, "text": "Цикл перебирает элементы.\n- значения вводятся с клавиатуры;"},
+                                {"index": 3, "text": "Результат выведен в консоль."}]}])
+    fixed = repair(doc, fs, fake, RuleBook(), SPEC, PROFILE)
+    assert [b.text for b in fixed.sections[0].blocks] == ["В программе создан массив.", "В программе описан цикл.",
+                                                           "Результат выведен в консоль."]
+
+
+THIN = {"doc_title": "Технический проект приложения", "blocks": [
+    {"type": "paragraph", "text": "Составлен технический проект на программный продукт. В проекте формализованы "
+                                  "требования из технического задания, структура программы представлена модулями."}]}
+FULL = {"doc_title": "Технический проект приложения", "blocks": [
+    {"type": "paragraph", "text": "1 Общие сведения"},
+    {"type": "paragraph", "text": "Программа предназначена для построения плана комнаты и расстановки мебели. " * 6},
+    {"type": "paragraph", "text": "2 Структура программы"},
+    {"type": "dash_list", "items": ["- модуль плана комнаты;", "- модуль каталога мебели;", "- модуль сохранения."]}]}
+DOC_TASK = Task(n=1, text="Проведите формализацию требований в виде документа (технический проект).")
+
+
+def test_document_only_described_is_asked_again_in_files_mode(tmp_path):
+    """В режиме файлов текст задания — это сам документ. Модель ответила одним абзацем «составлен проект…» —
+    спрашиваем ещё раз и прямо говорим, что нужен документ целиком."""
+    from forlabs.pipeline.write import write_section
+
+    spec = SPEC.model_copy(update={"task_files": True, "tasks": [DOC_TASK]})
+    fake = FakeLLM([THIN, FULL])
+    sec = write_section(spec, 1, PROFILE, SUBJECTS["ssp"], fake, RuleBook(), tmp_path)
+    assert len(fake.calls) == 2 and len(sec.blocks) == 4 and sec.doc_title == "Технический проект приложения"
+    again = fake.calls[1]
+    assert again[:2] == fake.calls[0] and "Составлен технический проект" in again[2]["content"]  # что она ответила
+    assert again[-1]["role"] == "user" and "сам документ" in again[-1]["content"]
+
+
+def test_second_thin_answer_is_taken_as_is_and_usual_mode_does_not_ask_again(tmp_path):
+    from forlabs.pipeline.write import write_section
+
+    files = SPEC.model_copy(update={"task_files": True, "tasks": [DOC_TASK]})
+    fake = FakeLLM([THIN, THIN])
+    assert len(write_section(files, 1, PROFILE, SUBJECTS["ssp"], fake, RuleBook(), tmp_path).blocks) == 1
+    assert len(fake.calls) == 2  # один повтор, не больше
+    usual = SPEC.model_copy(update={"tasks": [DOC_TASK]})
+    fake = FakeLLM([THIN])
+    write_section(usual, 1, PROFILE, SUBJECTS["ssp"], fake, RuleBook(), tmp_path)
+    assert len(fake.calls) == 1  # в обычном режиме короткий ответ на задание — обычное дело
+    slides = files.model_copy(update={"tasks": [Task(n=1, text="Составьте презентацию «Техники сбора требований».")]})
+    fake = FakeLLM([THIN])
+    write_section(slides, 1, PROFILE, SUBJECTS["ssp"], fake, RuleBook(), tmp_path)
+    assert len(fake.calls) == 1  # презентацию ForLabs не делает — переспрашивать нечего

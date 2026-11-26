@@ -27,6 +27,7 @@ from forlabs.core.rules import RuleBook
 from forlabs.core.subjects import Subject
 from forlabs.executors.diagrams import render_dot
 from forlabs.pipeline.prompts import ANSWERS_SYSTEM, WRITE_SYSTEM, WRITE_USER
+from forlabs.pipeline.taskfiles import is_presentation
 from forlabs.report.derive import build_header, work_title
 from forlabs.report.morph import goal_to_conclusion
 
@@ -220,6 +221,24 @@ TASK_FILES_NOTE = """Режим «задания отдельными файла
 """
 
 
+ONLY_DESCRIBED = """В ответе документ только описан («составлен…», «в документе приведены…»), а самого документа нет.
+В режиме файлов этот текст и есть сам документ, который студент сдаёт отдельным файлом: напиши его целиком — с
+разделами, пунктами и таблицами, как он должен выглядеть на странице. Формат ответа тот же."""
+THIN_DOC = 500  # знаков: меньше — в «документе» одна-две фразы
+
+
+def _text_size(blocks) -> int:
+    return sum(len(getattr(b, "text", "") or "") + sum(map(len, getattr(b, "items", None) or []))
+               + sum(len(c) for row in (getattr(b, "rows", None) or []) for c in row) + len(getattr(b, "code", "") or "")
+               for b in blocks)
+
+
+def _only_described(blocks) -> bool:
+    """Вместо документа — одна-две фразы о нём: ни таблицы, ни листинга, ни рисунка, и текста почти нет."""
+    return len(blocks) <= 2 and all(isinstance(b, (Paragraph, DashList, NumberedList)) for b in blocks) \
+        and _text_size(blocks) < THIN_DOC
+
+
 def doc_title(raw: str) -> str:
     """Название документа задания от модели: одна строка без кавычек-обёрток и точки, не длиннее 80 знаков."""
     title = " ".join((raw or "").split()).strip(" .\"'")
@@ -295,7 +314,15 @@ def write_section(spec: LabSpec, n: int, profile: Profile, subject: Subject, llm
     messages = [{"role": "system", "content": WRITE_SYSTEM.format(rules=rules.load("write", subject.id))},
                 {"role": "user", "content": WRITE_USER.format(n=n, task=task.text, **ctx)}]
     draft = llm.json(messages, SectionDraft, think=True)
-    return TaskSection(n=n, title=task.text, blocks=draft_to_blocks(draft, Path(assets_dir), n, render_diagrams),
+    blocks = draft_to_blocks(draft, Path(assets_dir), n, render_diagrams)
+    if spec.task_files and _only_described(blocks) and not is_presentation(task.text):
+        # текст задания здесь — сам документ, который сдаётся файлом; «составлен проект, в нём…» — не документ
+        again = llm.json([*messages, {"role": "assistant", "content": draft.model_dump_json(exclude_defaults=True)},
+                          {"role": "user", "content": ONLY_DESCRIBED}], SectionDraft, think=True)
+        fuller = draft_to_blocks(again, Path(assets_dir), n, render_diagrams)
+        if _text_size(fuller) > _text_size(blocks):
+            draft, blocks = again, fuller
+    return TaskSection(n=n, title=task.text, blocks=blocks,
                        doc_title=doc_title(draft.doc_title) if spec.task_files else "")
 
 

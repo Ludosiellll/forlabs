@@ -51,6 +51,19 @@ def test_same_openings():
     assert scan_paragraph_openings(paras[:2] + paras[3:]) == []
 
 
+def test_document_headings_are_not_paragraphs_with_the_same_opening():
+    # ТЗ по ГОСТ 19.201-78: разделы обязаны называться «Требования к …» — это заголовки, а не шаблон ИИ.
+    # Замечание заставляло модель «начать по-другому», и она дописывала в заголовок выдуманный список.
+    heads = ["3.1. Требования к функциональным характеристикам", "3.2. Требования к надежности",
+             "3.3. Требования к составу технических средств", "4 Требования к программной документации"]
+    assert scan_paragraph_openings(heads) == []
+    prose = ["Требования к надежности выполнены полностью.", "Требования к интерфейсу описаны в разделе 3.",
+             "Требования к документации перечислены ниже."]
+    found = scan_paragraph_openings(heads + prose)
+    assert rules(found) == ["ai.same_opening"] and len(found) == 2  # считаются только абзацы-предложения
+    assert all(f.text in prose for f in found)
+
+
 def test_code_rules():
     code_many_comments = "\n".join(["// считаем", "x := 1", "// выводим", "fmt.Println(x)"])
     assert "code.comment_density" in rules(scan_code(code_many_comments, "go", "x"))

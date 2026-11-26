@@ -119,13 +119,21 @@ def _opening(text: str) -> str | None:
     return " ".join(words[:2]) if len(words) >= 2 else None
 
 
+def _heading(text: str) -> bool:
+    """Заголовок раздела внутри текста («3.2. Требования к надежности»): короткая строка без знака в конце.
+    Разделы документа по ГОСТу называются одинаково («Требования к …») — это не шаблон ИИ, и «начать по-другому»
+    их нельзя."""
+    t = text.strip()
+    return len(t) <= 120 and not t.endswith((".", "!", "?", "…", ";", ":", ","))
+
+
 def scan_paragraph_openings(paragraphs: list[str] | list[tuple[str, str]], location: str = "Отчёт") -> list[Finding]:
     """Три и больше абзаца с одинаковым началом — ИИ-шаблон. Принимает тексты или пары (место, текст);
     замечание ставится на второй и следующие такие абзацы, чтобы их можно было переписать точечно."""
     items = [(location, p) if isinstance(p, str) else p for p in paragraphs]
     groups: dict[str, list[tuple[str, str]]] = {}
     for loc, text in items:
-        o = _opening(text)
+        o = None if _heading(text) else _opening(text)
         if o:
             groups.setdefault(o, []).append((loc, text))
     out = []
