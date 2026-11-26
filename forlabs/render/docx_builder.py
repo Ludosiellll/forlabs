@@ -198,9 +198,10 @@ def column_widths(rows: list[list[str]], ncols: int) -> list[int]:
         longest = max((len(r[ci]) if ci < len(r) else 0) for r in rows)
         lengths.append(max(6, min(longest, 60)))
     total = sum(lengths)
-    # не уже самого длинного слова столбца (0,23 см на букву 12 pt + поля ячейки): «Параметр» не рвётся на «Парамет/р»
+    # не уже самого длинного слова столбца (0,23 см на букву 12 pt + поля ячейки 2 × 0,19 см и запас):
+    # «Параметр» не рвётся на «Парамет/р», «Вопрос» — на «Вопро/с»
     words = [max((len(w) for r in rows if ci < len(r) for w in r[ci].split()), default=0) for ci in range(ncols)]
-    floor = [min(int((n * 0.23 + 0.3) * 567), canon.TEXT_WIDTH_TWIPS // ncols * 2) for n in words]
+    floor = [min(int((n * 0.23 + 0.42) * 567), canon.TEXT_WIDTH_TWIPS // ncols * 2) for n in words]
     widths = [max(900, f, int(canon.TEXT_WIDTH_TWIPS * n / total)) for n, f in zip(lengths, floor)]
     if sum(widths) > canon.TEXT_WIDTH_TWIPS:  # длинным столбцам — остаток, коротким — их минимум
         spare = canon.TEXT_WIDTH_TWIPS - sum(f if f > 900 else 900 for f in floor)
