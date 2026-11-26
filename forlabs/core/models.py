@@ -55,6 +55,7 @@ class LabSpec(BaseModel):
     subject_id: str
     number: str
     work_kind: WorkKind = "lab"  # как работа названа в методичке: от этого заголовок отчёта и имена файлов
+    plain_layout: bool = False  # вёрстка без «Продолжение таблицы» и закреплённых разрывов страниц (просьба студента)
     date: str
     topic: str
     goal: str
@@ -275,6 +276,7 @@ class LabState(BaseModel):
     versions: list[LabVersion] = Field(default_factory=list)
     wishes: str = ""  # пожелания, введённые при создании (до разбора)
     work_kind: WorkKind | None = None  # вид работы, который выбрал студент; None — как в методичке
+    hand_in_dir: str | None = None  # папка сдачи, куда ForLabs уже клал файлы этой работы (отчёт, проект)
     linked: list[str] = Field(default_factory=list)  # номера прошлых лаб, на которых строится эта (выбрал студент)
     linked_texts: dict[str, str] = Field(default_factory=dict)  # их текст из прикреплённого отчёта (только выбранные)
     linked_how: dict[str, str] = Field(default_factory=dict)  # каких нашла модель (заголовка не было): «по смыслу» и т.п.

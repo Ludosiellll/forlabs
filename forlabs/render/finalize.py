@@ -81,7 +81,9 @@ def _clean_old_copies(workdir: Path, age: float = 3600) -> None:
 
 
 def finalize(docx: Path, author: str, workdir: Path, soffice: str | None = None,
-             prefer_word: bool = True) -> FinalizeReport:
+             prefer_word: bool = True, plain: bool = False) -> FinalizeReport:
+    """plain — вёрстка «без разрывов» (просьба студента: таблицу или листинг нужно забрать целиком): без
+    «Продолжение таблицы/листинга» и без закреплённых разрывов страниц; настройки «с квадратом» снимаются всегда."""
     docx, workdir = Path(docx), Path(workdir)
     workdir.mkdir(parents=True, exist_ok=True)
     _clean_old_copies(workdir)
@@ -92,7 +94,8 @@ def finalize(docx: Path, author: str, workdir: Path, soffice: str | None = None,
         work = workdir / f"word_{uuid.uuid4().hex[:8]}.docx"
         shutil.copyfile(docx, work)
         try:
-            rep = word_com.finalize_isolated(work, pdf, author)
+            rep = (word_com.finalize_isolated(work, pdf, author, plain=True) if plain
+                   else word_com.finalize_isolated(work, pdf, author))
             # разрывы там, где Word отметил перенос, вместо «квадратов»; не отметил (сбой разметки) — настройки
             # всё равно снимаются: квадратов в готовом документе не должно быть ни при каком исходе
             freeze.apply(work)
@@ -108,7 +111,7 @@ def finalize(docx: Path, author: str, workdir: Path, soffice: str | None = None,
                 work.unlink(missing_ok=True)
             except OSError:
                 pass  # копию держит зависший Word — удалится при следующей доводке
-    else:
+    elif not plain:  # в виде «без разрывов» продолжения и не нужны — предупреждать не о чем
         warnings.append(NO_WORD_WARNING)
 
     if not libreoffice.find_soffice(soffice):
@@ -126,7 +129,7 @@ def finalize(docx: Path, author: str, workdir: Path, soffice: str | None = None,
         patch_toc_pages(docx, {name: hp[text] for name, text in marks.items() if text in hp})
         pdf = libreoffice.to_pdf(docx, workdir, soffice)
     try:  # разрывы страниц вместо настроек «не отрывать» — без чёрных квадратов в Word
-        freeze.apply(docx, freeze.page_starts_from_pdf(docx, pdf))
+        freeze.apply(docx, frozenset() if plain else freeze.page_starts_from_pdf(docx, pdf))
         pdf = libreoffice.to_pdf(docx, workdir, soffice)
     except Exception as e:  # noqa: BLE001 — разбивка не закреплена, но квадратов всё равно не оставляем
         warnings.append(f"Не удалось закрепить разрывы страниц ({e}).")

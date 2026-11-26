@@ -211,6 +211,10 @@
           <div class="field"><label for="work_kind">Вид работы</label>
             <select id="work_kind" name="work_kind">{% for k, title in WORK_TITLES.items() %}<option value="{{ k }}"{{ ' selected' if k == st.spec.work_kind }}>{{ title }}</option>{% endfor %}</select>
             <div class="hint">От него заголовок отчёта, имя файла и папки сдачи.</div></div>
+          <div class="field"><input type="hidden" name="layout_shown" value="1">
+            <label class="checkline"><input type="checkbox" name="plain_layout" value="1"{{ ' checked' if st.spec.plain_layout }}>
+              Без разрывов страниц и «Продолжение таблицы»</label>
+            <div class="hint">Таблицы и листинги идут целиком — удобно, если переносишь их в свой файл. По умолчанию — как в образце.</div></div>
           <div class="field"><label for="topic">Тема</label><input id="topic" name="topic" type="text" value="{{ st.spec.topic }}"></div>
           <div class="field"><label for="goal">Цель</label><textarea id="goal" name="goal" rows="2">{{ st.spec.goal }}</textarea></div>
           <div class="field"><label for="conclusion">Вывод</label>

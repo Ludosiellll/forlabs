@@ -77,3 +77,21 @@ def test_practice_next_to_a_lab_with_the_same_number(app):
     assert set(labs) == {"7", "7-пз"} and labs["7-пз"].spec.number == "7"
     home = client.get("/").text
     assert "ЛР 7</a>" in home and "ПЗ 7</a>" in home
+
+
+def test_plain_layout_checkbox_on_the_parse_tab(app):
+    """Вёрстка без разрывов включается и галочкой на вкладке разбора, не только просьбой в чате."""
+    client, ctx = app
+    url = _create(client).headers["location"]
+    st = ctx.store.load_lab(P, S, "7")
+    page = client.get(url).text
+    assert 'name="plain_layout"' in page and 'name="plain_layout" value="1" checked' not in page
+    form = {"topic": st.spec.topic, "goal": st.spec.goal, "date": st.spec.date, "assignment": st.spec.assignment,
+            "tasks": "\n".join(t.text for t in st.spec.tasks), "questions": "\n".join(st.spec.questions)}
+    client.post(url + "/confirm", data={**form, "layout_shown": "1", "plain_layout": "1"}, follow_redirects=False)
+    assert ctx.store.load_lab(P, S, "7").spec.plain_layout is True
+    assert 'name="plain_layout" value="1" checked' in client.get(url).text
+    client.post(url + "/confirm", data=form, follow_redirects=False)  # старая страница без галочки её не сбрасывает
+    assert ctx.store.load_lab(P, S, "7").spec.plain_layout is True
+    client.post(url + "/confirm", data={**form, "layout_shown": "1"}, follow_redirects=False)  # галочку сняли
+    assert ctx.store.load_lab(P, S, "7").spec.plain_layout is False

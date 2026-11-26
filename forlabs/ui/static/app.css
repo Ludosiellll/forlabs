@@ -367,6 +367,8 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .chat-bar > * { flex: none; white-space: nowrap; }
 .chat-bar .btn.link { padding-left: 6px; padding-right: 6px; }
 .chat-bar .check { display: flex; gap: 5px; align-items: center; margin: 0 4px; color: var(--muted); }
+.checkline { display: flex; gap: 8px; align-items: center; font-weight: 500; }
+.checkline input { width: auto; margin: 0; }
 .chat-form { position: relative; }
 .chat-bar .more { order: 1; }  /* в разметке — после «Отправить» (первая кнопка формы — отправка), на экране — рядом с «Запомнить» */
 .chat-bar .spacer { order: 2; flex: 1 1 0; }

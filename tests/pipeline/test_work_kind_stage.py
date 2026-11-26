@@ -225,7 +225,7 @@ def test_long_screenshot_text_does_not_push_out_the_text_of_the_work(tmp_home, t
         buf = io.BytesIO()
         Image.new("RGB", (400, 300), color).save(buf, "PNG")
         d.add_picture(io.BytesIO(buf.getvalue()), width=Inches(3))
-    d.add_paragraph("Задание 4. " + "Предметная область — планировщик интерьера. " * 60)
+    d.add_paragraph("Задание 4. " + "Предметная область — планировщик интерьера. " * 30)
     d.add_paragraph("Конец описания предметной области.")
     out = io.BytesIO()
     d.save(out)

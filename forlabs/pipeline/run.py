@@ -84,8 +84,8 @@ def normalize_number(raw: str) -> str:
     """«№ 7», «ЛР 7.», «Лабораторная работа №3» → «7», «3»; «7/8» → «7-8» (косая черта ломает адрес страницы)."""
     import re
 
-    s = re.sub(r"^\s*(лабораторная|практическая)\s+работа\s*", "", raw or "", flags=re.I)
-    s = re.sub(r"^\s*(лр|пр)\b\.?\s*", "", s, flags=re.I)
+    s = re.sub(r"^\s*((лабораторная|практическая)\s+работа|практическое\s+занятие)\s*", "", raw or "", flags=re.I)
+    s = re.sub(r"^\s*(лр|пр|пз)\b\.?\s*", "", s, flags=re.I)
     s = re.sub(r"^\s*(№|n|no\.?)\s*", "", s, flags=re.I)
     s = re.sub(r"[\\/]+", "-", s).strip().rstrip(".").strip()
     return re.sub(r"\s+", " ", s)
@@ -562,7 +562,8 @@ class Pipeline:
                 (staged / PASTED_NAME).write_text(pasted_text, encoding="utf-8")
             parts = read_parts(files, pasted_text)
             had_report = st.report is not None
-            current = None if is_draft(st.number) else normalize_number(st.spec.number if st.spec else st.number)
+            current = None if is_draft(st.number) else normalize_number(
+                st.spec.number if st.spec else plain_number(st.number))
             detected = single_number(parts)
             renumber = not had_report and not st.versions  # у лабы с отчётом рисунки в облаке лежат под её номером
             number = current
@@ -648,8 +649,7 @@ class Pipeline:
             st.spec = spec
         if st.spec is None:
             raise PipelineError("Сначала разбери методичку")
-        if st.spec.work_kind != old_kind:
-            self._kind_changed(st, old_dir)
+        undo_move = self._kind_changed(st, old_dir) if st.spec.work_kind != old_kind else None
         keep = [f for f in st.findings if f.stage != "spec" or f.rule_id != "spec.not_verbatim"]
         if not st.report:
             keep = [f for f in keep if f.stage == "spec"]
@@ -671,7 +671,17 @@ class Pipeline:
             st.docx_sha = None
         else:
             st.status = "confirmed"
-        return self._save(st)
+        return self._save_or_undo(st, undo_move)
+
+    def _save_or_undo(self, st: LabState, undo) -> LabState:
+        """Сохранение после смены вида работы: не сохранилось (облако отказало, связь пропала) — папка сдачи
+        возвращается на место, иначе на диске была бы «ПЗ7» при сохранённой «лабораторной»."""
+        try:
+            return self._save(st)
+        except Exception:
+            if undo is not None:
+                undo()
+            raise
 
     def _hand_in_dir(self, st: LabState) -> Path:
         from forlabs.pipeline.appshots import hand_in_dir
@@ -690,8 +700,11 @@ class Pipeline:
                      f"Отчёт Word: {report} "
                      + ("(уже лежит)" if report.is_file() else "(появится после кнопки «Сдать»)")]
             project = Path(st.project.folder) if st.project is not None and st.project.folder else None
-            if project is not None:
+            if project is not None and project.is_dir():
                 lines.append(f"Проект программы: {project} (открывается кнопкой «Папка проекта» слева)")
+            elif project is not None:  # лаба пришла с другого компьютера или папку убрали
+                lines.append(f"Проект программы: {project} — этой папки сейчас нет на компьютере; она появится, "
+                             "когда ForLabs соберёт программу заново.")
             else:
                 lines.append("Проекта программы нет.")
             others = _other_files(folder, project, report)
@@ -700,19 +713,44 @@ class Pipeline:
             return "\n".join(lines)
         except Exception as e:  # noqa: BLE001 — блок справочный: из-за него правка не должна сорваться
             logging.getLogger("forlabs").warning("Где что лежит: %s", e)
-            return ""
+            return ("Где что лежит на компьютере студента: сведений нет — папка сдачи сейчас недоступна. Пути не "
+                    "называй; скажи, что папка сдачи недоступна, и предложи проверить её в профиле.")
 
-    def _kind_changed(self, st: LabState, old_dir: Path | None) -> None:
+    def _folder_is_ours(self, st: LabState, folder: Path) -> bool:
+        """Папка сдачи точно этой работы и только её. По имени об этом судить нельзя: «ЛР7» — общая для двух работ
+        с одним номером, а «ПЗ7» может лежать у студента сама по себе. Своя — если ForLabs клал в неё файлы этой
+        работы (проект или сданный отчёт); только её — если ни одна другая работа предмета в неё не смотрит."""
+        def same(a, b) -> bool:
+            return bool(a) and os.path.normcase(os.path.abspath(str(a))) == os.path.normcase(os.path.abspath(str(b)))
+
+        mine = same(st.hand_in_dir, folder)
+        if not mine and st.project is not None and st.project.folder:  # работы, сделанные до этого поля
+            mine = same(Path(st.project.folder).parent, folder)
+        if not mine and st.status == "final":
+            short = safe_name(get_subject(st.subject_id).short_name)
+            mine = (folder / f"{folder.name}_{short}.docx").is_file()
+        if not mine:
+            return False
+        try:
+            for other in self.store.list_labs(st.profile_id, st.subject_id):
+                if other.number != st.number and (same(other.hand_in_dir, folder) or work_folder(other) == folder.name):
+                    return False
+        except Exception:  # noqa: BLE001 — соседей не узнать (нет связи): папку не трогаем
+            return False
+        return True
+
+    def _kind_changed(self, st: LabState, old_dir: Path | None):
         """Студент поменял вид работы (лабораторная → практическое занятие): выбор запоминается, заголовок отчёта
-        меняется при пересборке, папка сдачи переезжает под новое имя («ЛР7» → «ПЗ7») вместе с проектом. Чужую
-        папку не трогаем и ничего в неё не подмешиваем: занята или открыта — работа остаётся в прежней."""
-        kind = st.spec.work_kind
+        меняется при пересборке, папка сдачи переезжает под новое имя («ЛР7» → «ПЗ7») вместе с проектом и сданным
+        отчётом — но только своя (см. _folder_is_ours). Занята или открыта — работа остаётся в прежней.
+        Возвращает действие «вернуть как было» (если папка переехала) — для отката, когда состояние не сохранилось."""
+        kind, chosen, report_kind = st.spec.work_kind, st.work_kind, st.report.work_kind if st.report else None
         st.work_kind = kind
         if st.report is not None:
             st.report.work_kind = kind
         new_dir = self._hand_in_dir(st)
-        if old_dir is None or old_dir == new_dir or not old_dir.is_dir():
-            return
+        if old_dir is None or old_dir == new_dir or not old_dir.is_dir() or not self._folder_is_ours(st, old_dir):
+            return None
         try:
             if new_dir.exists():
                 raise FileExistsError(new_dir)
@@ -721,22 +759,57 @@ class Pipeline:
             self._emit(st, f"Папка сдачи теперь «{new_dir.name}», но прежняя «{old_dir.name}» осталась на месте: "
                            f"папка «{new_dir.name}» уже есть или файлы в «{old_dir.name}» открыты в другой программе. "
                            "Новые файлы появятся в новой папке — свои файлы перенеси из прежней сам.", "warn")
-            return
-        if st.project is not None and st.project.folder:
-            try:
-                st.project.folder = str(new_dir / Path(st.project.folder).relative_to(old_dir))
-            except ValueError:
-                pass
+            return None
         from forlabs.core.fs import atomic_write_text
 
         manifest = self.lab_dir(st) / "project" / "hand_in.json"
-        try:  # список своих файлов привязан к папке: без этого ForLabs принял бы свой проект за файлы студента
-            data = json.loads(manifest.read_text(encoding="utf-8"))
-            data["folder"] = str(new_dir / Path(data["folder"]).relative_to(old_dir))
-            atomic_write_text(manifest, json.dumps(data, ensure_ascii=False))
-        except (OSError, ValueError, KeyError, TypeError):
-            pass
-        self._emit(st, f"Папка сдачи переименована: «{old_dir.name}» → «{new_dir.name}».")
+        short = safe_name(get_subject(st.subject_id).short_name)
+        before = (st.project.folder if st.project is not None else None, st.hand_in_dir)
+
+        def moved(path: str | None, src: Path, dst: Path) -> str | None:
+            try:
+                return str(dst / Path(path).relative_to(src)) if path else path
+            except ValueError:
+                return path
+
+        def point(src: Path, dst: Path) -> None:
+            """Всё, что помнит о папке, — на новое место: проект, список своих файлов, сданный отчёт."""
+            if st.project is not None:
+                st.project.folder = moved(st.project.folder, src, dst)
+            st.hand_in_dir = str(dst)
+            try:  # список своих файлов привязан к папке: иначе ForLabs принял бы свой проект за файлы студента
+                data = json.loads(manifest.read_text(encoding="utf-8"))
+                data["folder"] = moved(data["folder"], src, dst)
+                atomic_write_text(manifest, json.dumps(data, ensure_ascii=False))
+            except (OSError, ValueError, KeyError, TypeError):
+                pass
+            try:  # сданный отчёт называется по папке: два отчёта с разными именами рядом — повод сдать не тот
+                report, renamed = dst / f"{src.name}_{short}.docx", dst / f"{dst.name}_{short}.docx"
+                if report.is_file() and not renamed.exists():
+                    report.rename(renamed)
+            except OSError:
+                pass
+
+        point(old_dir, new_dir)
+        handed = (new_dir / f"{new_dir.name}_{short}.docx").is_file()
+        self._emit(st, f"Папка сдачи переименована: «{old_dir.name}» → «{new_dir.name}»."
+                       + (" Отчёт в ней пока с прежним заголовком — нажми «Сдать», чтобы положить новый."
+                          if handed else ""))
+
+        def undo() -> None:
+            try:
+                if not old_dir.exists():
+                    new_dir.rename(old_dir)
+                    point(new_dir, old_dir)
+            except OSError:
+                pass
+            if st.project is not None:
+                st.project.folder = before[0]
+            st.hand_in_dir, st.work_kind = before[1], chosen
+            if st.report is not None and report_kind is not None:
+                st.report.work_kind = report_kind
+
+        return undo
 
     def _others(self, st: LabState) -> dict[str, str]:
         out = {}
@@ -775,9 +848,11 @@ class Pipeline:
             src = self._report_source(st, report) if report is not None else None
             text = src.text if src is not None else ""
             if text.strip() and not wanted:  # отчёт есть, а что из него взять — не сказано: молча он бы пропал
-                self._emit(st, "Общий отчёт прочитан, но брать из него нечего: номера прошлых лаб не указаны, а "
-                               "методичка на них не ссылается. Открой слева «Файлы, своя программа, прошлые лабы», "
-                               "впиши номера и прикрепи отчёт ещё раз.", "warn")
+                why = ("а методичка на них не ссылается" if st.spec is not None
+                       else "а методичка ещё не разобрана")
+                self._emit(st, f"Общий отчёт прочитан, но брать из него нечего: номера прошлых лаб не указаны, {why}. "
+                               "Открой слева «Файлы, своя программа, прошлые лабы», впиши номера и прикрепи отчёт "
+                               "ещё раз.", "warn")
             if text:
                 parts = split_labs(text)
                 chosen: dict[str, str] = {}
@@ -830,7 +905,16 @@ class Pipeline:
         текст работы, а студенту сказано, чего не хватает."""
         from forlabs.ingest.extract import PICTURE_RE
 
-        want = sorted({int(m.group(1)) - 1 for body in chosen.values() for m in PICTURE_RE.finditer(body)})
+        from forlabs.pipeline.memory import LINKED_MAX, LINKED_TEXT_PER_PICTURE
+
+        def by_pictures(body: str) -> bool:
+            """Работа дана снимками: своего текста на снимок мало. В обычном отчёте (страницы текста и окна
+            программы) читать снимки незачем — это минуты ожидания и токены при каждом сохранении связей."""
+            marks = len(PICTURE_RE.findall(body))
+            return bool(marks) and len(PICTURE_RE.sub("", body)) / marks < LINKED_TEXT_PER_PICTURE
+
+        want = sorted({int(m.group(1)) - 1 for body in chosen.values() if by_pictures(body)
+                       for m in PICTURE_RE.finditer(body)})
         want = [i for i in want if 0 <= i < len(src.pictures)]
         texts: dict[int, str | None] = {}
         if want:
@@ -846,14 +930,14 @@ class Pipeline:
                                + (f" ({error})" if error else "") + ". Что на них важно для этой работы, опиши в "
                                "пожеланиях или прикрепи сами документы в «Файлы к лабе».", "warn", step="parse")
 
-        from forlabs.pipeline.memory import LINKED_MAX
-
         def filled(body: str) -> str:
             # свой текст работы важнее текста со снимков (слайды, тест на 20 вопросов — это страницы): он остаётся
-            # целиком, а снимки делят оставшийся объём поровну
+            # целиком, а снимки делят оставшийся объём поровну; места совсем нет — текст снимков не берётся
             marks = [m for m in PICTURE_RE.finditer(body) if (texts.get(int(m.group(1)) - 1) or "").strip()]
             own = len(PICTURE_RE.sub("", body))
-            each = max(300, min(2500, (LINKED_MAX - own - 40 * len(marks)) // max(len(marks), 1)))
+            each = min(2500, (LINKED_MAX - own - 40 * len(marks)) // max(len(marks), 1))
+            if each < 200:
+                return re.sub(r"\n{3,}", "\n\n", PICTURE_RE.sub("", body)).strip()
 
             def one(m: re.Match) -> str:
                 got = (texts.get(int(m.group(1)) - 1) or "").strip()
@@ -866,8 +950,9 @@ class Pipeline:
         return {n: filled(body) for n, body in chosen.items()}
 
     def _lab_for_ref(self, st: LabState, ref: str) -> LabState | None:
-        """Работа этого предмета с номером ref. Номера у лабораторных и практических свои, поэтому сначала —
-        работа того же вида, что эта (для ПЗ 5 «работа 4» — это ПЗ 4, даже если она записана как «4-пз»)."""
+        """Работа этого предмета с номером ref. Номера у лабораторных и практических свои, поэтому берётся работа
+        того же вида, что эта (для ПЗ 5 «работа 4» — это ПЗ 4, даже если она записана как «4-пз»). Работа другого
+        вида годится, только если номер вписал сам студент: ссылка методички «в ПЗ№4» — не про ЛР 4."""
         from forlabs.report.derive import key_suffix
 
         kind = work_kind_of(st)
@@ -881,7 +966,8 @@ class Pipeline:
                 lab = None
             if lab is not None:
                 found.append(lab)
-        return next((x for x in found if work_kind_of(x) == kind), found[0] if found else None)
+        same = next((x for x in found if work_kind_of(x) == kind), None)
+        return same or (found[0] if found and ref in st.linked else None)
 
     def _done_in_forlabs(self, st: LabState, n: str) -> bool:
         lab = self._lab_for_ref(st, n)
@@ -1366,7 +1452,8 @@ class Pipeline:
 
     def _linked_labs(self, st: LabState) -> tuple[list[tuple[str, str, str, str]], list[str]]:
         """Прошлые лабы для этой: выбранные студентом и те, на которые ссылается методичка. Каждая —
-        (номер, откуда, тема, текст): сделанная в ForLabs — целиком с кодом, иначе кусок прикреплённого отчёта."""
+        (номер, откуда, тема, текст, подпись): сделанная в ForLabs — целиком с кодом, иначе кусок прикреплённого
+        отчёта. Подпись — как работа называется на самом деле («ЛР 4», даже если ссылается на неё ПЗ)."""
         from forlabs.pipeline.memory import LINKED_MAX
         from forlabs.pipeline.write import section_text
 
@@ -1383,7 +1470,7 @@ class Pipeline:
             except ValueError:
                 return -1.0
 
-        found: list[tuple[str, str, str, str]] = []
+        found: list[tuple[str, str, str, str, str]] = []
         missing: list[str] = []
         others: list[LabState] | None = None
         for ref in refs[:5]:
@@ -1412,9 +1499,10 @@ class Pipeline:
             if lab is not None and lab.report is not None:
                 body = "\n\n".join(f"Задание {x.n}: {x.title}\n{section_text(x)}" for x in lab.report.sections)
                 variant = f" {lab.spec.variant_text}" if lab.spec and lab.spec.variant_text else ""
-                found.append((lab.number, "forlabs", lab.spec.topic if lab.spec else "", (variant + "\n" + body)[:LINKED_MAX]))
+                found.append((lab.number, "forlabs", lab.spec.topic if lab.spec else "",
+                              (variant + "\n" + body)[:LINKED_MAX], work_label(lab)))
             elif key in st.linked_texts:
-                found.append((key, "report", "", st.linked_texts[key]))
+                found.append((key, "report", "", st.linked_texts[key], lab_label(work_kind_of(st), key)))
             else:
                 missing.append(label)
         return found, missing
@@ -1433,18 +1521,15 @@ class Pipeline:
                         "Если не та, поправь номер.")
             return ": из прикреплённого отчёта."
 
-        from forlabs.report.derive import lab_label
-
-        kind = work_kind_of(st)
         out = [Finding(stage="spec", rule_id="spec.linked_lab", severity="warn", location="Связь с прошлыми лабами",
-                       message=lab_label(kind, n) + (f" «{topic}»" if topic else "") + where(n, src, text))
-               for n, src, topic, text in found]
+                       message=label + (f" «{topic}»" if topic else "") + where(n, src, text))
+               for n, src, topic, text, label in found]
         # студент уже описал прошлую лабу в пожеланиях (как и просит замечание) — второй раз не просим
-        from forlabs.pipeline.memory import _LAB_REF, _PREV_REF, norm_number
+        from forlabs.pipeline.memory import _LAB_REF, _PRACTICE_PREV, _PRACTICE_REF, _PREV_REF, norm_number
 
         wishes = (st.wishes or (st.spec.wishes if st.spec else "") or "")
-        told = {norm_number(m.group(1)) for m in _LAB_REF.finditer(wishes)}
-        about_previous = bool(_PREV_REF.search(wishes)) or bool(told)
+        told = {norm_number(m.group(1)) for ref in (_LAB_REF, _PRACTICE_REF) for m in ref.finditer(wishes)}
+        about_previous = bool(_PREV_REF.search(wishes) or _PRACTICE_PREV.search(wishes)) or bool(told)
         missing = [m for m in missing
                    if not (norm_number(_WORK_PREFIX.sub("", m).strip()) in told if _WORK_PREFIX.match(m)
                            else about_previous)]
@@ -1460,8 +1545,8 @@ class Pipeline:
 
         found, _ = self._linked_labs(st)
         cut = LINKED_TOTAL // max(len(found), 1)
-        return "\n\n".join(f"ЛР №{plain_number(n)}" + (f" «{topic}»" if topic else "") + f"\n{text[:cut]}"
-                            for n, _, topic, text in found)
+        return "\n\n".join(label.replace(" ", " №", 1) + (f" «{topic}»" if topic else "") + f"\n{text[:cut]}"
+                            for _, _, topic, text, label in found)
 
     def _memory_text(self, st: LabState, own: bool = True) -> str:
         """own=False — без программы студента (план проекта получает её целиком отдельно)."""
@@ -1525,6 +1610,7 @@ class Pipeline:
             if mine:
                 self._save(st)
             backup_spec, backup_report = st.spec.model_copy(deep=True), st.report.model_copy(deep=True)
+            backup_kind, undo_move, layout_changed = st.work_kind, None, False
             vid = None
             try:
                 profile = self._profile(st)
@@ -1608,8 +1694,13 @@ class Pipeline:
 
                         kind_dir = self._hand_in_dir(st)
                         st.spec.work_kind = plan.work_kind
-                        self._kind_changed(st, kind_dir)
+                        undo_move = self._kind_changed(st, kind_dir)
                         changed.append(f"вид работы — {work_title(plan.work_kind).lower()}")
+                    if plan.layout:
+                        st.spec.plain_layout = plan.layout == "plain"
+                        layout_changed = True
+                        changed.append("вёрстка — без разрывов страниц и продолжений" if st.spec.plain_layout
+                                       else "вёрстка — по образцу")
                     memory = self._memory_text(st)
                     assets = self.lab_dir(st) / "assets"
                     assets.mkdir(parents=True, exist_ok=True)
@@ -1668,14 +1759,10 @@ class Pipeline:
                                         kind="edit", changed=changed, retake=retake, version=vid, profile=proposals)
                     st.chat.append(reply)
             except Exception as e:  # сбой посреди правки: разбор и отчёт — как до неё
-                failed_kind = st.spec.work_kind
-                try:  # вид работы успел поменяться: папка сдачи — тоже обратно (сбой здесь не прячет причину)
-                    failed_dir = self._hand_in_dir(st) if failed_kind != backup_spec.work_kind else None
-                    st.spec, st.report = backup_spec, backup_report
-                    if st.spec.work_kind != failed_kind:
-                        self._kind_changed(st, failed_dir)
-                except Exception:  # noqa: BLE001
-                    st.spec, st.report = backup_spec, backup_report
+                st.spec, st.report, st.work_kind = backup_spec, backup_report, backup_kind
+                if undo_move is not None:  # вид работы успел поменяться и папка сдачи переехала — назад
+                    undo_move()
+                    undo_move = None
                 if vid is not None:
                     st.versions = [v for v in st.versions if v.id != vid]
                 reason = getattr(e, "message_ru", None) or str(e) or type(e).__name__
@@ -1684,16 +1771,38 @@ class Pipeline:
                 self._emit(st, f"Правка не удалась: {reason}", "error", step="write")
                 return self._save(st)
             st.docx_sha = None  # документ устарел, пока вёрстка не закончится
-            self._save(st)  # правка сохранена до вёрстки: выключение во время вёрстки её не потеряет
+            self._save_or_undo(st, undo_move)  # правка сохранена до вёрстки: выключение её не потеряет
         st = self.render(st)
         if squares:
             reply.text += "\n" + self._squares_note(st)
+        if layout_changed:
+            reply.text += "\n" + self._layout_note(st)
         if st.status == "failed":
             reply.text += (f"\nПравку сохранил, но документ не собрался: {st.error} "
                            "Когда исправишь, нажми «Пересобрать документ».")
-        if squares or st.status == "failed":
+        if squares or layout_changed or st.status == "failed":
             st = self._save(st)
         return st
+
+    def _layout_note(self, st: LabState) -> str:
+        """Что на самом деле с разрывами после сборки — по самому документу, а не со слов модели."""
+        docx = self.lab_dir(st) / "report.docx"
+        if st.status == "failed" or not docx.exists():
+            return "Вёрстка поменяется, когда документ соберётся."
+        if not st.spec.plain_layout:
+            return "Пересобрал документ по образцу: длинные таблицы и листинги снова переносятся с «Продолжение …»."
+        try:
+            import zipfile
+
+            with zipfile.ZipFile(docx) as z:
+                xml = z.read("word/document.xml").decode("utf-8", "replace")
+            left = xml.count('w:type="page"') + len(re.findall(r">Продолжение (?:таблицы|листинга)\b", xml))
+        except Exception:  # noqa: BLE001
+            left = -1
+        if left == 0:
+            return ("Пересобрал документ: разрывов страниц и «Продолжение таблицы» в нём нет, таблицы и листинги "
+                    "идут целиком. Если Word ещё показывает старый файл, закрой его и открой заново.")
+        return ("Убрать разрывы не получилось — это ошибка ForLabs. Напиши в «Поддержку», приложив этот отчёт.")
 
     def _squares_note(self, st: LabState) -> str:
         """Что на самом деле с квадратами после сборки — по самому документу, а не со слов модели."""
@@ -1750,8 +1859,8 @@ class Pipeline:
             source = st.spec.source_text if st.spec else ""
             was_kind, was_dir = work_kind_of(st), (self._hand_in_dir(st) if st.spec else None)
             st.spec, st.report = target.spec.model_copy(deep=True), target.report.model_copy(deep=True)
-            if st.spec.work_kind != was_kind:  # версия с другим видом работы: папка сдачи возвращается вместе с ним
-                self._kind_changed(st, was_dir)
+            # версия с другим видом работы: папка сдачи возвращается вместе с ним
+            undo_move = self._kind_changed(st, was_dir) if st.spec.work_kind != was_kind else None
             text = f"Вернул отчёт к состоянию до правки «{target.label[:80]}»."
             if target.spec.source_text:  # версия до замены методички: возвращается и методичка
                 if current is not None:
@@ -1765,7 +1874,7 @@ class Pipeline:
             st.chat.append(ChatMessage(id=uuid.uuid4().hex[:8], role="assistant", at=_now(), kind="revert",
                                        version=current, text=text))
             st.docx_sha = None
-            self._save(st)
+            self._save_or_undo(st, undo_move)
         return self.render(st)
 
     def execute(self, st: LabState, only: list[int] | None = None, full: bool = False) -> LabState:
@@ -1926,7 +2035,7 @@ class Pipeline:
                                     "«Пересобрать документ».") from e
             self._emit(st, "Собираю документ и предпросмотр", step="finalize")
             rep = finalize(docx, profile.doc_author or profile.full_name, d / "render", self.soffice,
-                           prefer_word=self.prefer_word)
+                           prefer_word=self.prefer_word, plain=bool(st.spec is not None and st.spec.plain_layout))
             # последний шлюз: готовый документ (после доводки) сверяется с эталоном абзац за абзацем
             canon = compare(docx)
             for f in canon:
@@ -2008,6 +2117,7 @@ class Pipeline:
                                 f"в профиле. ({getattr(e, 'strerror', '') or e})") from e
         st.accepted_rules = sorted(accepted)
         st.status = "final"
+        st.hand_in_dir = str(out_dir)  # папка сдачи теперь точно этой работы: в ней её отчёт
         self._emit(st, f"Готово: {target}", "done")
         st = self._save(st)  # сдано — сразу; память предмета обновляется в фоне (запрос к модели может быть долгим)
         if self.memory is not None:
@@ -2126,8 +2236,8 @@ def work_kind_of(st) -> str:
 
 
 def plain_number(number: str) -> str:
-    """Номер работы без служебного хвоста вида: «7-пз» → «7»."""
-    return re.sub(r"-(?:лр|пр|пз)$", "", number or "", flags=re.IGNORECASE)
+    """Номер работы без служебного хвоста вида: «7-пз» → «7», «7-пз-2» (та же работа второй раз) → «7»."""
+    return re.sub(r"-(?:лр|пр|пз)(?:-\d+)?$", "", number or "", flags=re.IGNORECASE)
 
 
 def work_label(st) -> str:

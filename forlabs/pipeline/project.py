@@ -1353,6 +1353,7 @@ def _build_and_shoot(pipe, st: LabState, plan: ProjectPlan, llm, emit, retake: b
         try:
             folder, locked, saved = _copy_to_hand_in(pipe, st, plan, work)
             info.folder = str(folder)
+            st.hand_in_dir = str(folder.parent)  # папка сдачи теперь точно этой работы: в ней её проект
             if locked:
                 emit("Не обновил файлы проекта, открытые в другой программе: " + ", ".join(locked[:5])
                      + ". Закрой их и нажми «Пересобрать».", "warn")

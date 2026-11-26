@@ -218,7 +218,9 @@ def mark_page_starts(doc) -> int:
     return count
 
 
-def finalize(docx: Path, pdf_out: Path, author: str) -> WordReport:
+def finalize(docx: Path, pdf_out: Path, author: str, plain: bool = False) -> WordReport:
+    """plain — вёрстка «без разрывов»: таблицы и листинги не режутся на «Продолжение …», начала страниц не
+    отмечаются (значит, и разрывы страниц на их месте потом не ставятся)."""
     import pythoncom
     import win32com.client
 
@@ -233,11 +235,12 @@ def finalize(docx: Path, pdf_out: Path, author: str) -> WordReport:
         doc.Repaginate()
         for toc in doc.TablesOfContents:
             toc.Update()
-        report.continuations = place_continuations(doc)
+        if not plain:
+            report.continuations = place_continuations(doc)
         for toc in doc.TablesOfContents:
             toc.UpdatePageNumbers()
         try:
-            report.marks = mark_page_starts(doc)
+            report.marks = 0 if plain else mark_page_starts(doc)
         except Exception as e:  # без отметок документ остаётся с прежними настройками — разбивка та же
             report.warnings.append(f"Не удалось закрепить разрывы страниц: {e}")
         try:
@@ -383,7 +386,7 @@ def _kill_pids(pids) -> None:
             pass
 
 
-def _child(docx: str, pdf_out: str, author: str, queue) -> None:
+def _child(docx: str, pdf_out: str, author: str, queue, plain: bool = False) -> None:
     import win32com.client  # noqa: F401 — заранее, чтобы снимок PID был сразу перед запуском Word
 
     before = _word_pids()
@@ -396,13 +399,14 @@ def _child(docx: str, pdf_out: str, author: str, queue) -> None:
 
     win32com.client.DispatchEx = dispatch_and_report
     try:
-        rep = finalize(Path(docx), Path(pdf_out), author)
+        rep = finalize(Path(docx), Path(pdf_out), author, plain)
         queue.put(("ok", rep.continuations, rep.warnings, rep.marks))
     except Exception as e:  # отдаём текст ошибки родителю
         queue.put(("error", 0, [f"{type(e).__name__}: {e}"]))
 
 
-def finalize_isolated(docx: Path, pdf_out: Path, author: str, timeout: float = 300.0, target=None) -> WordReport:
+def finalize_isolated(docx: Path, pdf_out: Path, author: str, timeout: float = 300.0, target=None,
+                      plain: bool = False) -> WordReport:
     """Word в отдельном процессе с тайм-аутом: зависший диалог Word не вешает приложение, а сам зависший
     WINWORD.EXE завершается (иначе он держит документ до перезагрузки)."""
     import multiprocessing as mp
@@ -410,7 +414,8 @@ def finalize_isolated(docx: Path, pdf_out: Path, author: str, timeout: float = 3
 
     ctx = mp.get_context("spawn")
     q = ctx.Queue()
-    p = ctx.Process(target=target or _child, args=(str(docx), str(pdf_out), author, q), daemon=True)
+    p = ctx.Process(target=target or _child, args=(str(docx), str(pdf_out), author, q) + ((True,) if plain else ()),
+                    daemon=True)
     baseline = _automation_word_pids() or set()  # Word для автоматизации, что уже были до нас
     p.start()
     pids: set[int] = set()

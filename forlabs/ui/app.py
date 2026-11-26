@@ -854,6 +854,8 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
             "questions": [ln.strip() for ln in (f.get("questions") or "").splitlines() if ln.strip()]})
         if f.get("work_kind") in WORK_TITLES:  # поля нет (страница открыта до обновления) — вид остаётся прежним
             spec.work_kind = f.get("work_kind")
+        if f.get("layout_shown"):  # галочка была на странице: снята — значит, вёрстка по образцу
+            spec.plain_layout = bool(f.get("plain_layout"))
         profile = ctx.store.get_profile(p)
         own = " ".join((f.get("conclusion") or "").split())
         formula = goal_to_conclusion(spec.goal, profile.gender if profile else "m").text
