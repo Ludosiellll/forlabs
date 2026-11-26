@@ -410,8 +410,17 @@ class Pipeline:
                 spec.work_kind = st.work_kind
             if st.spec is not None:  # повторный разбор: то, что студент выбрал на этой работе, остаётся
                 spec.task_files, spec.plain_layout = st.spec.task_files, st.spec.plain_layout
+            elif st.task_files is not None:
+                spec.task_files = st.task_files
             else:
-                spec.task_files = st.task_files if st.task_files is not None else bool(enrollment.task_files)
+                from forlabs.pipeline import taskfiles as tf
+
+                asked = tf.asks_for_files(wishes)
+                spec.task_files = bool(enrollment.task_files) or asked
+                if asked and not enrollment.task_files:
+                    self._emit(st, "В пожеланиях ты просишь задания отдельными файлами — включил этот режим: файл "
+                                   "каждого задания ляжет в папку сдачи, в отчёте будут их снимки. Выключается "
+                                   "галочкой на вкладке «Разбор методички».", step="parse")
             if known is None:
                 findings += _several_labs(src.text, spec.number)
             if unread:

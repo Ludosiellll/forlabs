@@ -23,12 +23,22 @@ _PRESENTATION = re.compile(r"презентаци", re.IGNORECASE)
 _WORD = re.compile(r"(?<![A-Za-zА-Яа-яЁё])(?:word(?![A-Za-z])|ворд[а-яё]*)", re.IGNORECASE)
 _IN_WORD = re.compile(r",?\s*(?:открыт\w*\s+)?в\s+(?:документе\s+|файле\s+)?(?:(?:MS|Microsoft)\s+)?(?:Word|ворде)$",
                       re.IGNORECASE)  # хвост подписи: «…, открытый в документе MS Word»
+# Просьба в пожеланиях: «все задания отдельным файлом», «каждое задание своим документом», «в разных файлах
+# задания». Только про задания во множественном числе или «каждое»: «Задание 2: данные из отдельного файла» — не то.
+_SEPARATE = r"(?:отдельн(?:ым|ыми|ом|ых)|разн(?:ых|ыми)|сво(?:им|ими|й|ём|ем))\s+(?:\w+\s+)?(?:файл|документ)"
+_TASKS = r"(?:кажд\w+\s+задани\w+|задани(?:я|й|ям|ями|ях)(?!\w))"
+_ASKS = re.compile(rf"{_TASKS}[^.!?\n]{{0,50}}?{_SEPARATE}|{_SEPARATE}\w*\s+(?:\w+\s+){{0,2}}?{_TASKS}", re.IGNORECASE)
 _UNSAFE = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
 
 
 def is_presentation(task_text: str) -> bool:
     """Задание просит презентацию: её файл (PowerPoint) ForLabs не делает — слайды остаются студенту."""
     return bool(_PRESENTATION.search(task_text or ""))
+
+
+def asks_for_files(wishes: str | None) -> bool:
+    """В пожеланиях к работе просят задания отдельными файлами — режим включается без галочки."""
+    return bool(_ASKS.search(wishes or ""))
 
 
 def ready(section: TaskSection) -> bool:

@@ -266,3 +266,19 @@ def test_mode_turned_on_for_a_written_report_drops_places_for_word_screenshots(t
     assert not any(isinstance(b, Figure) for b in st.report.sections[1].blocks)  # и в самой лабе места больше нет
     journal = (pipe.lab_dir(st) / "journal.log").read_text(encoding="utf-8")
     assert "снимк" in journal and "Word" in journal and "задани" in journal  # студенту сказано, что убрано и почему
+
+
+def test_wish_for_separate_files_turns_the_mode_on(tmp_home, tmp_path):
+    """Студентка написала это в пожеланиях при создании работы — режим включается сам, и ей об этом сказано."""
+    from test_run import FIXTURE, RAW, setup
+
+    pipe, fake = setup(tmp_home, tmp_path, [RAW, RAW])
+    wish = "Все задания делаются отдельным файлом а в отчет вставляются скриншотами."
+    st = pipe.parse(pipe.create_lab("ivanov", "psip", [(FIXTURE.name, FIXTURE.read_bytes())], wishes=wish),
+                    date="24.09.2026")
+    assert st.spec.task_files is True
+    journal = (pipe.lab_dir(st) / "journal.log").read_text(encoding="utf-8")
+    assert "отдельными файлами" in journal and "пожелани" in journal
+    off = pipe.parse(pipe.create_lab("ivanov", "psip", [(FIXTURE.name, FIXTURE.read_bytes())], wishes=wish,
+                                     task_files=False), date="24.09.2026")
+    assert off.spec.task_files is False  # выбрано «текстом в отчёте» — выбор в форме важнее фразы
