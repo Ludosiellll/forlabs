@@ -1829,6 +1829,17 @@ class Pipeline:
 
     # ---------- задания отдельными файлами ----------
 
+    def _drop_document_shots(self, st: LabState) -> None:
+        """Режим файлов включили у написанной работы: места под «снимок документа в Word» больше не нужны."""
+        from forlabs.pipeline import taskfiles as tf
+
+        if st.spec is None or not st.spec.task_files or st.report is None:
+            return
+        if dropped := tf.drop_document_shots(st.report):
+            where = ("задании " if len(dropped) == 1 else "заданиях ") + ", ".join(map(str, dropped))
+            self._emit(st, f"Убрал места под снимки документа Word в {where}: в режиме файлов документ задания "
+                           "собирается сам, снимать его не нужно.", step="render")
+
     def _doc_pages(self, docx: Path, work: Path, author: str) -> list[Path]:
         """Картинки страниц документа задания. Пусто — снять нечем (нет ни Word, ни LibreOffice)."""
         if self.page_renderer is not None:
@@ -2248,6 +2259,7 @@ class Pipeline:
                 raise PipelineError("Отчёт дописан не до конца — нажми «Продолжить», чтобы дописать задания и ответы.")
             profile = self._profile(st)
             if st.spec is not None:
+                self._drop_document_shots(st)
                 # профиль или разбор могли поменяться после выполнения: шапка, вывод и проверки — по текущим
                 st.report = refresh_derived(st.report, st.spec, profile, self._enrollment(profile, st.subject_id))
                 st.findings = _keep_spec(st.findings, check_all(st.report, st.spec, profile, self._others(st)))

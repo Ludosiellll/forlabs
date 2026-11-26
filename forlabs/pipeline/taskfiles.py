@@ -19,6 +19,7 @@ PAD = 24  # точек белого поля вокруг содержимого
 GAP = 28  # между двумя страницами на одном снимке
 ONE_PAGE_CM, TWO_PAGES_CM = 11.0, 16.5  # ширина снимка в отчёте: одна страница и две рядом
 _PRESENTATION = re.compile(r"презентаци", re.IGNORECASE)
+_WORD = re.compile(r"(?<![A-Za-zА-Яа-яЁё])(?:word(?![A-Za-z])|ворд[а-яё]*)", re.IGNORECASE)  # не Password и не WordPress
 _UNSAFE = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
 
 
@@ -32,6 +33,28 @@ def ready(section: TaskSection) -> bool:
     has = any(getattr(b, "text", "").strip() or getattr(b, "items", None) or getattr(b, "code", "").strip()
               or getattr(b, "rows", None) or isinstance(b, Figure) for b in section.blocks)
     return has and all(b.image_path for b in section.blocks if isinstance(b, Figure))
+
+
+def _document_shot(block) -> bool:
+    """Место под снимок самого документа задания: ждёт студента (или агента в Word) и говорит про Word."""
+    if not isinstance(block, Figure) or block.image_path:
+        return False
+    if block.app_task is not None:
+        return block.app_task.app == "word"
+    return bool(_WORD.search(f"{block.topic} {block.slot or ''}"))
+
+
+def drop_document_shots(doc: ReportDoc) -> list[int]:
+    """Убрать из заданий места под «снимок документа в Word». В обычном режиме автор отчёта оставляет их студенту;
+    в режиме файлов этот документ и есть файл задания, а с таким местом задание ждало бы снимка и осталось без
+    файла. Вставленные снимки и снимки других программ не трогаются. → номера заданий, где что-то убрано."""
+    changed = []
+    for sec in doc.sections:
+        keep = [b for b in sec.blocks if not _document_shot(b)]
+        if len(keep) != len(sec.blocks):
+            sec.blocks = keep
+            changed.append(sec.n)
+    return changed
 
 
 def title_of(section: TaskSection) -> str:

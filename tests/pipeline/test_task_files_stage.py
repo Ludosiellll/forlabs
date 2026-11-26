@@ -250,3 +250,19 @@ def test_semester_report_uses_the_pictures_too(tmp_home, tmp_path):
     texts = _texts(out)
     assert any(t.startswith("Рисунок 1 – Результат выполнения задания 1") for t in texts)
     assert not any(t.startswith("Ответ: ") for t in texts)
+
+
+def test_mode_turned_on_for_a_written_report_drops_places_for_word_screenshots(tmp_home, tmp_path):
+    """Работа написана в обычном режиме: в задании ждёт место под «снимок документа в Word». Студент ставит галочку
+    «отдельными файлами» — место уходит само, файл задания собирается, снимков от студента больше не нужно."""
+    from forlabs.core.models import Figure
+
+    pipe, fake, st, calls = files_lab(tmp_home, tmp_path)
+    st.report.sections[1].blocks.append(Figure(topic="Техническое задание в документе MS Word",
+                                               slot="Открой документ MS Word с ТЗ и сними первую страницу"))
+    st = pipe.render(_on(pipe, st))
+    assert st.status == "rendered", st.error
+    assert "Задание 2.docx" in st.task_docs and not pipe.slots(st)
+    assert not any(isinstance(b, Figure) for b in st.report.sections[1].blocks)  # и в самой лабе места больше нет
+    journal = (pipe.lab_dir(st) / "journal.log").read_text(encoding="utf-8")
+    assert "снимк" in journal and "Word" in journal and "задани" in journal  # студенту сказано, что убрано и почему

@@ -75,3 +75,32 @@ def test_file_names_are_safe_and_stable():
     assert tf.file_name(TaskSection(n=1, title="Задание")) == "Задание 1.docx"
     long = TaskSection(n=2, title="Задание", doc_title="Очень " * 40)
     assert len(tf.file_name(long)) <= 90 and tf.file_name(long).endswith(".docx")
+
+
+def test_place_for_a_picture_of_the_word_document_goes_away():
+    """В обычном режиме автор отчёта оставляет студенту место под «снимок документа в Word». В режиме файлов этот
+    документ и есть файл задания — место не нужно, иначе задание ждёт снимка и остаётся без файла."""
+    from forlabs.core.models import AppTask
+
+    blocks = [
+        Paragraph(text="Текст технического задания."),
+        Figure(topic="Техническое задание на приложение в документе MS Word", slot="Открой документ и сними начало"),
+        Figure(topic="Вопросы интервью и ответы", slot="Открой свой файл в ворде, в кадре все вопросы"),
+        Figure(topic="Документ с ТЗ", app_task=AppTask(app="word", goal="Набери документ и сними страницу")),
+        Figure(topic="Окно программы «Макет 3D»", slot="Запусти программу и сними главное окно"),
+        Figure(topic="Мой снимок документа в Word", image_path="assets/a.png"),
+        Figure(topic="Схема сети", app_task=AppTask(app="packettracer", goal="Собери сеть")),
+    ]
+    doc = ReportDoc(lab_number="2", sections=[TaskSection(n=1, title="Составьте ТЗ.", blocks=blocks),
+                                              TaskSection(n=2, title="Опишите.", blocks=[Paragraph(text="Описание.")])])
+    assert tf.drop_document_shots(doc) == [1]
+    left = [b.topic for b in doc.sections[0].blocks if isinstance(b, Figure)]
+    assert left == ["Окно программы «Макет 3D»", "Мой снимок документа в Word", "Схема сети"]
+    assert doc.sections[0].blocks[0].text == "Текст технического задания."  # текст задания цел
+    assert tf.drop_document_shots(doc) == []  # второй раз убирать нечего
+
+
+def test_word_in_a_longer_word_is_not_the_word_document():
+    doc = ReportDoc(lab_number="2", sections=[TaskSection(n=1, title="Покажите.", blocks=[
+        Paragraph(text="Текст."), Figure(topic="Окно программы Password Keeper", slot="Сними окно с паролями")])])
+    assert tf.drop_document_shots(doc) == [] and len(doc.sections[0].blocks) == 2
