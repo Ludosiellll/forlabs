@@ -64,6 +64,9 @@
     </details>
     {% endif %}
 
+    {% if st.spec and st.spec.task_files %}
+    <div class="small muted" style="margin:8px 0">Файлы заданий в папке сдачи: {{ st.task_docs|join(', ') if st.task_docs else 'появятся, когда соберётся документ' }}</div>
+    {% endif %}
     <details class="fold lab-inputs"{{ ' open' if link_notes }}>
       <summary>Файлы, своя программа, прошлые лабы{% if st.linked or materials or st.own %} · {{ st.linked|length + materials|length + (1 if st.own else 0) }}{% endif %}</summary>
       <form method="post" action="{{ base_url }}/links" enctype="multipart/form-data" class="stack" data-once>
@@ -211,6 +214,10 @@
           <div class="field"><label for="work_kind">Вид работы</label>
             <select id="work_kind" name="work_kind">{% for k, title in WORK_TITLES.items() %}<option value="{{ k }}"{{ ' selected' if k == st.spec.work_kind }}>{{ title }}</option>{% endfor %}</select>
             <div class="hint">От него заголовок отчёта, имя файла и папки сдачи.</div></div>
+          <div class="field"><input type="hidden" name="files_shown" value="1">
+            <label class="checkline"><input type="checkbox" name="task_files" value="1"{{ ' checked' if st.spec.task_files }}>
+              Задания — отдельными файлами Word, в отчёте их снимки</label>
+            <div class="hint">ForLabs сам положит файл каждого задания в папку сдачи и вставит в отчёт снимки его страниц. Презентации он не делает.</div></div>
           <div class="field"><input type="hidden" name="layout_shown" value="1">
             <label class="checkline"><input type="checkbox" name="plain_layout" value="1"{{ ' checked' if st.spec.plain_layout }}>
               Без разрывов страниц и «Продолжение таблицы»</label>

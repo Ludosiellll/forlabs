@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import io
 import shutil
 from datetime import datetime
 import json
@@ -523,7 +525,8 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
                     academic_year=(f.get(f"enr_{sid}_year") or "").strip(),
                     variant=int(v) if v.isdigit() else subj.default_variant,
                     workplace=int(w) if w.isdigit() else None,
-                    header_style="short" if f.get(f"enr_{sid}_style") == "short" else "long"))
+                    header_style="short" if f.get(f"enr_{sid}_style") == "short" else "long",
+                    task_files=bool(f.get(f"enr_{sid}_files"))))
         new_name = (f.get("new_subject_name") or "").strip()
         if not new_name and ((f.get("new_subject_short") or "").strip() or (f.get("new_subject_teacher") or "").strip()):
             # начали заполнять свой предмет, а названия нет: молча его не теряем
@@ -558,6 +561,43 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
             base["doc_author"] = " ".join(parts[:2])
         await asyncio.to_thread(ctx.store.save_profile, Profile.model_validate(base))
         return redirect(f"/?profile={_q(pid)}", msg="Профиль сохранён")
+
+    @app.post("/profiles/{pid}/stamp")
+    async def profile_stamp(pid: str, stamp: UploadFile | None = File(None)):
+        """Картинка-метка для файлов заданий: приводится к квадрату (в документе не исказится) и к 300 точкам."""
+        back = f"/profiles/{_q(pid)}"
+        if stamp is None or not stamp.filename:
+            return redirect(back, err="Выбери картинку")
+        if (stamp.size or 0) > 8_000_000:
+            return redirect(back, err="Картинка больше 8 МБ — возьми поменьше")
+        raw = await stamp.read()
+        try:
+            from PIL import Image
+
+            with Image.open(io.BytesIO(raw)) as im:
+                im = im.convert("RGBA")
+                side = max(im.size)
+                square = Image.new("RGBA", (side, side), (255, 255, 255, 0))
+                square.paste(im, ((side - im.width) // 2, (side - im.height) // 2))
+                square.thumbnail((300, 300))
+                buf = io.BytesIO()
+                square.save(buf, "PNG", optimize=True)
+        except Exception:  # noqa: BLE001 — не картинка или формат, которого не знает Pillow
+            return redirect(back, err="Это не картинка или её формат не читается — нужен PNG или JPG")
+        profile = await asyncio.to_thread(ctx.store.get_profile, pid)
+        if profile is None:
+            return redirect("/profiles", err="Профиль не найден")
+        profile.stamp = base64.b64encode(buf.getvalue()).decode("ascii")
+        await asyncio.to_thread(ctx.store.save_profile, profile)
+        return redirect(back, msg="Картинка-метка сохранена: она появится в файлах заданий при следующей сборке")
+
+    @app.post("/profiles/{pid}/stamp/remove")
+    async def profile_stamp_remove(pid: str):
+        profile = await asyncio.to_thread(ctx.store.get_profile, pid)
+        if profile is not None and profile.stamp:
+            profile.stamp = ""
+            await asyncio.to_thread(ctx.store.save_profile, profile)
+        return redirect(f"/profiles/{_q(pid)}", msg="Картинка-метка убрана")
 
     @app.post("/profiles/{pid}/delete")
     def profile_delete(pid: str):
@@ -610,8 +650,9 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
                       wish_images: list[UploadFile] | None = File(None), form_token: str = Form(""),
                       linked: str = Form(""), linked_report: UploadFile | None = File(None),
                       materials: list[UploadFile] | None = File(None), own_zip: UploadFile | None = File(None),
-                      own_path: str = Form(""), work_kind: str = Form("")):
+                      own_path: str = Form(""), work_kind: str = Form(""), task_files: str = Form("")):
         kind = work_kind if work_kind in WORK_TITLES else None  # пусто — как названа в методичке
+        as_files = {"1": True, "0": False}.get(task_files)  # пусто — как настроено у предмета
         if form_token:  # двойной клик или повторная отправка формы — одна лаба
             with ctx._lock:
                 done = ctx.form_tokens.get(form_token)
@@ -703,7 +744,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
                     taken = await asyncio.to_thread(ctx.pipeline._taken, profile_id, subject_id, n)
                     st = await asyncio.to_thread(ctx.pipeline.create_lab, profile_id, subject_id, part,
                                                  number=None if taken else n, wishes=wishes, wish_images=photos,
-                                                 work_kind=kind)
+                                                 work_kind=kind, task_files=as_files)
                 except Exception as e:  # одна не создалась — остальные создаются
                     failed.append(e)
                     problems.append(f"ЛР {n} не создана: {error_text(e)}")
@@ -732,7 +773,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         try:
             st = await asyncio.to_thread(ctx.pipeline.create_lab, profile_id, subject_id, data,
                                          number=number.strip() or None, pasted_text=text, wishes=wishes,
-                                         wish_images=photos, work_kind=kind)
+                                         wish_images=photos, work_kind=kind, task_files=as_files)
         except Exception as e:  # лаба не создана — форму можно отправить снова
             await cleanup()
             if form_token:
@@ -856,6 +897,8 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
             spec.work_kind = f.get("work_kind")
         if f.get("layout_shown"):  # галочка была на странице: снята — значит, вёрстка по образцу
             spec.plain_layout = bool(f.get("plain_layout"))
+        if f.get("files_shown"):
+            spec.task_files = bool(f.get("task_files"))
         profile = ctx.store.get_profile(p)
         own = " ".join((f.get("conclusion") or "").split())
         formula = goal_to_conclusion(spec.goal, profile.gender if profile else "m").text

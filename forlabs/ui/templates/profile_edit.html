@@ -51,6 +51,8 @@
                 <div class="field"><label for="w_{{ sid }}">Номер рабочего места</label>
                   <input id="w_{{ sid }}" name="enr_{{ sid }}_workplace" type="number" min="1" value="{{ e.workplace if e and e.workplace else '' }}" placeholder="если вариант по номеру ПК"></div>
               </div>
+              <label class="checkline small"><input type="checkbox" name="enr_{{ sid }}_files"{{ ' checked' if e and e.task_files }}>
+                Задания — отдельными файлами, в отчёте их снимки (так бывает на практике)</label>
             </details>
           </div>
         </div>
@@ -105,6 +107,19 @@
       <button class="btn link small danger-link" type="submit" form="delete-form">Удалить профиль</button>{% endif %}</div>
   </form>
   {% if not is_new %}
+  <section class="pane" style="margin-top:18px">
+    <h2 class="sect" style="margin-top:0">Картинка-метка</h2>
+    <p class="small muted sect-hint">Ставится в левый верхний угол первой страницы каждого файла задания — если преподаватель просит помечать свои файлы.</p>
+    <div class="row" style="align-items:center;gap:14px">
+      {% if p.stamp %}<img src="data:image/png;base64,{{ p.stamp }}" alt="Картинка-метка" width="72" height="72" style="border-radius:8px;border:1px solid var(--line)">{% endif %}
+      <form method="post" action="/profiles/{{ q(p.id) }}/stamp" enctype="multipart/form-data" class="row" data-once>
+        <label class="btn small filebtn">{{ 'Заменить картинку' if p.stamp else 'Выбрать картинку' }}
+          <input class="visually-hidden" type="file" name="stamp" accept="image/png,image/jpeg,image/webp" data-autosubmit></label>
+        <noscript><button class="btn small" type="submit">Загрузить</button></noscript>
+      </form>
+      {% if p.stamp %}<form method="post" action="/profiles/{{ q(p.id) }}/stamp/remove"><button class="btn link small" type="submit">Убрать</button></form>{% endif %}
+    </div>
+  </section>
   <form id="delete-form" method="post" action="/profiles/{{ q(p.id) }}/delete" hidden
         onsubmit="return confirm('Удалить профиль? Лабы останутся, но без профиля их не открыть.')"></form>
   {% endif %}

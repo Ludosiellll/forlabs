@@ -17,6 +17,12 @@
         <select id="work_kind" name="work_kind"><option value="">как в методичке</option>
           {% for k, title in WORK_TITLES.items() %}<option value="{{ k }}">{{ title }}</option>{% endfor %}</select></div>
     {% endmacro %}
+    {% macro files_field() %}
+      <div class="field"><label for="task_files">Задания в отчёте</label>
+        <select id="task_files" name="task_files"><option value="">как у предмета</option>
+          <option value="0">текстом, как обычно</option>
+          <option value="1">отдельными файлами, в отчёте — их снимки</option></select></div>
+    {% endmacro %}
     {% if profiles|length > 1 %}
     <div class="grid2">
       <div class="field"><label for="profile_id">Профиль</label>
@@ -24,15 +30,12 @@
       <div class="field"><label for="subject_id">Предмет</label>
         <select id="subject_id" name="subject_id">{{ subject_options() }}</select></div>
     </div>
-    <div class="grid2">{{ kind_field() }}<div></div></div>
     {% else %}
     <input type="hidden" name="profile_id" value="{{ profile_id }}">
-    <div class="grid2">
-      <div class="field"><label for="subject_id">Предмет</label>
-        <select id="subject_id" name="subject_id">{{ subject_options() }}</select></div>
-      {{ kind_field() }}
-    </div>
+    <div class="field"><label for="subject_id">Предмет</label>
+      <select id="subject_id" name="subject_id">{{ subject_options() }}</select></div>
     {% endif %}
+    <div class="grid2">{{ kind_field() }}{{ files_field() }}</div>
     <div class="field">
       <span class="label">Методичка</span>
       <div class="dropzone" data-dropzone>
