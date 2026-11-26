@@ -70,16 +70,24 @@ def sheets(pages: list[Path], out_dir: Path, prefix: str) -> list[tuple[Path, st
             sheet.paste(pair[1], (pair[0].width + GAP, 0))
             label = f"страницы {i + 1}–{i + 2}"
         else:
-            sheet, label = pair[0], (f"страница {i + 1}" if len(pages) > 1 else "")
+            sheet, label = pair[0], f"страница {i + 1}"
         path = out_dir / f"{prefix}_{i // 2 + 1}.png"
         sheet.save(path, dpi=(144, 144))
         out.append((path, label))
+    if len(out) == 1:  # документ целиком на одном снимке — уточнять страницы незачем
+        out = [(out[0][0], "")]
     return out
 
 
 def _figures(title: str, shots: list[tuple[Path, str]]) -> list[Figure]:
-    return [Figure(topic=f"{title}, {label}" if label else title, image_path=str(path),
-                   width_cm=TWO_PAGES_CM if label.startswith("страницы") else ONE_PAGE_CM)
+    def width(path: Path) -> float:
+        try:
+            with Image.open(path) as im:
+                return TWO_PAGES_CM if im.width > im.height else ONE_PAGE_CM
+        except OSError:
+            return ONE_PAGE_CM
+
+    return [Figure(topic=f"{title} ({label})" if label else title, image_path=str(path), width_cm=width(Path(path)))
             for path, label in shots]
 
 

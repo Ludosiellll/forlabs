@@ -60,8 +60,8 @@ def test_files_appear_in_the_hand_in_folder_and_their_pictures_in_the_report(tmp
     task1 = _texts(_folder(tmp_path) / "Задание 1.docx")
     assert task1[0].startswith("Задание 1. ") and any(t in before for t in task1[1:])  # тот же текст, что был в отчёте
     report = _texts(st.docx_path)
-    assert "Результат выполнения задания 1, страницы 1–2 представлен на рисунке 1" in report
-    assert "Рисунок 1 – Результат выполнения задания 1, страницы 1–2" in report
+    assert "Результат выполнения задания 1 представлен на рисунке 1" in report
+    assert "Рисунок 1 – Результат выполнения задания 1" in report
     assert any(t.startswith("Рисунок") and "Ответы на контрольные вопросы" in t for t in report)
     assert not any(t.startswith("Ответ: ") for t in report)  # ответы — только снимком
     body = [t for t in task1[1:] if len(t) > 40]

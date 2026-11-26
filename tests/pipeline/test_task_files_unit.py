@@ -26,6 +26,8 @@ def test_one_page_is_one_picture_and_more_go_in_pairs(tmp_path):
     pages = [_page(tmp_path / f"page-{i}.png") for i in range(1, 6)]
     one = tf.sheets(pages[:1], tmp_path / "o", "t1")
     assert [label for _, label in one] == [""] and one[0][0].is_file()
+    two = tf.sheets(pages[:2], tmp_path / "w", "t1")
+    assert [label for _, label in two] == [""]  # документ целиком на одном снимке — уточнять страницы незачем
     five = tf.sheets(pages, tmp_path / "f", "t1")
     assert [label for _, label in five] == ["страницы 1–2", "страницы 3–4", "страница 5"]
     pair, single = Image.open(five[0][0]), Image.open(five[2][0])
@@ -56,8 +58,8 @@ def test_report_shows_pictures_of_the_files_instead_of_the_text(tmp_path):
     out = tf.as_screens(doc, shots)
     figs = out.sections[0].blocks
     assert [type(b).__name__ for b in figs] == ["Figure", "Figure"]
-    assert figs[0].topic == "Вопросы интервью по требованиям к приложению, страницы 1–2"
-    assert figs[0].image_path == str(tmp_path / "a.png") and figs[1].topic.endswith(", страница 3")
+    assert figs[0].topic == "Вопросы интервью по требованиям к приложению (страницы 1–2)"
+    assert figs[0].image_path == str(tmp_path / "a.png") and figs[1].topic.endswith(" (страница 3)")
     assert out.sections[1] == sec2  # задание, которое ждёт снимка студента, остаётся как было
     assert out.questions == [] and [f.topic for f in out.answer_figures] == ["Ответы на контрольные вопросы"]
     assert doc.sections[0].blocks[0].text == "Вопросы составлены." and doc.questions  # исходный отчёт не тронут
