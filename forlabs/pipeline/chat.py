@@ -40,6 +40,7 @@ from forlabs.pipeline.write import (
     student_block,
     wishes_text,
 )
+from forlabs.report.derive import WORK_TITLES, work_title
 
 SOURCE_LIMIT = 30_000
 MAX_LOOKS = 3  # сколько раз за одно сообщение чат может заглянуть в файлы проекта, прежде чем ответить
@@ -90,7 +91,8 @@ class EditPlan(BaseModel):
         if isinstance(v, dict):
             kind = str(v.get("kind") or "").strip().lower()
             if kind not in ("edit", "answer", "question", "offtopic"):  # непонятное: есть правки — правка
-                kind = "edit" if (v.get("tasks") or v.get("questions") or v.get("conclusion")) else "question"
+                kind = "edit" if (v.get("tasks") or v.get("questions") or v.get("conclusion")
+                                  or v.get("work_kind")) else "question"
             v = {**v, "kind": kind, "profile": v.get("profile") if isinstance(v.get("profile"), list) else [],
                  "look": v.get("look") if isinstance(v.get("look"), list) else [],
                  "project": v.get("project") if isinstance(v.get("project"), str) else None}
@@ -106,12 +108,14 @@ class EditPlan(BaseModel):
     conclusion: str | None = None
     remember: str | None = None
     reshoot: bool = False  # студент просит ForLabs самому снять скриншоты окон программы ещё раз
+    work_kind: str | None = None  # работа называется иначе: lab, practice или session
     project: str | None = None  # что исправить в самой программе: ForLabs чинит файлы проекта и пересобирает
     look: list[Look] = Field(default_factory=list)  # что посмотреть, прежде чем отвечать
 
     @property
     def changes_anything(self) -> bool:
-        return bool(self.tasks or self.questions or self.variant is not None or self.variant_text or self.conclusion)
+        return bool(self.tasks or self.questions or self.variant is not None or self.variant_text
+                    or self.conclusion or self.work_kind)
 
 
 class ReviseBlock(BaseModel):
@@ -242,7 +246,8 @@ def shown(change: ProfileChange, which: str = "value") -> str:
 
 
 def plan_edit(st: LabState, message: str, profile: Profile, subject: Subject, llm, rules: RuleBook,
-              teacher: str, enrollment=None, view=None) -> EditPlan:
+              teacher: str, enrollment=None, view=None, places: str = "") -> EditPlan:
+    """places — где на компьютере студента лежит то, что создал ForLabs (пути чат называет только отсюда)."""
     spec, report = st.spec, st.report
     qa = "\n".join(f"{q.n}. {q.question}\n   Ответ: {q.answer}" for q in report.questions) or "нет"
     prior = st.chat[:-1] if st.chat and st.chat[-1].role == "user" else st.chat  # текущее сообщение — ниже
@@ -251,6 +256,7 @@ def plan_edit(st: LabState, message: str, profile: Profile, subject: Subject, ll
     source = (spec.source_text or "")[:SOURCE_LIMIT] if _NEEDS_SOURCE.search(message) else "не нужен для этого сообщения"
     user = (f"Предмет: {subject.name}. Пол студента: {_gender_ru(profile.gender)}.\n"
             f"Данные профиля сейчас: {_profile_now(profile, enrollment)}\n"
+            f"Вид работы: {work_title(spec.work_kind).lower()} №{spec.number}.\n"
             f"Тема: {spec.topic}\nЦель: {spec.goal}\n"
             f"Вариант по журналу: {spec.variant or '—'}. Номер рабочего места: {spec.workplace or '—'}.\n"
             f"Текст варианта в отчёте: {spec.variant_text or 'нет'}\n"
@@ -260,6 +266,7 @@ def plan_edit(st: LabState, message: str, profile: Profile, subject: Subject, ll
             f"Файлы к лабе от преподавателя (их целиком видит правка заданий): "
             f"{', '.join(m.name for m in st.materials) or 'нет'}\n\n"
             f"{view.summary() if view is not None else 'Программа лабы: нет сведений.'}\n\n"
+            + (f"{places}\n\n" if places else "") +
             f"Отчёт сейчас (блоки по заданиям):\n{_outline(st)}\n\n"
             f"Контрольные вопросы и ответы:\n{qa}\n\n"
             f"Последние сообщения чата:\n{history or 'нет'}\n\n"
@@ -289,13 +296,16 @@ def plan_edit(st: LabState, message: str, profile: Profile, subject: Subject, ll
     if plan.kind in ("answer", "offtopic", "question"):
         plan.reply = _short(plan.reply)
     plan.remember = (plan.remember or "").strip() or None
+    plan.work_kind = plan.work_kind if plan.work_kind in WORK_TITLES and plan.work_kind != spec.work_kind else None
+    if plan.work_kind and plan.kind in ("answer", "question"):
+        plan.kind = "edit"  # вид работы меняет документ: это правка, даже если модель назвала её ответом
     if plan.kind == "offtopic":
         plan.reshoot, plan.project = False, None
     elif (plan.reshoot or plan.project) and plan.kind == "question":  # просьба понятна: снять заново, исправить
         plan.kind = "answer"
     if plan.kind != "edit":
         plan.tasks, plan.questions = [], []
-        plan.variant = plan.variant_text = plan.conclusion = None
+        plan.variant = plan.variant_text = plan.conclusion = plan.work_kind = None
     elif not plan.changes_anything and (plan.reshoot or plan.project):
         plan.kind = "answer"
     elif not plan.changes_anything:

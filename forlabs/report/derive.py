@@ -10,6 +10,8 @@ from forlabs.core.models import Figure, LabSpec, Listing, ReportDoc, Table
 from forlabs.report.morph import agree_short_participle, ends_with_participle_clause
 
 Kind = Literal["figure", "listing", "table"]
+WORK_TITLES = {"lab": "Лабораторная работа", "practice": "Практическая работа", "session": "Практическое занятие"}
+WORK_SHORT = {"lab": "ЛР", "practice": "ПР", "session": "ПЗ"}
 _CAPTION_WORD = {"figure": "Рисунок", "listing": "Листинг", "table": "Таблица"}
 DEFAULT_ASSIGNMENT = ("Изучите методические указания и рекомендации по выполнению работы, "
                       "выполните практические задания.")
@@ -99,3 +101,65 @@ def build_header(spec: LabSpec, style: str, group: str) -> dict[str, str]:
             h["Оснащение"] = spec.equipment
         h["Задание"] = assignment
     return h
+
+
+def work_title(kind: str) -> str:
+    """Заголовок работы в отчёте: «Практическая работа» (без номера)."""
+    return WORK_TITLES.get(kind, WORK_TITLES["lab"])
+
+
+def work_short(kind: str) -> str:
+    """Короткое имя для списков, папки сдачи и файла отчёта: ЛР, ПР, ПЗ."""
+    return WORK_SHORT.get(kind, WORK_SHORT["lab"])
+
+
+def key_suffix(kind: str) -> str:
+    """Хвост номера, когда тот же номер уже занят работой другого вида: «5-пз» рядом с лабораторной «5»."""
+    return work_short(kind).lower()
+
+
+def lab_label(kind: str, number: str) -> str:
+    """Как работа названа в списках: «ПЗ 5». Хвост «-пз» у занятого номера — служебный, его не показываем."""
+    shown = re.sub(rf"-{key_suffix(kind)}(?=-|$)", "", number or "", count=1, flags=re.IGNORECASE)
+    return f"{work_short(kind)} {shown}"
+
+
+def key_label(number: str) -> str:
+    """Подпись по одному номеру записи, когда вида работы под рукой нет (карточка участника у администратора):
+    «7-пз» → «ПЗ 7», без хвоста — «ЛР 7»."""
+    m = re.search(r"-(лр|пр|пз)(?=-|$)", number or "", re.IGNORECASE)
+    kind = {"лр": "lab", "пр": "practice", "пз": "session"}[m.group(1).lower()] if m else "lab"
+    return lab_label(kind, number)
+
+
+_WORK_HEADING = re.compile(
+    r"^[ \t]*(?:(лабораторная[ \t]+работа)|(практическая[ \t]+работа)|(практическое[ \t]+занятие)|(ЛР)|(ПР)|(ПЗ))\b"
+    r"[ \t]*(?:№|N|No\.?)?[ \t]*(\d+(?:[.\-]\d+)?)?", re.IGNORECASE | re.MULTILINE)
+_HEADING_KINDS = ("lab", "practice", "session", "lab", "practice", "session")
+
+
+def detect_work_kind(text: str, number: str | None) -> str:
+    """Вид работы по заголовку методички («Практическое занятие №3»). Считаются только заголовки с начала строки:
+    упоминание посреди текста («из практической работы №6») вид не меняет. В сборнике берётся заголовок с номером
+    этой работы, иначе первый; заголовка нет — лабораторная работа."""
+    want = (number or "").strip().rstrip(".")
+    first = None
+    for m in _WORK_HEADING.finditer(text or ""):
+        i = next(k for k in range(6) if m.group(k + 1))
+        n = (m.group(7) or "").rstrip(".-")
+        if i >= 3 and not n:  # «ЛР», «ПР», «ПЗ» без номера — не заголовок, а часть слова или фразы
+            continue
+        if want and n == want:
+            return _HEADING_KINDS[i]
+        first = first or _HEADING_KINDS[i]
+    return first or "lab"
+
+
+def works_phrase(kinds) -> str:
+    """Строка титульного листа общего отчёта: «по лабораторным и практическим работам»."""
+    kinds = set(kinds) or {"lab"}
+    works = [w for k, w in (("lab", "лабораторным"), ("practice", "практическим")) if k in kinds]
+    parts = [" и ".join(works) + " работам"] if works else []
+    if "session" in kinds:
+        parts.append("практическим занятиям")
+    return "по " + " и ".join(parts)

@@ -12,6 +12,7 @@ from forlabs.cloud.admin import MINSK, now_utc, parse_ts
 from forlabs.cloud.auth import CloudError
 from forlabs.core.store import safe_name
 from forlabs.core.subjects import all_subjects
+from forlabs.report.derive import key_label
 from forlabs.ui.charts import SERIES_COLORS, bars, fmt_tokens, stacked_bars
 
 AVG_LAB_TOKENS = 30_000  # живые прогоны: 27–28 тыс. токенов на лабу
@@ -134,7 +135,7 @@ def trial_view(card_trial, member) -> dict | None:
     """Пробный доступ на карточке участника: сколько лаб начато и правок по каждой."""
     if card_trial is None:
         return None
-    rows = [{"lab": "ЛР " + r.lab.rsplit("/", 1)[-1], "chats": r.chats, "calls": r.calls} for r in card_trial.labs]
+    rows = [{"lab": key_label(r.lab.rsplit("/", 1)[-1]), "chats": r.chats, "calls": r.calls} for r in card_trial.labs]
     return {"labs_used": card_trial.labs_used, "labs_limit": card_trial.labs_limit, "chat_limit": card_trial.chat_limit,
             "rows": rows}
 
@@ -463,7 +464,7 @@ def register_admin(app: FastAPI, ctx, render, redirect) -> None:
         local = ctx.store.local.home / "admin_downloads" / safe_name(uid) / safe_name(p) / safe_name(s) / \
             f"ЛР{safe_name(n)}.docx"
         if not ctx.store.download_member_report(uid, p, s, n, local):
-            return redirect(card_url(uid), err=f"Отчёта ЛР {n} в облаке нет: участник его ещё не свёрстал")
+            return redirect(card_url(uid), err=f"Отчёта {key_label(n)} в облаке нет: участник его ещё не свёрстал")
         subj = all_subjects().get(s)
-        return FileResponse(local, filename=f"ЛР{n}_{subj.short_name if subj else s}_{p}.docx",
+        return FileResponse(local, filename=f"{key_label(n).replace(' ', '')}_{subj.short_name if subj else s}_{p}.docx",
                             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")

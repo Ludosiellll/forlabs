@@ -34,8 +34,12 @@ from forlabs.report.derive import (
     listing_intro,
     numbered_blocks,
     table_intro,
+    work_title,
+    works_phrase,
 )
 from forlabs.report.morph import performed_word
+
+DEFAULT_WORKS = "по лабораторным работам"  # так написано в образце титульного листа
 
 XML_SPACE = "{http://www.w3.org/XML/1998/namespace}space"
 MAX_IMAGE_HEIGHT_CM = 22.0
@@ -267,7 +271,7 @@ def _numbered(i: int, item: str) -> str:
 
 
 def write_lab(w: _Writer, doc: ReportDoc, bookmark: str | None = None) -> None:
-    w.heading(f"Лабораторная работа №{doc.lab_number}", bookmark)
+    w.heading(f"{work_title(doc.work_kind)} №{doc.lab_number}", bookmark)
     for label, value in doc.header.items():
         w.para("header_field", value, label=f"{label}: ")
     w.para("results_title", "Результаты выполнения работы:")
@@ -370,7 +374,8 @@ def build_lab(doc: ReportDoc, out: Path, author: str = "") -> Path:
     return _save(document, out, author)
 
 
-def _fill_title(profile: Profile, enrollment: Enrollment) -> list:
+def _fill_title(profile: Profile, enrollment: Enrollment, works: str = "") -> list:
+    """works — строка «по лабораторным и практическим работам», если в отчёте не только лабораторные."""
     values = {
         "COLLEGE1": profile.college_lines[0] if len(profile.college_lines) > 0 else "",
         "COLLEGE2": profile.college_lines[1] if len(profile.college_lines) > 1 else "",
@@ -390,6 +395,8 @@ def _fill_title(profile: Profile, enrollment: Enrollment) -> list:
     root = etree.fromstring(canon.title_xml(), canon._PARSER)
     for t in root.iter(q("t")):
         t.text = re.sub(r"\{\{([A-Z0-9_]+)\}\}", lambda m: values.get(m.group(1), ""), t.text or "")
+        if works and DEFAULT_WORKS in t.text:
+            t.text = t.text.replace(DEFAULT_WORKS, works)
     return list(root)
 
 
@@ -430,10 +437,10 @@ def build_semester(docs: list[ReportDoc], profile: Profile, enrollment: Enrollme
                    toc_pages: dict[str, int] | None = None) -> Path:
     document = _new_document()
     w = _Writer(document)
-    for el in _fill_title(profile, enrollment):
+    for el in _fill_title(profile, enrollment, works_phrase(d.work_kind for d in docs)):
         w._append(el)
     seed = f"{profile.id}:{enrollment.subject_id}"
-    entries = [(f"Лабораторная работа №{d.lab_number}", bookmark_name(seed, i),
+    entries = [(f"{work_title(d.work_kind)} №{d.lab_number}", bookmark_name(seed, i),
                 str((toc_pages or {}).get(d.lab_number, ""))) for i, d in enumerate(docs)]
     toc = _toc(entries)
     for p in toc.iter(q("p")):  # «Содержание» — всегда с новой страницы: длинный титул не смешивается с ним

@@ -1657,12 +1657,11 @@ def _copy_to_hand_in(pipe, st: LabState, plan: ProjectPlan, work: Path) -> tuple
 
     from forlabs.core.store import safe_name
     from forlabs.core.subjects import get_subject
-    from forlabs.pipeline.run import output_root
+    from forlabs.pipeline.run import output_root, work_folder
 
     profile = pipe._profile(st)
     short = safe_name(get_subject(st.subject_id).short_name)
-    number = safe_name(st.spec.number if st.spec else st.number)
-    out = output_root(profile) / short / f"ЛР{number}" / f"Проект {safe_name(plan.name) or 'программа'}"
+    out = output_root(profile) / short / work_folder(st) / f"Проект {safe_name(plan.name) or 'программа'}"
     skip = set(getattr(languages, "BUILD_DIRS", ())) | {"obj", "bin", "out", "__pycache__", ".vs"}
     files = sorted(f.relative_to(work).as_posix() for f in work.rglob("*")
                    if f.is_file() and not (set(f.relative_to(work).parts[:-1]) & skip) and f.name != "forlabs-run.cmd")

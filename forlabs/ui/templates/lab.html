@@ -1,10 +1,10 @@
 {% extends "base.html" %}
-{% block title %}ЛР {{ st.number }} · {{ subject.short_name }}{% endblock %}
+{% block title %}{{ work_label(st) }} · {{ subject.short_name }}{% endblock %}
 {% block body %}
 <div class="lab" data-lab data-base="{{ base_url }}" data-busy="{{ '1' if busy else '0' }}" data-seq="{{ last_seq }}" data-status="{{ st.status }}">
   <aside class="lab-left" aria-label="О лабе">
     <div class="lab-title">{{ subject.short_name }}{% if profile %} · {{ profile.title_name or profile.full_name }}{% endif %}</div>
-    <h1>ЛР {{ st.number }}</h1>
+    <h1>{{ work_label(st) }}</h1>
     {% if st.spec %}<p class="small muted lab-topic" title="{{ st.spec.topic }}">{{ st.spec.topic }}</p>{% endif %}
     <p class="small muted src-names">{% if source_names %}Методичка: {{ source_names|join(', ') }} · {% endif %}<a href="{{ base_url }}?tab=spec&replace=1#replace">{{ 'заменить' if source_names else 'Заменить методичку' }}</a></p>
     {% set progress = namespace(done=true) %}{% for key, _t in steps %}{% if step_state[key] != 'done' %}{% set progress.done = false %}{% endif %}{% endfor %}
@@ -69,7 +69,7 @@
       <form method="post" action="{{ base_url }}/links" enctype="multipart/form-data" class="stack" data-once>
         <label class="small" for="linked">Прошлые лабы, на которых строится эта</label>
         <input id="linked" name="linked" type="text" maxlength="60" value="{{ st.linked|join(', ') }}" placeholder="например: 1, 27">
-        <label class="btn link small filebtn">Общий отчёт с ними (DOCX, PDF)
+        <label class="btn small filebtn">Общий отчёт с ними (DOCX, PDF)
           <input class="visually-hidden" type="file" name="linked_report" accept=".docx,.pdf" data-images-input id="linked-report"></label>
         <span class="small muted" data-images-picked="linked-report"></span>
         <button class="btn small" type="submit">Сохранить</button>
@@ -208,6 +208,9 @@
         {% if spec_findings %}<div class="notice warn">Проверь разбор:
           {% for f in spec_findings %}<div class="small">· {{ f.location }}: {{ f.message }}{% if f.text %} — «{{ f.text[:160] }}»{% endif %}</div>{% endfor %}</div>{% endif %}
         <form method="post" action="{{ base_url }}/confirm">
+          <div class="field"><label for="work_kind">Вид работы</label>
+            <select id="work_kind" name="work_kind">{% for k, title in WORK_TITLES.items() %}<option value="{{ k }}"{{ ' selected' if k == st.spec.work_kind }}>{{ title }}</option>{% endfor %}</select>
+            <div class="hint">От него заголовок отчёта, имя файла и папки сдачи.</div></div>
           <div class="field"><label for="topic">Тема</label><input id="topic" name="topic" type="text" value="{{ st.spec.topic }}"></div>
           <div class="field"><label for="goal">Цель</label><textarea id="goal" name="goal" rows="2">{{ st.spec.goal }}</textarea></div>
           <div class="field"><label for="conclusion">Вывод</label>

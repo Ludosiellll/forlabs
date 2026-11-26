@@ -64,9 +64,12 @@ from forlabs.pipeline.run import (
     output_root,
     running_elsewhere,
     today,
+    work_folder,
+    work_kind_of,
+    work_label,
 )
 from forlabs.render import libreoffice, word_com
-from forlabs.report.derive import numbered_blocks
+from forlabs.report.derive import WORK_TITLES, key_label, lab_label, numbered_blocks
 from forlabs.report.morph import goal_to_conclusion
 from forlabs.ui.admin_routes import (
     access_text,
@@ -230,7 +233,8 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
 
     tpl.env.filters["tool_title"] = lambda key: TOOL_TITLES.get(key, key)
     tpl.env.globals.update(STATUS_RU=STATUS_RU, q=_q, finding_key=finding_key, date_ru=date_ru, ago=ago, when=when,
-                           fmt_tokens=fmt_tokens, access_text=access_text, labs_estimate=labs_estimate)
+                           fmt_tokens=fmt_tokens, access_text=access_text, labs_estimate=labs_estimate,
+                           work_label=work_label, WORK_TITLES=WORK_TITLES, key_label=key_label)
 
     def render(request: Request, name: str, **kw) -> HTMLResponse:
         base = {"request": request, "ctx": ctx, "subjects": all_subjects(), "nav": kw.pop("nav", ""),
@@ -606,7 +610,8 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
                       wish_images: list[UploadFile] | None = File(None), form_token: str = Form(""),
                       linked: str = Form(""), linked_report: UploadFile | None = File(None),
                       materials: list[UploadFile] | None = File(None), own_zip: UploadFile | None = File(None),
-                      own_path: str = Form("")):
+                      own_path: str = Form(""), work_kind: str = Form("")):
+        kind = work_kind if work_kind in WORK_TITLES else None  # пусто — как названа в методичке
         if form_token:  # двойной клик или повторная отправка формы — одна лаба
             with ctx._lock:
                 done = ctx.form_tokens.get(form_token)
@@ -697,7 +702,8 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
                 try:  # номер занят — черновик: после разбора станет «N-2», как обычно
                     taken = await asyncio.to_thread(ctx.pipeline._taken, profile_id, subject_id, n)
                     st = await asyncio.to_thread(ctx.pipeline.create_lab, profile_id, subject_id, part,
-                                                 number=None if taken else n, wishes=wishes, wish_images=photos)
+                                                 number=None if taken else n, wishes=wishes, wish_images=photos,
+                                                 work_kind=kind)
                 except Exception as e:  # одна не создалась — остальные создаются
                     failed.append(e)
                     problems.append(f"ЛР {n} не создана: {error_text(e)}")
@@ -726,7 +732,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         try:
             st = await asyncio.to_thread(ctx.pipeline.create_lab, profile_id, subject_id, data,
                                          number=number.strip() or None, pasted_text=text, wishes=wishes,
-                                         wish_images=photos)
+                                         wish_images=photos, work_kind=kind)
         except Exception as e:  # лаба не создана — форму можно отправить снова
             await cleanup()
             if form_token:
@@ -814,7 +820,8 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
                       open_replace=request.query_params.get("replace") == "1", restore_vid=restore_vid,
                       subject_theme=subject_theme, subject_memory=subject_memory,
                       link_notes=[f.message for f in st.findings if f.rule_id.startswith("spec.linked")],
-                      auto_refs=[("предыдущую лабу" if r == "previous" else f"ЛР {r}") for r in ctx.pipeline._auto_refs(st)],
+                      auto_refs=[("предыдущую работу" if r == "previous" else lab_label(work_kind_of(st), r))
+                                 for r in ctx.pipeline._auto_refs(st)],
                       materials=[(m.name, pages(len(m.text))) for m in st.materials],
                       materials_accept=MATERIALS_ACCEPT, materials_pages=MATERIALS_MAX // PAGE_CHARS,
                       own_summary=own_summary(st.own) if st.own else "",
@@ -845,6 +852,8 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
             "wishes": ((f.get("wishes") or "").strip()[:4000] or None) if "wishes" in f
             else (st.spec.wishes if st.spec else None),
             "questions": [ln.strip() for ln in (f.get("questions") or "").splitlines() if ln.strip()]})
+        if f.get("work_kind") in WORK_TITLES:  # поля нет (страница открыта до обновления) — вид остаётся прежним
+            spec.work_kind = f.get("work_kind")
         profile = ctx.store.get_profile(p)
         own = " ".join((f.get("conclusion") or "").split())
         formula = goal_to_conclusion(spec.goal, profile.gender if profile else "m").text
@@ -1137,14 +1146,19 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
     @app.post("/labs/{p}/{s}/{n}/delete")
     def lab_delete(p: str, s: str, n: str):
         back = f"/?profile={_q(p)}&subject={_q(s)}"
+        try:
+            was = ctx.store.load_lab(p, s, n)
+        except Exception:  # noqa: BLE001 — название нужно только для сообщения
+            was = None
+        name = work_label(was) if was is not None else f"ЛР {n}"
         if busy_lab(p, s, n):
-            return redirect(back, err=f"ЛР {n} сейчас выполняется — удалить можно, когда она закончит")
+            return redirect(back, err=f"{name} сейчас выполняется — удалить можно, когда она закончит")
         try:
             ctx.store.delete_lab(p, s, n)
         except OSError:  # отчёт открыт в Word или снимок — в просмотрщике: Windows не даёт удалить
-            return redirect(back, err=f"ЛР {n} не удалилась: закрой её отчёт и снимки в других программах и "
+            return redirect(back, err=f"{name} не удалилась: закрой её отчёт и снимки в других программах и "
                                       "попробуй снова")
-        return redirect(back, msg=f"ЛР {n} удалена")
+        return redirect(back, msg=f"{name} удалена")
 
     def _without_squares(p: str, s: str, n: str, st):
         """Документ старой версии — без чёрных квадратов перед скачиванием и открытием в Word (пока лаба не занята
@@ -1164,7 +1178,7 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
             return redirect(lab_url(p, s, n), err="Документ устарел или ещё не свёрстан. Нажми «Пересобрать документ».")
         st = _without_squares(p, s, n, st)
         subj = get_subject(s)
-        return FileResponse(st.docx_path, filename=f"ЛР{n}_{subj.short_name}.docx",
+        return FileResponse(st.docx_path, filename=f"{work_folder(st)}_{subj.short_name}.docx",
                             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
     @app.post("/labs/{p}/{s}/{n}/open")

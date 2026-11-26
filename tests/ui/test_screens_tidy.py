@@ -50,8 +50,9 @@ def test_new_lab_form_shows_only_what_is_needed(tmp_home, tmp_path):
     c = client(tmp_home)
     make_profile(c, tmp_path)
     page = c.get("/labs/new").text
-    extra = page[page.index("<span>Дополнительно</span>"):]
-    assert 'name="number"' in extra and 'name="linked"' in extra and 'name="materials"' in extra
+    main, extra = page.split("<span>Дополнительно</span>")
+    assert 'name="number"' in extra and 'name="materials"' in extra
+    assert 'name="linked"' in main and 'name="linked_report"' in main  # общий отчёт искали и не находили: он на виду
     assert 'name="files"' in page and 'name="wishes"' in page and 'name="text"' in page
 
 

@@ -113,3 +113,19 @@ def test_libreoffice_renders_pdf(sample_doc, tmp_path):
     out = build_lab(sample_doc, tmp_path / "lab.docx", author="x")
     pdf = to_pdf(out, tmp_path)
     assert pdf.exists() and pdf.stat().st_size > 1000
+
+
+def test_practice_heading_and_semester_title(sample_doc, profile_f, tmp_path):
+    """Практическая работа: свой заголовок в отчёте, в содержании общего отчёта и на его титульном листе."""
+    pr = sample_doc.model_copy(update={"work_kind": "practice"})
+    out = build_lab(pr, tmp_path / "pr.docx")
+    texts = "\n".join(t for _, t in roles_of(out))
+    assert "Практическая работа №8" in texts and "Лабораторная работа" not in texts
+    pz = sample_doc.model_copy(update={"lab_number": "3", "work_kind": "session"})
+    sem = build_semester([sample_doc, pz], profile_f, profile_f.enrollment("ssp"), tmp_path / "sem.docx")
+    texts = "\n".join(t for _, t in roles_of(sem))
+    assert "по лабораторным работам и практическим занятиям" in texts
+    assert texts.count("Практическое занятие №3") >= 2  # в содержании и заголовком
+    assert compare(sem) == []
+    only = build_semester([pr], profile_f, profile_f.enrollment("ssp"), tmp_path / "sem2.docx")
+    assert "по практическим работам" in "\n".join(t for _, t in roles_of(only))

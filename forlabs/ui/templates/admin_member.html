@@ -155,7 +155,7 @@
           <tbody>
           {% for r in labs %}
             <tr>
-              <td>{{ r.subject }}</td><td class="nowrap">ЛР {{ r.lab.number }}</td>
+              <td>{{ r.subject }}</td><td class="nowrap">{{ key_label(r.lab.number) }}</td>
               <td><span class="status s-{{ r.lab.status }}">{{ STATUS_RU.get(r.lab.status, r.lab.status) }}</span></td>
               <td class="nowrap">{{ r.created }}</td>
               <td class="num nowrap" title="{{ r.calls }} запросов к модели">{{ fmt_tokens(r.tokens) if r.tokens else '—' }}</td>

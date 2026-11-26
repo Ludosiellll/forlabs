@@ -290,3 +290,13 @@ def test_no_tasks_at_all_is_asked_again_with_reasoning():
     assert [t.text for t in spec.tasks] == [VAR_TASK]
     assert len(fake.calls) == 2 and fake.thinks == [False, True]
     assert "нет ни одного задания" in fake.calls[1][-1]["content"]
+
+
+def test_work_kind_comes_from_the_heading_of_the_methodology():
+    """«Практическое занятие №2» в методичке — отчёт будет практическим занятием, а не лабораторной."""
+    src = SourceText(normalize("Практическое занятие №2\nТема: Разработка технического задания.\n" + SRC.text))
+    spec, _ = extract_spec(src, SUBJECTS["psip"], ENR, FakeLLM([dict(RAW, number="2")]), lab_number=None,
+                           date="24.09.2026")
+    assert spec.work_kind == "session"
+    spec, _ = extract_spec(SRC, SUBJECTS["psip"], ENR, FakeLLM([RAW]), lab_number=None, date="24.09.2026")
+    assert spec.work_kind == "lab"

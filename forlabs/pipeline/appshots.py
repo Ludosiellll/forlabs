@@ -75,12 +75,11 @@ def hand_in_dir(pipe, st: LabState) -> Path:
     """Папка сдачи лабы (там проект программы и файлы, которые агенту можно открывать и сохранять)."""
     from forlabs.core.store import safe_name
     from forlabs.core.subjects import get_subject
-    from forlabs.pipeline.run import output_root
+    from forlabs.pipeline.run import output_root, work_folder
 
     profile = pipe._profile(st)
     short = safe_name(get_subject(st.subject_id).short_name)
-    number = safe_name(st.spec.number if st.spec else st.number)
-    return output_root(profile) / short / f"ЛР{number}"
+    return output_root(profile) / short / work_folder(st)
 
 
 def lab_files(pipe, st: LabState, limit: int = 60) -> list[str]:

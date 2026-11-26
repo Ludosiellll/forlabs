@@ -327,14 +327,24 @@ class Pipeline:
 
     def create_lab(self, profile_id: str, subject_id: str, files: list[tuple[str, bytes]],
                    number: str | None = None, pasted_text: str = "", wishes: str = "",
-                   wish_images: list[tuple[str, bytes]] | None = None) -> LabState:
+                   wish_images: list[tuple[str, bytes]] | None = None, work_kind: str | None = None) -> LabState:
+        """work_kind — вид работы, выбранный студентом (lab, practice, session); None — как названа в методичке."""
+        from forlabs.report.derive import WORK_TITLES, key_suffix, lab_label
+
         number = normalize_number(number or "")
-        if number and self.store.load_lab(profile_id, subject_id, number, strict=True) is not None:
-            raise PipelineError(f"ЛР {number} уже есть. Открой её или удали, чтобы сделать заново.")
+        kind = work_kind if work_kind in WORK_TITLES else None
+        if number and (holder := self.store.load_lab(profile_id, subject_id, number, strict=True)) is not None:
+            held, shown = work_kind_of(holder), holder.spec.number if holder.spec else number
+            if kind and kind != held:  # тот же номер у работы другого вида — это другая работа, а не повтор
+                number = f"{number}-{key_suffix(kind)}"
+                holder = self.store.load_lab(profile_id, subject_id, number, strict=True)
+                held = kind
+            if holder is not None:
+                raise PipelineError(f"{lab_label(held, shown)} уже есть. Открой её или удали, чтобы сделать заново.")
         if not number:
             number = f"{DRAFT_PREFIX}{uuid.uuid4().hex[:6]}"
         st = LabState(profile_id=profile_id, subject_id=subject_id, number=number, status="draft",
-                      wishes=(wishes or "").strip()[:4000])
+                      wishes=(wishes or "").strip()[:4000], work_kind=kind)
         self._clear_leftover(self.lab_dir(st))  # остатки удалённой или нечитаемой лабы с тем же номером
         if wish_images:
             st.wish_images = self._save_images(st, wish_images, "wish")
@@ -385,13 +395,16 @@ class Pipeline:
             wishes = st.wishes or (st.spec.wishes if st.spec else "") or ""
             if st.wish_images_text and st.wish_images_text not in wishes:
                 wishes = f"{wishes}\nС фото:\n{st.wish_images_text}".strip()
-            known = None if renumber else st.spec.number if st.spec else (None if is_draft(st.number) else st.number)
+            known = None if renumber else st.spec.number if st.spec else (
+                None if is_draft(st.number) else plain_number(st.number))
             renumber = renumber or is_draft(st.number)
             if normalize_number(number or ""):
                 known = normalize_number(number)
             spec, findings = extract_spec(src, subject, enrollment, self._llm(st), known, date or today(),
                                           wishes=wishes)
             spec.number = normalize_number(spec.number) or "1"
+            if st.work_kind:  # студент выбрал вид работы сам: заголовок методички его не меняет
+                spec.work_kind = st.work_kind
             if known is None:
                 findings += _several_labs(src.text, spec.number)
             if unread:
@@ -404,11 +417,16 @@ class Pipeline:
             old_key = moved_from = None
             if renumber:
                 old_key, old_number = self.key(st), st.number
-                st = self._renumber(st, spec.number, old_dir)
+                from forlabs.report.derive import key_suffix, lab_label
+
+                kind = spec.work_kind
+                st = self._renumber(st, spec.number, old_dir, kind)
                 moved_from = old_number if st.number != old_number else None
-                if st.number != spec.number:  # номер в документе — из методички; «7-2» только для списка
-                    self._emit(st, f"ЛР {spec.number} уже есть — эта сохранена как «{st.number}». Лишнюю можно "
-                                   f"удалить; в документе номер останется {spec.number}.", "warn")
+                if st.number not in (spec.number, f"{spec.number}-{key_suffix(kind)}"):
+                    # номер в документе — из методички; «7-2» только для списка
+                    self._emit(st, f"{lab_label(kind, spec.number)} уже есть — эта сохранена как "
+                                   f"«{lab_label(kind, st.number)}». Лишнюю можно удалить; в документе номер "
+                                   f"останется {spec.number}.", "warn")
             st.spec, st.findings, st.status, st.error = spec, findings, "parsed", None
             st.findings = st.findings + self._link_findings(st)
             # сначала лаба сохраняется под новым номером, потом удаляется черновик, потом страница переходит:
@@ -483,13 +501,21 @@ class Pipeline:
                                 "или вставь текст вручную.")
         return SourceText(put_pictures(src.text, src.pictures, texts), src.pages, src.warnings), unread
 
-    def _renumber(self, st: LabState, number: str, old_dir: Path) -> LabState:
+    def _renumber(self, st: LabState, number: str, old_dir: Path, kind: str = "lab") -> LabState:
         """Переносит черновик под номер из методички. Чужие лабы не трогает: занятый номер → «N-2», «N-3»…
-        Свой номер считается свободным: лаба «7-2» с той же методичкой остаётся на месте."""
+        Свой номер считается свободным: лаба «7-2» с той же методичкой остаётся на месте. Номер занят работой
+        другого вида (ЛР 7 и ПЗ 7 в одном предмете) — это не повтор: работа встаёт рядом как «7-пз»."""
+        from forlabs.report.derive import key_suffix
+
         old_key = self.key(st)
-        candidate, k = number, 2
+        base = number
+        if number != st.number:
+            holder = self.store.load_lab(st.profile_id, st.subject_id, number, strict=True)
+            if holder is not None and work_kind_of(holder) != kind:
+                base = f"{number}-{key_suffix(kind)}"
+        candidate, k = base, 2
         while candidate != st.number and self._taken(st.profile_id, st.subject_id, candidate):
-            candidate, k = f"{number}-{k}", k + 1
+            candidate, k = f"{base}-{k}", k + 1
         if candidate == st.number:
             return st
         st = st.model_copy(update={"number": candidate})
@@ -616,10 +642,14 @@ class Pipeline:
 
     def confirm(self, st: LabState, spec: LabSpec | None) -> LabState:
         old_tasks = [(t.n, t.text) for t in st.spec.tasks] if st.spec else None
+        old_kind = work_kind_of(st)
+        old_dir = self._hand_in_dir(st) if st.spec is not None else None
         if spec is not None:
             st.spec = spec
         if st.spec is None:
             raise PipelineError("Сначала разбери методичку")
+        if st.spec.work_kind != old_kind:
+            self._kind_changed(st, old_dir)
         keep = [f for f in st.findings if f.stage != "spec" or f.rule_id != "spec.not_verbatim"]
         if not st.report:
             keep = [f for f in keep if f.stage == "spec"]
@@ -642,6 +672,71 @@ class Pipeline:
         else:
             st.status = "confirmed"
         return self._save(st)
+
+    def _hand_in_dir(self, st: LabState) -> Path:
+        from forlabs.pipeline.appshots import hand_in_dir
+
+        return hand_in_dir(self, st)
+
+    def _places_text(self, st: LabState) -> str:
+        """Где на компьютере студента лежит то, что создал ForLabs, — фактами для чата правок. Пути чат называет
+        только отсюда: без них модель либо выдумывала место, либо отвечала, что путь не записан. Папка сдачи
+        недоступна (флешку вынули, профиль не прочитался) — пусто: чат работает и без этого блока."""
+        try:
+            folder = self._hand_in_dir(st)
+            report = folder / f"{work_folder(st)}_{safe_name(get_subject(st.subject_id).short_name)}.docx"
+            lines = ["Где что лежит на компьютере студента (другого ForLabs не создавал):",
+                     f"Папка сдачи этой работы: {folder}",
+                     f"Отчёт Word: {report} "
+                     + ("(уже лежит)" if report.is_file() else "(появится после кнопки «Сдать»)")]
+            project = Path(st.project.folder) if st.project is not None and st.project.folder else None
+            if project is not None:
+                lines.append(f"Проект программы: {project} (открывается кнопкой «Папка проекта» слева)")
+            else:
+                lines.append("Проекта программы нет.")
+            others = _other_files(folder, project, report)
+            lines.append("Другие файлы в папке сдачи: " + ", ".join(others) + "." if others
+                         else "Других файлов в папке сдачи нет.")
+            return "\n".join(lines)
+        except Exception as e:  # noqa: BLE001 — блок справочный: из-за него правка не должна сорваться
+            logging.getLogger("forlabs").warning("Где что лежит: %s", e)
+            return ""
+
+    def _kind_changed(self, st: LabState, old_dir: Path | None) -> None:
+        """Студент поменял вид работы (лабораторная → практическое занятие): выбор запоминается, заголовок отчёта
+        меняется при пересборке, папка сдачи переезжает под новое имя («ЛР7» → «ПЗ7») вместе с проектом. Чужую
+        папку не трогаем и ничего в неё не подмешиваем: занята или открыта — работа остаётся в прежней."""
+        kind = st.spec.work_kind
+        st.work_kind = kind
+        if st.report is not None:
+            st.report.work_kind = kind
+        new_dir = self._hand_in_dir(st)
+        if old_dir is None or old_dir == new_dir or not old_dir.is_dir():
+            return
+        try:
+            if new_dir.exists():
+                raise FileExistsError(new_dir)
+            old_dir.rename(new_dir)
+        except OSError:
+            self._emit(st, f"Папка сдачи теперь «{new_dir.name}», но прежняя «{old_dir.name}» осталась на месте: "
+                           f"папка «{new_dir.name}» уже есть или файлы в «{old_dir.name}» открыты в другой программе. "
+                           "Новые файлы появятся в новой папке — свои файлы перенеси из прежней сам.", "warn")
+            return
+        if st.project is not None and st.project.folder:
+            try:
+                st.project.folder = str(new_dir / Path(st.project.folder).relative_to(old_dir))
+            except ValueError:
+                pass
+        from forlabs.core.fs import atomic_write_text
+
+        manifest = self.lab_dir(st) / "project" / "hand_in.json"
+        try:  # список своих файлов привязан к папке: без этого ForLabs принял бы свой проект за файлы студента
+            data = json.loads(manifest.read_text(encoding="utf-8"))
+            data["folder"] = str(new_dir / Path(data["folder"]).relative_to(old_dir))
+            atomic_write_text(manifest, json.dumps(data, ensure_ascii=False))
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+        self._emit(st, f"Папка сдачи переименована: «{old_dir.name}» → «{new_dir.name}».")
 
     def _others(self, st: LabState) -> dict[str, str]:
         out = {}
@@ -677,17 +772,26 @@ class Pipeline:
             auto = self._auto_refs(st)
             prev = self._previous_number(st) if "previous" in auto else None
             wanted = list(dict.fromkeys(numbers + [r for r in auto if r != "previous"] + ([prev] if prev else [])))
-            text = self._report_text(st, report) if report is not None else ""
+            src = self._report_source(st, report) if report is not None else None
+            text = src.text if src is not None else ""
+            if text.strip() and not wanted:  # отчёт есть, а что из него взять — не сказано: молча он бы пропал
+                self._emit(st, "Общий отчёт прочитан, но брать из него нечего: номера прошлых лаб не указаны, а "
+                               "методичка на них не ссылается. Открой слева «Файлы, своя программа, прошлые лабы», "
+                               "впиши номера и прикрепи отчёт ещё раз.", "warn")
             if text:
                 parts = split_labs(text)
+                chosen: dict[str, str] = {}
                 for n in wanted:
                     if n in parts:
-                        st.linked_texts[n] = parts[n][:LINKED_MAX]
+                        chosen[n] = parts[n]
                         st.linked_how.pop(n, None)
                 lost = [n for n in wanted if n not in parts and not self._done_in_forlabs(st, n)]
                 for n, (body, how) in self._locate_in_report(st, text, lost).items():
-                    st.linked_texts[n] = body[:LINKED_MAX]
+                    chosen[n] = body
                     st.linked_how[n] = how
+                # работа вставлена в отчёт снимками документов — текст с них читает модель, и только у нужных работ
+                for n, body in self._read_report_pictures(st, src, chosen).items():
+                    st.linked_texts[n] = body[:LINKED_MAX]
             st.linked_texts = {n: t for n, t in st.linked_texts.items() if n in wanted}
             st.linked_how = {n: h for n, h in st.linked_how.items() if n in st.linked_texts}
             if st.spec is not None:  # после разбора замечания о связях обновляются сразу
@@ -695,33 +799,92 @@ class Pipeline:
                 st.findings += self._link_findings(st)
             st = self._save(st)
         _, missing = self._linked_labs(st)
-        return st, [m.removeprefix("ЛР ") for m in missing]
+        return st, [_WORK_PREFIX.sub("", m) for m in missing]
 
-    def _report_text(self, st: LabState, report: tuple[str, bytes]) -> str:
+    def _report_source(self, st: LabState, report: tuple[str, bytes]) -> SourceText | None:
+        """Общий отчёт: текст с метками на местах картинок и сами картинки (их читает модель — только у нужных
+        работ). None — отчёт не прочитался или в нём нет ни текста, ни картинок; причина — в журнале."""
+        from forlabs.ingest.extract import PICTURE_RE
+
         name, data = report
         tmp = self.lab_dir(st) / "linked" / safe_file_name(Path(name or "").name or "report.docx")
         try:
             tmp.parent.mkdir(parents=True, exist_ok=True)
             tmp.write_bytes(data)
-            text = extract_text(tmp, self.tesseract).text
+            src = extract_text(tmp, self.tesseract, pictures=True)
         except Exception as e:  # битый или не тот файл — понятная причина в журнале, номера сохраняются
             self._emit(st, f"Общий отчёт «{name}» не прочитался ({getattr(e, 'message_ru', None) or e}) — нужен DOCX "
                            "или PDF с текстом. Номера связанных лаб сохранены.", "warn")
-            return ""
+            return None
         finally:
             shutil.rmtree(tmp.parent, ignore_errors=True)
-        if not text.strip():
+        if not PICTURE_RE.sub("", src.text).strip():
             self._emit(st, f"В общем отчёте «{name}» нет текста (похоже на скан) — сохрани его из Word как DOCX "
                            "или PDF с текстом.", "warn")
-        return text
+            return None
+        return src
+
+    def _read_report_pictures(self, st: LabState, src: SourceText, chosen: dict[str, str]) -> dict[str, str]:
+        """Снимки внутри выбранных работ общего отчёта (задания, вставленные снимками документов) читает модель;
+        прочитанное встаёт на место снимка. Снимки остальных работ не читаются. Сбой чтения — не ошибка: остаётся
+        текст работы, а студенту сказано, чего не хватает."""
+        from forlabs.ingest.extract import PICTURE_RE
+
+        want = sorted({int(m.group(1)) - 1 for body in chosen.values() for m in PICTURE_RE.finditer(body)})
+        want = [i for i in want if 0 <= i < len(src.pictures)]
+        texts: dict[int, str | None] = {}
+        if want:
+            self._emit(st, f"Читаю снимки в общем отчёте: {len(want)}", step="parse")
+            try:
+                got, error = read_source_pictures([src.pictures[i] for i in want], self._llm(st), {})
+            except Exception as e:  # noqa: BLE001 — модель без зрения, сеть, лимит
+                got, error = [], str(getattr(e, "message_ru", None) or e)
+            texts = dict(zip(want, got))
+            unread = sum(1 for i in want if texts.get(i) is None)
+            if unread:
+                self._emit(st, f"Не прочитал снимков в общем отчёте: {unread} из {len(want)}"
+                               + (f" ({error})" if error else "") + ". Что на них важно для этой работы, опиши в "
+                               "пожеланиях или прикрепи сами документы в «Файлы к лабе».", "warn", step="parse")
+
+        from forlabs.pipeline.memory import LINKED_MAX
+
+        def filled(body: str) -> str:
+            # свой текст работы важнее текста со снимков (слайды, тест на 20 вопросов — это страницы): он остаётся
+            # целиком, а снимки делят оставшийся объём поровну
+            marks = [m for m in PICTURE_RE.finditer(body) if (texts.get(int(m.group(1)) - 1) or "").strip()]
+            own = len(PICTURE_RE.sub("", body))
+            each = max(300, min(2500, (LINKED_MAX - own - 40 * len(marks)) // max(len(marks), 1)))
+
+            def one(m: re.Match) -> str:
+                got = (texts.get(int(m.group(1)) - 1) or "").strip()
+                if len(got) > each:
+                    got = got[:each].rstrip() + "…"
+                return f"[На снимке в отчёте:\n{got}\n]" if got else ""
+
+            return re.sub(r"\n{3,}", "\n\n", PICTURE_RE.sub(one, body)).strip()
+
+        return {n: filled(body) for n, body in chosen.items()}
+
+    def _lab_for_ref(self, st: LabState, ref: str) -> LabState | None:
+        """Работа этого предмета с номером ref. Номера у лабораторных и практических свои, поэтому сначала —
+        работа того же вида, что эта (для ПЗ 5 «работа 4» — это ПЗ 4, даже если она записана как «4-пз»)."""
+        from forlabs.report.derive import key_suffix
+
+        kind = work_kind_of(st)
+        found: list[LabState] = []
+        for key in dict.fromkeys([ref, f"{ref}-{key_suffix(kind)}"]):
+            if key == st.number:
+                continue
+            try:
+                lab = self.store.load_lab(st.profile_id, st.subject_id, key)
+            except Exception:  # noqa: BLE001 — нет связи с облаком: работа считается ненайденной
+                lab = None
+            if lab is not None:
+                found.append(lab)
+        return next((x for x in found if work_kind_of(x) == kind), found[0] if found else None)
 
     def _done_in_forlabs(self, st: LabState, n: str) -> bool:
-        if n == st.number:
-            return False
-        try:
-            lab = self.store.load_lab(st.profile_id, st.subject_id, n)
-        except Exception:
-            return False
+        lab = self._lab_for_ref(st, n)
         return lab is not None and lab.report is not None
 
     def _locate_in_report(self, st: LabState, text: str, wanted: list[str]) -> dict[str, tuple[str, str]]:
@@ -957,9 +1120,9 @@ class Pipeline:
 
         if st.spec is None:
             return []
-        refs = referenced_labs(st.spec.source_text or "", st.spec.number)
+        refs = referenced_labs(st.spec.source_text or "", st.spec.number, st.spec.work_kind)
         extra = "\n".join([st.spec.assignment or "", *(t.text for t in st.spec.tasks)])
-        for r in referenced_labs(extra, st.spec.number):
+        for r in referenced_labs(extra, st.spec.number, st.spec.work_kind):
             if r not in refs:
                 refs.append(r)
         return refs[:3]
@@ -1207,6 +1370,8 @@ class Pipeline:
         from forlabs.pipeline.memory import LINKED_MAX
         from forlabs.pipeline.write import section_text
 
+        from forlabs.report.derive import lab_label
+
         current = st.spec.number if st.spec else st.number
         refs = list(dict.fromkeys(st.linked + self._auto_refs(st)))
         if not refs:
@@ -1225,9 +1390,10 @@ class Pipeline:
             lab, key = None, ref
             if ref == "previous":
                 if others is None:
-                    try:
+                    try:  # «предыдущая работа» — своего вида: у ПЗ 3 это ПЗ 2, а не ЛР 2
                         others = [x for x in self.store.list_labs(st.profile_id, st.subject_id)
-                                  if x.number != st.number and x.report is not None]
+                                  if x.number != st.number and x.report is not None
+                                  and work_kind_of(x) == work_kind_of(st)]
                     except Exception:
                         others = []
                 earlier = [x for x in others if 0 <= num(x.number) < num(current)]
@@ -1239,12 +1405,8 @@ class Pipeline:
                     key = lab.number
                 label = "предыдущей лабы"
             else:
-                if ref != st.number:
-                    try:
-                        lab = self.store.load_lab(st.profile_id, st.subject_id, ref)
-                    except Exception:
-                        lab = None
-                label = f"ЛР {ref}"
+                lab = self._lab_for_ref(st, ref)
+                label = lab_label(work_kind_of(st), ref)
             if any(f[0] == key for f in found):
                 continue
             if lab is not None and lab.report is not None:
@@ -1271,8 +1433,11 @@ class Pipeline:
                         "Если не та, поправь номер.")
             return ": из прикреплённого отчёта."
 
+        from forlabs.report.derive import lab_label
+
+        kind = work_kind_of(st)
         out = [Finding(stage="spec", rule_id="spec.linked_lab", severity="warn", location="Связь с прошлыми лабами",
-                       message=f"ЛР {n}" + (f" «{topic}»" if topic else "") + where(n, src, text))
+                       message=lab_label(kind, n) + (f" «{topic}»" if topic else "") + where(n, src, text))
                for n, src, topic, text in found]
         # студент уже описал прошлую лабу в пожеланиях (как и просит замечание) — второй раз не просим
         from forlabs.pipeline.memory import _LAB_REF, _PREV_REF, norm_number
@@ -1281,12 +1446,12 @@ class Pipeline:
         told = {norm_number(m.group(1)) for m in _LAB_REF.finditer(wishes)}
         about_previous = bool(_PREV_REF.search(wishes)) or bool(told)
         missing = [m for m in missing
-                   if not (norm_number(m.removeprefix("ЛР ").strip()) in told if m.startswith("ЛР ")
+                   if not (norm_number(_WORK_PREFIX.sub("", m).strip()) in told if _WORK_PREFIX.match(m)
                            else about_previous)]
         out += [Finding(stage="spec", rule_id="spec.linked_lab_missing", severity="warn",
                         location="Связь с прошлыми лабами",
-                        message=f"Нет {m} ни в ForLabs, ни в отчёте: прикрепи общий отчёт с ней или опиши её "
-                                "в пожеланиях.")
+                        message=f"Нет {m} ни в ForLabs, ни в отчёте: прикрепи общий отчёт с этой работой или "
+                                "опиши её в пожеланиях.")
                 for m in missing]
         return out
 
@@ -1295,7 +1460,7 @@ class Pipeline:
 
         found, _ = self._linked_labs(st)
         cut = LINKED_TOTAL // max(len(found), 1)
-        return "\n\n".join(f"ЛР №{n}" + (f" «{topic}»" if topic else "") + f"\n{text[:cut]}"
+        return "\n\n".join(f"ЛР №{plain_number(n)}" + (f" «{topic}»" if topic else "") + f"\n{text[:cut]}"
                             for n, _, topic, text in found)
 
     def _memory_text(self, st: LabState, own: bool = True) -> str:
@@ -1375,7 +1540,7 @@ class Pipeline:
                 view = ProjectView(plan=proj.load_plan(self, st), st=st,
                                    folder=st.project.folder if st.project is not None else None)
                 plan = plan_edit(st, message, profile, subject, llm, self.rules, self._teacher_text(st), enrollment,
-                                 view=view)
+                                 view=view, places=self._places_text(st))
                 from forlabs.pipeline.chat import profile_changes
 
                 proposals = profile_changes(plan.profile, profile, enrollment)
@@ -1438,6 +1603,13 @@ class Pipeline:
                         text = " ".join(plan.conclusion.split()).rstrip(".") + "."
                         st.spec.conclusion = text
                         changed.append("вывод")
+                    if plan.work_kind and plan.work_kind != st.spec.work_kind:
+                        from forlabs.report.derive import work_title
+
+                        kind_dir = self._hand_in_dir(st)
+                        st.spec.work_kind = plan.work_kind
+                        self._kind_changed(st, kind_dir)
+                        changed.append(f"вид работы — {work_title(plan.work_kind).lower()}")
                     memory = self._memory_text(st)
                     assets = self.lab_dir(st) / "assets"
                     assets.mkdir(parents=True, exist_ok=True)
@@ -1496,7 +1668,14 @@ class Pipeline:
                                         kind="edit", changed=changed, retake=retake, version=vid, profile=proposals)
                     st.chat.append(reply)
             except Exception as e:  # сбой посреди правки: разбор и отчёт — как до неё
-                st.spec, st.report = backup_spec, backup_report
+                failed_kind = st.spec.work_kind
+                try:  # вид работы успел поменяться: папка сдачи — тоже обратно (сбой здесь не прячет причину)
+                    failed_dir = self._hand_in_dir(st) if failed_kind != backup_spec.work_kind else None
+                    st.spec, st.report = backup_spec, backup_report
+                    if st.spec.work_kind != failed_kind:
+                        self._kind_changed(st, failed_dir)
+                except Exception:  # noqa: BLE001
+                    st.spec, st.report = backup_spec, backup_report
                 if vid is not None:
                     st.versions = [v for v in st.versions if v.id != vid]
                 reason = getattr(e, "message_ru", None) or str(e) or type(e).__name__
@@ -1569,7 +1748,10 @@ class Pipeline:
             # после замены методички отчёта может ещё не быть — тогда сохранять нечего
             current = push_version(st, f"до отката к «{target.label}»") if st.report and st.spec else None
             source = st.spec.source_text if st.spec else ""
+            was_kind, was_dir = work_kind_of(st), (self._hand_in_dir(st) if st.spec else None)
             st.spec, st.report = target.spec.model_copy(deep=True), target.report.model_copy(deep=True)
+            if st.spec.work_kind != was_kind:  # версия с другим видом работы: папка сдачи возвращается вместе с ним
+                self._kind_changed(st, was_dir)
             text = f"Вернул отчёт к состоянию до правки «{target.label[:80]}»."
             if target.spec.source_text:  # версия до замены методички: возвращается и методичка
                 if current is not None:
@@ -1805,9 +1987,8 @@ class Pipeline:
         subject = get_subject(st.subject_id)
         root = output_root(profile)
         short = safe_name(subject.short_name)
-        number = safe_name(st.spec.number if st.spec else st.number)  # номер из методички, а не «7-2»
-        out_dir = root / short / f"ЛР{number}"
-        target = out_dir / f"ЛР{number}_{short}.docx"
+        out_dir = root / short / work_folder(st)
+        target = out_dir / f"{work_folder(st)}_{short}.docx"
         tmp = target.with_name(target.name + ".tmp")
         try:
             out_dir.mkdir(parents=True, exist_ok=True)
@@ -1860,10 +2041,11 @@ class Pipeline:
             st = self.store.load_lab(profile_id, subject_id, n)
             if st and st.report:
                 if st.spec is not None and not lab_complete(st):
-                    raise PipelineError(f"ЛР {n} дописана не до конца — нажми в ней «Продолжить» или убери её из "
-                                        "отчёта")
+                    raise PipelineError(f"{work_label(st)} дописана не до конца — нажми в ней «Продолжить» или убери "
+                                        "её из отчёта")
                 if self.slots(st):
-                    raise PipelineError(f"В ЛР {n} не вставлены скриншоты — вставь их или убери лабу из отчёта")
+                    raise PipelineError(f"В {work_label(st)} не вставлены скриншоты — вставь их или убери её из "
+                                        "отчёта")
                 self._fetch_missing(st)
                 docs.append(_absolute_images(st.report, self.store.lab_dir(profile_id, subject_id, n)))
         if not docs:
@@ -1910,6 +2092,57 @@ def running_elsewhere(st: LabState) -> bool:
         return False
     # часы того компьютера могут спешить: аренда дальше обычного срока — не верим ей
     return now < until <= now + LEASE + timedelta(minutes=10)
+
+
+_WORK_PREFIX = re.compile(r"^(?:ЛР|ПР|ПЗ) ")  # «ЛР 7», «ПЗ 2» → номер
+_BUILD_DIRS = {"obj", "bin", "out", "__pycache__", ".vs", ".git", ".idea", "node_modules", "venv", ".venv"}
+
+
+def _other_files(folder: Path, project: Path | None, report: Path, limit: int = 30, look: int = 3000) -> list[str]:
+    """Файлы папки сдачи, кроме отчёта и проекта программы: то, что положил студент или сохранила программа.
+    Папки сборки не обходятся, обход ограничен: в папке сдачи может лежать что угодно."""
+    out: list[str] = []
+    seen = 0
+    if not folder.is_dir():
+        return out
+    for root, dirs, files in os.walk(folder):
+        here = Path(root)
+        dirs[:] = sorted(d for d in dirs if d.lower() not in _BUILD_DIRS and (project is None or here / d != project))
+        for name in sorted(files):
+            seen += 1
+            f = here / name
+            if f != report and not name.startswith(("~$", ".")):
+                out.append(f.relative_to(folder).as_posix())
+            if len(out) >= limit or seen >= look:
+                return out
+    return out
+
+
+def work_kind_of(st) -> str:
+    """Вид работы: из разбора, до разбора — выбранный студентом, иначе лабораторная. st — лаба или её строка
+    в списке (LabSummary: разбора в ней нет, вид записан прямо)."""
+    spec = getattr(st, "spec", None)
+    return spec.work_kind if spec is not None else (getattr(st, "work_kind", None) or "lab")
+
+
+def plain_number(number: str) -> str:
+    """Номер работы без служебного хвоста вида: «7-пз» → «7»."""
+    return re.sub(r"-(?:лр|пр|пз)$", "", number or "", flags=re.IGNORECASE)
+
+
+def work_label(st) -> str:
+    """Как работа названа в списках и сообщениях: «ЛР 7», «ПЗ 2» (st — лаба или её строка в списке)."""
+    from forlabs.report.derive import lab_label
+
+    return lab_label(work_kind_of(st), st.number)
+
+
+def work_folder(st: LabState) -> str:
+    """Имя папки сдачи работы и начало имени её отчёта: «ЛР7», «ПЗ2» — по виду работы и номеру из методички."""
+    from forlabs.report.derive import work_short
+
+    number = safe_name(st.spec.number if st.spec else plain_number(st.number))  # из методички, а не «7-2»
+    return f"{work_short(work_kind_of(st))}{number}"
 
 
 def output_root(profile: Profile) -> Path:

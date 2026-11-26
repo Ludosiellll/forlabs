@@ -422,17 +422,21 @@ class CloudStore:
         """Все свои лабы одной строкой каждая — одним запросом на все профили и предметы. None — связи нет."""
         def fetch():
             rows = self._read("labs", {"select": "profile_id,subject_id,number,status,updated:state->>updated_at,"
-                                                 "topic:state->spec->>topic", **self._mine()})
+                                                 "topic:state->spec->>topic,kind:state->spec->>work_kind,"
+                                                 "chosen:state->>work_kind", **self._mine()})
             if rows is None:
                 return None
             out = []
             for r in rows:
                 state = r.get("state") or {}  # фейк в тестах отдаёт строку целиком
                 topic = r.get("topic") if "topic" in r else ((state.get("spec") or {}).get("topic"))
+                kind = (r.get("kind") or r.get("chosen") or (state.get("spec") or {}).get("work_kind")
+                        or state.get("work_kind") or "lab")
                 out.append(LabSummary(profile_id=r.get("profile_id") or state.get("profile_id") or "",
                                       subject_id=r.get("subject_id") or state.get("subject_id") or "",
                                       number=r["number"], status=r.get("status") or state.get("status") or "draft",
-                                      updated_at=r.get("updated") or state.get("updated_at") or "", topic=topic))
+                                      updated_at=r.get("updated") or state.get("updated_at") or "", topic=topic,
+                                      work_kind=kind if kind in ("lab", "practice", "session") else "lab"))
             return out
 
         return self._cached("labs", ("summaries",), fetch)

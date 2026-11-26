@@ -12,6 +12,11 @@
       {% for sid, s in subjects.items() if sid not in my_subjects %}<option value="{{ sid }}"{{ ' selected' if sid == subject_id }}>{{ s.name }}</option>{% endfor %}
       {% if my_subjects %}</optgroup>{% endif %}
     {% endmacro %}
+    {% macro kind_field() %}
+      <div class="field"><label for="work_kind">Вид работы</label>
+        <select id="work_kind" name="work_kind"><option value="">как в методичке</option>
+          {% for k, title in WORK_TITLES.items() %}<option value="{{ k }}">{{ title }}</option>{% endfor %}</select></div>
+    {% endmacro %}
     {% if profiles|length > 1 %}
     <div class="grid2">
       <div class="field"><label for="profile_id">Профиль</label>
@@ -19,10 +24,14 @@
       <div class="field"><label for="subject_id">Предмет</label>
         <select id="subject_id" name="subject_id">{{ subject_options() }}</select></div>
     </div>
+    <div class="grid2">{{ kind_field() }}<div></div></div>
     {% else %}
     <input type="hidden" name="profile_id" value="{{ profile_id }}">
-    <div class="field"><label for="subject_id">Предмет</label>
-      <select id="subject_id" name="subject_id">{{ subject_options() }}</select></div>
+    <div class="grid2">
+      <div class="field"><label for="subject_id">Предмет</label>
+        <select id="subject_id" name="subject_id">{{ subject_options() }}</select></div>
+      {{ kind_field() }}
+    </div>
     {% endif %}
     <div class="field">
       <span class="label">Методичка</span>
@@ -39,6 +48,14 @@
         <textarea id="text" name="text" rows="7" placeholder="Лабораторная работа №…&#10;Тема: …&#10;Цель: …"></textarea>
       </details>
     </div>
+    <div class="field"><span class="label">Общий отчёт с прошлыми лабами <span class="muted small">— если эта лаба продолжает прежние: возьму из него их текст и код</span></span>
+      <div class="row attach-row">
+        <label class="btn small">Выбрать отчёт (DOCX, PDF)<input id="linked-report" class="visually-hidden" type="file" name="linked_report" accept=".docx,.pdf" data-images-input></label>
+        <span class="small muted" data-images-picked="linked-report"></span>
+      </div>
+      <label class="visually-hidden" for="linked">Номера прошлых лаб, на которых строится эта</label>
+      <input id="linked" name="linked" type="text" maxlength="60" placeholder="номера прошлых лаб, на которых строится эта, например: 1, 27">
+      <div class="hint">Номера можно не писать, если методичка сама ссылается на прошлую работу.</div></div>
     <div class="field"><span class="label">Своя программа <span class="muted small">— если уже написал: отчёт и снимки будут по ней</span></span>
       <div class="row attach-row">
         {% if ctx.pick %}<button type="button" class="btn small" data-pick="folder" data-pick-for="own-path">Выбрать папку…</button>{% endif %}
@@ -54,16 +71,8 @@
         <span class="small muted" data-images-picked="wish-images"></span>
       </div></div>
     <details class="pane fold-pane">
-      <summary><span>Дополнительно</span><span class="muted small">номер, прошлые лабы, файлы от преподавателя</span></summary>
-      <div class="grid2">
-        <div class="field"><label for="number">Номер лабы</label><input id="number" name="number" type="text" placeholder="возьму из методички"></div>
-        <div class="field"><label for="linked">Прошлые лабы, на которых строится эта</label>
-          <input id="linked" name="linked" type="text" maxlength="60" placeholder="например: 1, 27">
-          <div class="row attach-row">
-            <label class="btn link small">Общий отчёт с ними (DOCX, PDF)<input id="linked-report" class="visually-hidden" type="file" name="linked_report" accept=".docx,.pdf" data-images-input></label>
-            <span class="small muted" data-images-picked="linked-report"></span>
-          </div></div>
-      </div>
+      <summary><span>Дополнительно</span><span class="muted small">номер, файлы от преподавателя</span></summary>
+      <div class="field"><label for="number">Номер лабы</label><input id="number" name="number" type="text" placeholder="возьму из методички"></div>
       <div class="field"><span class="label">Файлы от преподавателя <span class="muted small">— данные, текст, заготовка кода; до {{ materials_pages }} страниц</span></span>
         <div class="row attach-row">
           <label class="btn small">Выбрать файлы<input id="materials-in" class="visually-hidden" type="file" name="materials" multiple accept="{{ materials_accept }}" data-images-input></label>

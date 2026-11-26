@@ -48,9 +48,13 @@ class Task(BaseModel):
     kind: Literal["main", "extra"] = "main"
 
 
+WorkKind = Literal["lab", "practice", "session"]  # лабораторная работа, практическая работа, практическое занятие
+
+
 class LabSpec(BaseModel):
     subject_id: str
     number: str
+    work_kind: WorkKind = "lab"  # как работа названа в методичке: от этого заголовок отчёта и имена файлов
     date: str
     topic: str
     goal: str
@@ -133,6 +137,7 @@ class QA(BaseModel):
 
 class ReportDoc(BaseModel):
     lab_number: str
+    work_kind: WorkKind = "lab"
     header: dict[str, str] = Field(default_factory=dict)
     sections: list[TaskSection] = Field(default_factory=list)
     questions: list[QA] = Field(default_factory=list)
@@ -269,6 +274,7 @@ class LabState(BaseModel):
     chat: list[ChatMessage] = Field(default_factory=list)
     versions: list[LabVersion] = Field(default_factory=list)
     wishes: str = ""  # пожелания, введённые при создании (до разбора)
+    work_kind: WorkKind | None = None  # вид работы, который выбрал студент; None — как в методичке
     linked: list[str] = Field(default_factory=list)  # номера прошлых лаб, на которых строится эта (выбрал студент)
     linked_texts: dict[str, str] = Field(default_factory=dict)  # их текст из прикреплённого отчёта (только выбранные)
     linked_how: dict[str, str] = Field(default_factory=dict)  # каких нашла модель (заголовка не было): «по смыслу» и т.п.
@@ -294,11 +300,13 @@ class LabSummary(BaseModel):
     status: str
     updated_at: str = ""
     topic: str | None = None
+    work_kind: str = "lab"
 
 
 def summarize(st: "LabState") -> LabSummary:
     return LabSummary(profile_id=st.profile_id, subject_id=st.subject_id, number=st.number, status=st.status,
-                      updated_at=st.updated_at, topic=st.spec.topic if st.spec else None)
+                      updated_at=st.updated_at, topic=st.spec.topic if st.spec else None,
+                      work_kind=(st.spec.work_kind if st.spec else st.work_kind) or "lab")
 
 
 def push_version(st: "LabState", label: str) -> int:

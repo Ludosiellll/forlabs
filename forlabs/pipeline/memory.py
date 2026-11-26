@@ -32,6 +32,10 @@ _LAB_REF = re.compile(r"(?:лабораторн\w*\s+работ\w*|\bЛР|\bл\.
                       r"(?![\d])(?!\s*(?:час|ак\w*\s*час|мин|стр|балл|недел|%))",  # «работы 2 часа» — не ссылка
                       re.IGNORECASE)
 _PREV_REF = re.compile(r"(?:предыдущ|прошл)\w*\s+(?:лабораторн\w*\s+)?работ", re.IGNORECASE)
+# то же для практических работ и занятий: «в ПЗ№1», «практической работы 3», «предыдущее практическое занятие»
+_PRACTICE_REF = re.compile(r"(?:практическ\w*\s+(?:работ|заняти)\w*|\bПЗ|\bПР)\s*(?:№\s*|No\.?\s*)?(\d+(?:\.\d+)?)"
+                           r"(?![\d])(?!\s*(?:час|ак\w*\s*час|мин|стр|балл|недел|%))", re.IGNORECASE)
+_PRACTICE_PREV = re.compile(r"(?:предыдущ|прошл)\w*\s+(?:практическ\w*\s+)?(?:работ|заняти)", re.IGNORECASE)
 
 
 _NUM = re.compile(r"\d+(?:\.\d+)?")
@@ -91,10 +95,13 @@ def _as_float(n: str) -> float | None:
         return None
 
 
-def referenced_labs(text: str, current: str) -> list[str]:
+def referenced_labs(text: str, current: str, kind: str = "lab") -> list[str]:
     """Номера прошлых лаб, на которые ссылается эта лаба («из ЛР №1», «лабораторной работы 3»), и «previous» для
     «предыдущей работы». Смотрится только своя часть сборника; заголовки других лаб, будущие лабы и «работы 2 часа»
-    ссылками не считаются; не больше трёх."""
+    ссылками не считаются; не больше трёх. kind — вид этой работы: у практической ищутся ссылки на практические
+    («в ПЗ№1»), у лабораторной — на лабораторные. Ссылка на работу другого вида сама не подставляется: номера
+    у видов свои, и по номеру нашлась бы чужая работа."""
+    ref, prev = (_LAB_REF, _PREV_REF) if kind == "lab" else (_PRACTICE_REF, _PRACTICE_PREV)
     cur = norm_number((current or "").split("-")[0])
     text = text or ""
     own = split_labs(text).get(cur)
@@ -103,7 +110,7 @@ def referenced_labs(text: str, current: str) -> list[str]:
     heads = {m.start(1) for m in _HEAD.finditer(text)}
     cur_f = _as_float(cur)
     out: list[str] = []
-    for m in _LAB_REF.finditer(text):
+    for m in ref.finditer(text):
         n = norm_number(m.group(1))
         if m.start(1) in heads or n == cur or n in out:
             continue
@@ -111,7 +118,7 @@ def referenced_labs(text: str, current: str) -> list[str]:
         if cur_f is not None and n_f is not None and n_f >= cur_f:
             continue
         out.append(n)
-    if _PREV_REF.search(text) and "previous" not in out:
+    if prev.search(text) and "previous" not in out:
         out.append("previous")
     return out[:3]
 

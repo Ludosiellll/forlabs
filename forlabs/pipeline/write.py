@@ -27,7 +27,7 @@ from forlabs.core.rules import RuleBook
 from forlabs.core.subjects import Subject
 from forlabs.executors.diagrams import render_dot
 from forlabs.pipeline.prompts import ANSWERS_SYSTEM, WRITE_SYSTEM, WRITE_USER
-from forlabs.report.derive import build_header
+from forlabs.report.derive import build_header, work_title
 from forlabs.report.morph import goal_to_conclusion
 
 
@@ -261,7 +261,7 @@ def _context(spec: LabSpec, profile: Profile, subject: Subject, memory: str, pre
     prev = "\n\n".join(f"Задание {s.n} (уже написано):\n{section_brief(s)}" for s in previous)
     previous_block = f"Уже написанные задания этой работы — не повторяйся и будь последователен:\n{prev}\n" if prev else ""
     return dict(subject=subject.name, gender=_gender_ru(profile.gender), variant=spec.variant or "—",
-                workplace=spec.workplace or "не указан",
+                workplace=spec.workplace or "не указан", work=work_title(spec.work_kind).lower(),
                 topic=spec.topic, goal=spec.goal, equipment=spec.equipment or "—", all_tasks=all_tasks,
                 variant_block=variant_block, wishes_block=wishes_block, memory_block=memory_block,
                 previous_block=previous_block, source_block=source_block(spec))
@@ -338,5 +338,6 @@ def refresh_derived(doc: ReportDoc, spec: LabSpec, profile: Profile, enrollment:
     """Номер, шапка и вывод не пишутся моделью: они всегда берутся из текущего разбора и профиля."""
     return doc.model_copy(update={
         "lab_number": spec.number,
+        "work_kind": spec.work_kind,
         "header": build_header(spec, enrollment.header_style, profile.group),
         "conclusion": spec.conclusion or goal_to_conclusion(spec.goal, profile.gender).text})

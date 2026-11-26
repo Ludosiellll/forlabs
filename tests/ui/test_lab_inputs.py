@@ -109,3 +109,30 @@ def test_new_lab_survives_bad_report_and_failing_files(app, monkeypatch):
     assert st.status == "parsed" and st.linked == ["1"]  # лаба создана и разобрана, номер сохранён
     journal = " ".join(e.text for e in ctx.bus.history(ctx.pipeline.key(st)))
     assert "не прочитался" in journal
+
+
+def test_new_lab_shows_common_report_on_main_form(app):
+    """Общий отчёт и номера прошлых лаб — на самой форме, а не в свёрнутом «Дополнительно»."""
+    client, _ = app
+    page = client.get("/labs/new").text
+    fold = page.index('class="pane fold-pane"')
+    assert page.index('name="linked_report"') < fold and page.index('name="linked"') < fold
+    assert "Общий отчёт" in page[:fold]
+    assert 'name="number"' in page[fold:] and 'name="materials"' in page[fold:]  # остальное — по-прежнему там
+
+
+def test_report_without_numbers_and_refs_is_not_silent(app):
+    """Отчёт прикреплён, а брать из него нечего (нет ни номеров, ни ссылок методички) — студент узнаёт об этом."""
+    client, ctx = app
+    r = client.post("/labs/new", data={"profile_id": P, "subject_id": S, "number": "", "text": ""},
+                    files={"files": (FIXTURE.name, FIXTURE.read_bytes(), "text/plain")}, follow_redirects=False)
+    st = ctx.store.load_lab(P, S, "7")
+    st.spec.source_text, st.spec.assignment = "Тема: анимации. Задание 1. Сделать страницу.", ""
+    for t in st.spec.tasks:
+        t.text = "Сделать страницу."
+    ctx.store.save_lab(st)
+    assert ctx.pipeline._auto_refs(st) == []
+    st, missing = ctx.pipeline.set_links(st, [], ("общий.docx", _docx(REPORT)))
+    assert st.linked_texts == {} and missing == []
+    journal = " ".join(e.text for e in ctx.bus.history(ctx.pipeline.key(st)))
+    assert "впиши номера" in journal

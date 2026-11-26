@@ -20,8 +20,8 @@
     <div class="table-wrap" style="margin-bottom:14px">
       <table class="t"><thead><tr><th style="width:44px"><span class="sr-only">Включить</span></th><th>№</th><th>Тема</th><th>Статус</th></tr></thead>
         <tbody>{% for l in labs %}<tr>
-          <td><input type="checkbox" name="numbers" value="{{ l.number }}" checked aria-label="Включить ЛР {{ l.number }}"></td>
-          <td class="nowrap">ЛР {{ l.number }}</td><td>{{ l.spec.topic if l.spec else '' }}</td>
+          <td><input type="checkbox" name="numbers" value="{{ l.number }}" checked aria-label="Включить {{ work_label(l) }}"></td>
+          <td class="nowrap">{{ work_label(l) }}</td><td>{{ l.spec.topic if l.spec else '' }}</td>
           <td><span class="status s-{{ l.status }}">{{ STATUS_RU[l.status] }}</span></td></tr>{% endfor %}</tbody></table>
     </div>
     <button class="btn primary" type="submit">Собрать и скачать</button>

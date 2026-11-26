@@ -10,6 +10,7 @@ from forlabs.core.models import Enrollment, Finding, LabSpec, Task
 from forlabs.core.subjects import Subject
 from forlabs.core.text import normalize_for_compare
 from forlabs.ingest.extract import SourceText, join_hyphenation
+from forlabs.report.derive import detect_work_kind
 from forlabs.spec.prompts import SPEC_SYSTEM, SPEC_USER
 
 MAX_SOURCE_CHARS = 200_000  # ~100 тыс. токенов: дальше дорого и упирается в лимит модели
@@ -379,9 +380,11 @@ def extract_spec(src: SourceText, subject: Subject, enrollment: Enrollment, llm,
     if assignment and any(normalize_for_compare(assignment) in normalize_for_compare(t.text) or
                           normalize_for_compare(t.text) in normalize_for_compare(assignment) for t in tasks):
         assignment = ""  # это было первое задание, а не общая фраза
+    number = (lab_number or raw.number or "").strip() or "1"
     spec = LabSpec(
         subject_id=subject.id,
-        number=(lab_number or raw.number or "").strip() or "1",
+        number=number,
+        work_kind=detect_work_kind(src.text, number),
         date=date,
         topic=clean_field(raw.topic).rstrip(". "),
         goal=clean_field(raw.goal).rstrip(". "),
