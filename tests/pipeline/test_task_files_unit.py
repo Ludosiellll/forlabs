@@ -104,3 +104,25 @@ def test_word_in_a_longer_word_is_not_the_word_document():
     doc = ReportDoc(lab_number="2", sections=[TaskSection(n=1, title="Покажите.", blocks=[
         Paragraph(text="Текст."), Figure(topic="Окно программы Password Keeper", slot="Сними окно с паролями")])])
     assert tf.drop_document_shots(doc) == [] and len(doc.sections[0].blocks) == 2
+
+
+def test_dropped_place_gives_the_document_its_name():
+    """У работы из обычного режима названий документов нет. Подпись убранного места — это и есть название:
+    «Техническое задание на приложение в документе MS Word» → файл «Задание 2 — Техническое задание на приложение»."""
+    def sec(n, topic, title=""):
+        return TaskSection(n=n, title="Сделайте.", doc_title=title,
+                           blocks=[Paragraph(text="Текст."), Figure(topic=topic, slot="Открой документ и сними")])
+
+    doc = ReportDoc(lab_number="2", sections=[
+        sec(1, "Вопросы интервью и ответы респондентов в документе MS Word"),
+        sec(2, "Документ технического задания «Макет 3D», открытый в Word"),
+        sec(3, "Протокол интервью с респондентами в MS Word."),
+        sec(4, "Документ Word с вопросами интервью"),  # названия из такой подписи не вынуть
+        sec(5, "Перечень вопросов в ворде", title="Вопросы интервью по требованиям"),  # своё название не трогаем
+        sec(6, "Отчёт в Word"),  # одно слово — не название
+    ])
+    assert tf.drop_document_shots(doc) == [1, 2, 3, 4, 5, 6]
+    assert [s.doc_title for s in doc.sections] == [
+        "Вопросы интервью и ответы респондентов", "Документ технического задания «Макет 3D»",
+        "Протокол интервью с респондентами", "", "Вопросы интервью по требованиям", ""]
+    assert tf.file_name(doc.sections[0]) == "Задание 1 — Вопросы интервью и ответы респондентов.docx"

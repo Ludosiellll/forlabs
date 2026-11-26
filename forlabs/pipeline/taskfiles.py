@@ -19,7 +19,10 @@ PAD = 24  # точек белого поля вокруг содержимого
 GAP = 28  # между двумя страницами на одном снимке
 ONE_PAGE_CM, TWO_PAGES_CM = 11.0, 16.5  # ширина снимка в отчёте: одна страница и две рядом
 _PRESENTATION = re.compile(r"презентаци", re.IGNORECASE)
-_WORD = re.compile(r"(?<![A-Za-zА-Яа-яЁё])(?:word(?![A-Za-z])|ворд[а-яё]*)", re.IGNORECASE)  # не Password и не WordPress
+# «Word» и «ворд» отдельным словом: не Password и не WordPress
+_WORD = re.compile(r"(?<![A-Za-zА-Яа-яЁё])(?:word(?![A-Za-z])|ворд[а-яё]*)", re.IGNORECASE)
+_IN_WORD = re.compile(r",?\s*(?:открыт\w*\s+)?в\s+(?:документе\s+|файле\s+)?(?:(?:MS|Microsoft)\s+)?(?:Word|ворде)$",
+                      re.IGNORECASE)  # хвост подписи: «…, открытый в документе MS Word»
 _UNSAFE = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
 
 
@@ -50,11 +53,20 @@ def drop_document_shots(doc: ReportDoc) -> list[int]:
     файла. Вставленные снимки и снимки других программ не трогаются. → номера заданий, где что-то убрано."""
     changed = []
     for sec in doc.sections:
-        keep = [b for b in sec.blocks if not _document_shot(b)]
-        if len(keep) != len(sec.blocks):
-            sec.blocks = keep
+        gone = [b for b in sec.blocks if _document_shot(b)]
+        if gone:
+            sec.blocks = [b for b in sec.blocks if not _document_shot(b)]
+            if not sec.doc_title.strip():  # у работы из обычного режима названия документа нет — оно в подписи места
+                sec.doc_title = next((t for t in map(_name_from_topic, gone) if t), "")
             changed.append(sec.n)
     return changed
+
+
+def _name_from_topic(fig: Figure) -> str:
+    """«Техническое задание на приложение в документе MS Word» → «Техническое задание на приложение»."""
+    topic = fig.topic.strip().rstrip(".")
+    name = _IN_WORD.sub("", topic).strip(" ,.")
+    return name if name != topic and len(name.split()) >= 2 and len(name) <= 80 and not _WORD.search(name) else ""
 
 
 def title_of(section: TaskSection) -> str:
