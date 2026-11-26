@@ -178,3 +178,16 @@ def test_screenshots_of_an_ordinary_report_are_not_sent_to_the_model(tmp_home, t
     with_pictures = [c for c in fake.calls[calls:] if any(isinstance(m["content"], list) for m in c)]
     assert with_pictures == [] and "Читаю снимки" not in _journal(pipe, st)
     assert "Программа считает сумму" in st.linked_texts["1"] and "[[картинка" not in st.linked_texts["1"]
+
+
+def test_saving_the_parse_does_not_need_the_hand_in_folder(tmp_home, tmp_path):
+    """Вид работы не менялся — папка сдачи не нужна вовсе: сохранение разбора не зависит от профиля и флешки."""
+    from test_run import setup
+
+    pipe, fake = setup(tmp_home, tmp_path, [RAW])
+    st = pipe.parse(pipe.create_lab("ivanov", "psip", [(FIXTURE.name, FIXTURE.read_bytes())]), date="24.09.2026")
+    pipe.store.delete_profile("ivanov")
+    st = pipe.confirm(st, st.spec.model_copy(update={"topic": "Другая тема"}))
+    assert st.spec.topic == "Другая тема" and st.status == "confirmed"
+    st = pipe.confirm(st, st.spec.model_copy(update={"work_kind": "session"}))  # и смена вида без профиля не падает
+    assert st.spec.work_kind == "session" and st.work_kind == "session"

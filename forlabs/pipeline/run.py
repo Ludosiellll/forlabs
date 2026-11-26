@@ -643,13 +643,14 @@ class Pipeline:
 
     def confirm(self, st: LabState, spec: LabSpec | None) -> LabState:
         old_tasks = [(t.n, t.text) for t in st.spec.tasks] if st.spec else None
-        old_kind = work_kind_of(st)
-        old_dir = self._hand_in_dir(st) if st.spec is not None else None
+        old_kind, old_spec = work_kind_of(st), st.spec
         if spec is not None:
             st.spec = spec
         if st.spec is None:
             raise PipelineError("Сначала разбери методичку")
-        undo_move = self._kind_changed(st, old_dir) if st.spec.work_kind != old_kind else None
+        undo_move = None
+        if st.spec.work_kind != old_kind:  # папка сдачи нужна только здесь: обычное сохранение от неё не зависит
+            undo_move = self._kind_changed(st, self._hand_in_dir_of(st, old_spec))
         keep = [f for f in st.findings if f.stage != "spec" or f.rule_id != "spec.not_verbatim"]
         if not st.report:
             keep = [f for f in keep if f.stage == "spec"]
@@ -687,6 +688,17 @@ class Pipeline:
         from forlabs.pipeline.appshots import hand_in_dir
 
         return hand_in_dir(self, st)
+
+    def _hand_in_dir_of(self, st: LabState, spec: LabSpec | None) -> Path | None:
+        """Папка сдачи, какой она была при разборе spec (до смены вида работы). None — узнать не удалось (профиль
+        не прочитался): тогда и переносить нечего."""
+        if spec is None:
+            return None
+        try:
+            return self._hand_in_dir(st.model_copy(update={"spec": spec}))
+        except Exception as e:  # noqa: BLE001
+            logging.getLogger("forlabs").warning("Папка сдачи: %s", e)
+            return None
 
     def _places_text(self, st: LabState) -> str:
         """Где на компьютере студента лежит то, что создал ForLabs, — фактами для чата правок. Пути чат называет
@@ -748,8 +760,14 @@ class Pipeline:
         st.work_kind = kind
         if st.report is not None:
             st.report.work_kind = kind
-        new_dir = self._hand_in_dir(st)
-        if old_dir is None or old_dir == new_dir or not old_dir.is_dir() or not self._folder_is_ours(st, old_dir):
+        if old_dir is None:
+            return None
+        try:
+            new_dir = self._hand_in_dir(st)
+        except Exception as e:  # noqa: BLE001 — профиль не прочитался: вид сменён, папки остаются как есть
+            logging.getLogger("forlabs").warning("Папка сдачи: %s", e)
+            return None
+        if old_dir == new_dir or not old_dir.is_dir() or not self._folder_is_ours(st, old_dir):
             return None
         try:
             if new_dir.exists():
@@ -1692,7 +1710,7 @@ class Pipeline:
                     if plan.work_kind and plan.work_kind != st.spec.work_kind:
                         from forlabs.report.derive import work_title
 
-                        kind_dir = self._hand_in_dir(st)
+                        kind_dir = self._hand_in_dir_of(st, st.spec)
                         st.spec.work_kind = plan.work_kind
                         undo_move = self._kind_changed(st, kind_dir)
                         changed.append(f"вид работы — {work_title(plan.work_kind).lower()}")
@@ -1857,10 +1875,11 @@ class Pipeline:
             # после замены методички отчёта может ещё не быть — тогда сохранять нечего
             current = push_version(st, f"до отката к «{target.label}»") if st.report and st.spec else None
             source = st.spec.source_text if st.spec else ""
-            was_kind, was_dir = work_kind_of(st), (self._hand_in_dir(st) if st.spec else None)
+            was_kind, was_spec = work_kind_of(st), st.spec
             st.spec, st.report = target.spec.model_copy(deep=True), target.report.model_copy(deep=True)
-            # версия с другим видом работы: папка сдачи возвращается вместе с ним
-            undo_move = self._kind_changed(st, was_dir) if st.spec.work_kind != was_kind else None
+            undo_move = None
+            if st.spec.work_kind != was_kind:  # версия с другим видом работы: папка сдачи возвращается вместе с ним
+                undo_move = self._kind_changed(st, self._hand_in_dir_of(st, was_spec))
             text = f"Вернул отчёт к состоянию до правки «{target.label[:80]}»."
             if target.spec.source_text:  # версия до замены методички: возвращается и методичка
                 if current is not None:
