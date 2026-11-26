@@ -415,7 +415,7 @@ class Pipeline:
             else:
                 from forlabs.pipeline import taskfiles as tf
 
-                asked = tf.asks_for_files(wishes)
+                asked = tf.asks_for_files(wishes, code=subject.kind != "theory")
                 spec.task_files = bool(enrollment.task_files) or asked
                 if asked and not enrollment.task_files:
                     self._emit(st, "В пожеланиях ты просишь задания отдельными файлами — включил этот режим: файл "

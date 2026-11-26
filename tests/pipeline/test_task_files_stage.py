@@ -272,13 +272,25 @@ def test_wish_for_separate_files_turns_the_mode_on(tmp_home, tmp_path):
     """Студентка написала это в пожеланиях при создании работы — режим включается сам, и ей об этом сказано."""
     from test_run import FIXTURE, RAW, setup
 
-    pipe, fake = setup(tmp_home, tmp_path, [RAW, RAW])
+    from forlabs.core.models import Enrollment
+    from forlabs.core.subjects import Subject, add_custom_subject
+
+    pipe, fake = setup(tmp_home, tmp_path, [RAW, RAW, RAW, RAW])
+    add_custom_subject(Subject(id="praktika", name="Учебная практика", short_name="практика", kind="theory"))
+    profile = pipe.store.get_profile("ivanov")
+    profile.enrollments.append(Enrollment(subject_id="praktika", title_subject="Учебная практика",
+                                          teacher="Т.Т. Тестова", academic_year="2026/2027"))
+    pipe.store.save_profile(profile)
+    src = [(FIXTURE.name, FIXTURE.read_bytes())]
     wish = "Все задания делаются отдельным файлом а в отчет вставляются скриншотами."
-    st = pipe.parse(pipe.create_lab("ivanov", "psip", [(FIXTURE.name, FIXTURE.read_bytes())], wishes=wish),
-                    date="24.09.2026")
+    st = pipe.parse(pipe.create_lab("ivanov", "praktika", src, wishes=wish), date="24.09.2026")
     assert st.spec.task_files is True
     journal = (pipe.lab_dir(st) / "journal.log").read_text(encoding="utf-8")
     assert "отдельными файлами" in journal and "пожелани" in journal
-    off = pipe.parse(pipe.create_lab("ivanov", "psip", [(FIXTURE.name, FIXTURE.read_bytes())], wishes=wish,
-                                     task_files=False), date="24.09.2026")
+    off = pipe.parse(pipe.create_lab("ivanov", "praktika", src, wishes=wish, task_files=False), date="24.09.2026")
     assert off.spec.task_files is False  # выбрано «текстом в отчёте» — выбор в форме важнее фразы
+    code = pipe.parse(pipe.create_lab("ivanov", "psip", src, wishes=wish), date="24.09.2026")
+    assert code.spec.task_files is False  # предмет с программами: «отдельным файлом» там про файлы с кодом
+    word = pipe.parse(pipe.create_lab("ivanov", "psip", src, wishes="каждое задание отдельным документом Word"),
+                      date="24.09.2026")
+    assert word.spec.task_files is True

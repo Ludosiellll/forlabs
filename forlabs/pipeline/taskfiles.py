@@ -36,9 +36,15 @@ def is_presentation(task_text: str) -> bool:
     return bool(_PRESENTATION.search(task_text or ""))
 
 
-def asks_for_files(wishes: str | None) -> bool:
-    """В пожеланиях к работе просят задания отдельными файлами — режим включается без галочки."""
-    return bool(_ASKS.search(wishes or ""))
+def asks_for_files(wishes: str | None, code: bool = False) -> bool:
+    """В пожеланиях к работе просят задания отдельными файлами, а в отчёт их снимки — режим включается без галочки.
+    Одних «отдельных файлов» мало: нужны ещё «скриншоты» или «Word». code — предмет с программами: там «каждое
+    задание в отдельном файле, скриншоты в отчёт» — про файлы с кодом, и режим включает только слово «Word»."""
+    text = wishes or ""
+    if not _ASKS.search(text):
+        return False
+    return bool(_WORD.search(text) or re.search(r"документ(?!ац)", text, re.IGNORECASE)
+                or (not code and re.search(r"скрин|снимк", text, re.IGNORECASE)))
 
 
 def ready(section: TaskSection) -> bool:
