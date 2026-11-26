@@ -147,6 +147,7 @@ class ReportDoc(BaseModel):
     sections: list[TaskSection] = Field(default_factory=list)
     questions: list[QA] = Field(default_factory=list)
     conclusion: str = ""
+    answer_figures: list[Figure] = Field(default_factory=list)  # только при вёрстке: ответы снимком их документа
 
 
 class Finding(BaseModel):
@@ -281,6 +282,8 @@ class LabState(BaseModel):
     wishes: str = ""  # пожелания, введённые при создании (до разбора)
     work_kind: WorkKind | None = None  # вид работы, который выбрал студент; None — как в методичке
     hand_in_dir: str | None = None  # папка сдачи, куда ForLabs уже клал файлы этой работы (отчёт, проект)
+    task_docs: list[str] = Field(default_factory=list)  # файлы заданий, которые ForLabs положил в папку сдачи
+    task_files: bool | None = None  # режим файлов, выбранный при создании; None — как настроено у предмета
     linked: list[str] = Field(default_factory=list)  # номера прошлых лаб, на которых строится эта (выбрал студент)
     linked_texts: dict[str, str] = Field(default_factory=dict)  # их текст из прикреплённого отчёта (только выбранные)
     linked_how: dict[str, str] = Field(default_factory=dict)  # каких нашла модель (заголовка не было): «по смыслу» и т.п.

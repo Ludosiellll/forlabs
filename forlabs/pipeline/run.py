@@ -125,6 +125,7 @@ class Pipeline:
         self.app_hooks: tuple = (None, None)  # свернуть и вернуть окно ForLabs на время работы агента
         self.fix_outcome: dict[str, str] = {}  # лаба → чем кончилась просьба чата исправить программу
         self.fix_reason: dict[str, str] = {}  # лаба → почему исправить не вышло (для ответа в чате)
+        self.page_renderer = None  # (документ, рабочая папка) → картинки его страниц; None — Word или LibreOffice
         self._locks: dict[str, threading.Lock] = {}
         self.renamed: dict[str, str] = {}
         self.background: set[str] = set()  # фоновая работа после «Сдать» (память предмета): окно спросит при закрытии
@@ -327,8 +328,10 @@ class Pipeline:
 
     def create_lab(self, profile_id: str, subject_id: str, files: list[tuple[str, bytes]],
                    number: str | None = None, pasted_text: str = "", wishes: str = "",
-                   wish_images: list[tuple[str, bytes]] | None = None, work_kind: str | None = None) -> LabState:
-        """work_kind — вид работы, выбранный студентом (lab, practice, session); None — как названа в методичке."""
+                   wish_images: list[tuple[str, bytes]] | None = None, work_kind: str | None = None,
+                   task_files: bool | None = None) -> LabState:
+        """work_kind — вид работы, выбранный студентом (lab, practice, session); None — как названа в методичке.
+        task_files — режим «задания отдельными файлами», выбранный студентом; None — как настроено у предмета."""
         from forlabs.report.derive import WORK_TITLES, key_suffix, lab_label
 
         number = normalize_number(number or "")
@@ -344,7 +347,7 @@ class Pipeline:
         if not number:
             number = f"{DRAFT_PREFIX}{uuid.uuid4().hex[:6]}"
         st = LabState(profile_id=profile_id, subject_id=subject_id, number=number, status="draft",
-                      wishes=(wishes or "").strip()[:4000], work_kind=kind)
+                      wishes=(wishes or "").strip()[:4000], work_kind=kind, task_files=task_files)
         self._clear_leftover(self.lab_dir(st))  # остатки удалённой или нечитаемой лабы с тем же номером
         if wish_images:
             st.wish_images = self._save_images(st, wish_images, "wish")
@@ -405,6 +408,10 @@ class Pipeline:
             spec.number = normalize_number(spec.number) or "1"
             if st.work_kind:  # студент выбрал вид работы сам: заголовок методички его не меняет
                 spec.work_kind = st.work_kind
+            if st.spec is not None:  # повторный разбор: то, что студент выбрал на этой работе, остаётся
+                spec.task_files, spec.plain_layout = st.spec.task_files, st.spec.plain_layout
+            else:
+                spec.task_files = st.task_files if st.task_files is not None else bool(enrollment.task_files)
             if known is None:
                 findings += _several_labs(src.text, spec.number)
             if unread:
@@ -719,7 +726,11 @@ class Pipeline:
                              "когда ForLabs соберёт программу заново.")
             else:
                 lines.append("Проекта программы нет.")
-            others = _other_files(folder, project, report)
+            docs = [n for n in st.task_docs if (folder / n).is_file()]
+            if docs:
+                lines.append("Файлы заданий (их создал ForLabs, в отчёте — снимки их страниц): "
+                             + "; ".join(str(folder / n) for n in docs) + ".")
+            others = [x for x in _other_files(folder, project, report) if x not in docs]
             lines.append("Другие файлы в папке сдачи: " + ", ".join(others) + "." if others
                          else "Других файлов в папке сдачи нет.")
             return "\n".join(lines)
@@ -799,6 +810,13 @@ class Pipeline:
                 data = json.loads(manifest.read_text(encoding="utf-8"))
                 data["folder"] = moved(data["folder"], src, dst)
                 atomic_write_text(manifest, json.dumps(data, ensure_ascii=False))
+            except (OSError, ValueError, KeyError, TypeError):
+                pass
+            try:  # и список своих файлов заданий
+                files = self.lab_dir(st) / "files" / "hand_in.json"
+                data = json.loads(files.read_text(encoding="utf-8"))
+                data["folder"] = str(dst)
+                atomic_write_text(files, json.dumps(data, ensure_ascii=False))
             except (OSError, ValueError, KeyError, TypeError):
                 pass
             try:  # сданный отчёт называется по папке: два отчёта с разными именами рядом — повод сдать не тот
@@ -1628,7 +1646,7 @@ class Pipeline:
             if mine:
                 self._save(st)
             backup_spec, backup_report = st.spec.model_copy(deep=True), st.report.model_copy(deep=True)
-            backup_kind, undo_move, layout_changed = st.work_kind, None, False
+            backup_kind, undo_move, layout_changed, files_changed = st.work_kind, None, False, False
             vid = None
             try:
                 profile = self._profile(st)
@@ -1714,6 +1732,11 @@ class Pipeline:
                         st.spec.work_kind = plan.work_kind
                         undo_move = self._kind_changed(st, kind_dir)
                         changed.append(f"вид работы — {work_title(plan.work_kind).lower()}")
+                    if plan.task_files is not None:
+                        st.spec.task_files = plan.task_files
+                        files_changed = True
+                        changed.append("задания — отдельными файлами" if plan.task_files
+                                       else "задания — текстом в отчёте")
                     if plan.layout:
                         st.spec.plain_layout = plan.layout == "plain"
                         layout_changed = True
@@ -1795,12 +1818,199 @@ class Pipeline:
             reply.text += "\n" + self._squares_note(st)
         if layout_changed:
             reply.text += "\n" + self._layout_note(st)
+        if files_changed:
+            reply.text += "\n" + self._files_note(st)
         if st.status == "failed":
             reply.text += (f"\nПравку сохранил, но документ не собрался: {st.error} "
                            "Когда исправишь, нажми «Пересобрать документ».")
-        if squares or layout_changed or st.status == "failed":
+        if squares or layout_changed or files_changed or st.status == "failed":
             st = self._save(st)
         return st
+
+    # ---------- задания отдельными файлами ----------
+
+    def _doc_pages(self, docx: Path, work: Path, author: str) -> list[Path]:
+        """Картинки страниц документа задания. Пусто — снять нечем (нет ни Word, ни LibreOffice)."""
+        if self.page_renderer is not None:
+            return list(self.page_renderer(docx, work))
+        rep = finalize(docx, author, work / "render", self.soffice, prefer_word=self.prefer_word, plain=True)
+        return list(rep.pages)
+
+    def _task_files(self, st: LabState, profile: Profile, d: Path) -> ReportDoc:
+        """Режим «задания отдельными файлами»: документ Word на каждое готовое задание и на ответы — в папку сдачи,
+        снимки их страниц — в отчёт. Возвращает отчёт для вёрстки (исходный отчёт лабы не меняется). Документ
+        пересобирается, только если его содержимое изменилось: каждая сборка — запуск Word."""
+        import base64
+        import hashlib
+
+        from forlabs.pipeline import taskfiles as tf
+        from forlabs.render.docx_builder import build_answers_doc, build_task_doc
+
+        files_dir = d / "files"
+        if st.spec is None or not st.spec.task_files or st.report is None:
+            self._hand_in_task_files(st, {}, files_dir)  # режим выключен: свои файлы из папки сдачи убираются
+            return st.report
+        try:
+            stamp = base64.b64decode(profile.stamp) if profile.stamp else None
+        except ValueError:
+            stamp = None
+        author = profile.doc_author or profile.full_name
+        try:
+            index = json.loads((files_dir / "index.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            index = {}
+        full = _absolute_images(st.report, d)
+        units: list[tuple[object, str, object]] = [
+            (sec.n, tf.file_name(sec), sec) for sec in full.sections
+            if tf.ready(sec) and not tf.is_presentation(sec.title)]
+        if full.questions and all(q.answer.strip() for q in full.questions):
+            units.append((tf.ANSWERS, tf.ANSWERS_TITLE + ".docx", full.questions))
+        shots: dict = {}
+        docs: dict[str, Path] = {}
+        fresh: dict[str, dict] = {}
+        for key, name, item in units:
+            body = json.dumps([x.model_dump() for x in item] if isinstance(item, list) else item.model_dump(),
+                              ensure_ascii=False, sort_keys=True)
+            sha = hashlib.sha256((body + name + author + (profile.stamp or "")).encode("utf-8")).hexdigest()[:16]
+            work = files_dir / str(key)
+            target = work / name
+            was = index.get(str(key)) or {}
+            if was.get("sha") == sha and target.is_file() and all(Path(p).is_file() for p, _ in was.get("shots", [])):
+                made = [(str(p), label) for p, label in was.get("shots", [])]
+            else:
+                self._emit(st, f"Собираю файл: {name}", step="render")
+                shutil.rmtree(work, ignore_errors=True)
+                work.mkdir(parents=True, exist_ok=True)
+                if isinstance(item, list):
+                    build_answers_doc(item, target, author, stamp)
+                else:
+                    build_task_doc(item, target, author, stamp)
+                pages = self._doc_pages(target, work, author)
+                made = [(str(p), label) for p, label in tf.sheets(pages, work / "shots", "s")] if pages else []
+            fresh[str(key)] = {"sha": sha, "name": name, "shots": made}
+            docs[name] = target
+            if made:
+                shots[key] = [(Path(p), label) for p, label in made]
+        for old in set(index) - set(fresh):  # задания больше нет или оно снова ждёт снимка — его файл не нужен
+            shutil.rmtree(files_dir / old, ignore_errors=True)
+        try:
+            files_dir.mkdir(parents=True, exist_ok=True)
+            atomic_write_bytes(files_dir / "index.json", json.dumps(fresh, ensure_ascii=False).encode("utf-8"))
+        except OSError:
+            pass
+        self._hand_in_task_files(st, docs, files_dir)
+        if docs and not shots:
+            self._emit(st, "Файлы заданий лежат в папке сдачи, но снимки их страниц вставить не получилось: для этого "
+                           "нужен Word или LibreOffice. В отчёте пока текст заданий.", "warn", step="render")
+        return tf.as_screens(st.report, shots)
+
+    def _shown_report(self, st: LabState, d: Path) -> ReportDoc:
+        """Отчёт, как он свёрстан: в режиме файлов — со снимками уже собранных документов (ничего не пересобирая)."""
+        from forlabs.pipeline import taskfiles as tf
+
+        if st.spec is None or not st.spec.task_files or st.report is None:
+            return st.report
+        try:
+            index = json.loads((d / "files" / "index.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return st.report
+        shots = {}
+        for key, info in index.items():
+            made = [(Path(p), label) for p, label in info.get("shots", []) if Path(p).is_file()]
+            if made:
+                shots[tf.ANSWERS if key == tf.ANSWERS else int(key)] = made
+        return tf.as_screens(st.report, shots)
+
+    def _hand_in_task_files(self, st: LabState, docs: dict[str, Path], files_dir: Path) -> None:
+        """Файлы заданий — в папку сдачи. Меняются только свои файлы; свой прежний, которого больше нет, убирается.
+        Файл, который студент поправил сам (или положил свой с тем же именем), перед заменой сохраняется рядом
+        как «имя.bak»; открытый в Word — пропускается с замечанием."""
+        import hashlib
+
+        manifest = files_dir / "hand_in.json"
+        try:
+            before = json.loads(manifest.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            before = {}
+        if not docs and not before.get("files"):
+            st.task_docs = []
+            return
+        try:
+            folder = self._hand_in_dir(st)
+        except Exception as e:  # noqa: BLE001 — папка сдачи недоступна: файлы остаются в лабе, отчёт собирается
+            self._emit(st, f"Файлы заданий не положены в папку сдачи ({getattr(e, 'message_ru', None) or e}).", "warn")
+            return
+
+        def sha_of(path: Path) -> str:
+            return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+
+        mine = dict(before.get("files") or {}) if before.get("folder") == str(folder) else {}
+        written: dict[str, str] = {}
+        locked: list[str] = []
+        kept: list[str] = []
+        for name, src in docs.items():
+            dst = folder / name
+            try:
+                new = sha_of(src)
+                if dst.is_file():
+                    cur = sha_of(dst)
+                    if cur == new:
+                        written[name] = new
+                        continue
+                    if mine.get(name) != cur:  # не тот файл, что клал ForLabs: правка студента или его собственный
+                        shutil.copy2(dst, dst.with_name(dst.name + ".bak"))
+                        kept.append(name)
+                folder.mkdir(parents=True, exist_ok=True)
+                tmp = dst.with_name(f".{dst.name}.{uuid.uuid4().hex[:6]}.tmp")
+                shutil.copy2(src, tmp)
+                os.replace(tmp, dst)
+                written[name] = new
+            except OSError:
+                locked.append(name)
+                if name in mine:
+                    written[name] = mine[name]
+        for name in set(mine) - set(docs):
+            try:
+                gone = folder / name
+                if gone.is_file() and sha_of(gone) == mine[name]:  # свой и не менялся — можно убрать
+                    gone.unlink()
+            except OSError:
+                pass
+        try:
+            files_dir.mkdir(parents=True, exist_ok=True)
+            atomic_write_bytes(manifest, json.dumps({"folder": str(folder), "files": written},
+                                                    ensure_ascii=False).encode("utf-8"))
+        except OSError:
+            pass
+        st.task_docs = sorted(written)
+        if written:
+            st.hand_in_dir = str(folder)  # папка сдачи теперь точно этой работы: в ней её файлы заданий
+        if kept:
+            self._emit(st, "Эти файлы заданий ты менял сам, а ForLabs собрал их заново. Твои версии лежат рядом с "
+                           "пометкой .bak: " + ", ".join(kept[:6]), "warn", step="render")
+        if locked:
+            self._emit(st, "Не получилось обновить файлы заданий — они открыты в Word: " + ", ".join(locked[:6])
+                           + ". Закрой их и нажми «Пересобрать документ».", "warn", step="render")
+
+    def _files_note(self, st: LabState) -> str:
+        """Что на самом деле получилось с файлами заданий — по папке сдачи, а не со слов модели."""
+        if not st.spec.task_files:
+            return "Пересобрал отчёт: текст заданий снова в нём, своих файлов заданий в папке сдачи не оставил."
+        if st.status == "failed":
+            return "Файлы заданий появятся, когда документ соберётся."
+        try:
+            folder = self._hand_in_dir(st)
+        except Exception:  # noqa: BLE001
+            folder = None
+        made = [n for n in st.task_docs if folder is not None and (folder / n).is_file()]
+        waiting = [s.n for s in st.report.sections
+                   if not any(n.startswith(f"Задание {s.n}") for n in made)]
+        out = (f"Файлы заданий лежат в папке {folder}: " + ", ".join(made) + "." if made
+               else "Файлов заданий пока нет.")
+        if waiting:
+            out += (" Без файла остались задания " + ", ".join(map(str, waiting)) + ": в них есть снимки, которые "
+                    "делаешь ты, или это презентация — её ForLabs не делает.")
+        return out
 
     def _layout_note(self, st: LabState) -> str:
         """Что на самом деле с разрывами после сборки — по самому документу, а не со слов модели."""
@@ -2047,8 +2257,9 @@ class Pipeline:
             self._fetch_missing(st)
             self._drop_broken_images(st)
             docx = d / "report.docx"
+            shown = self._task_files(st, profile, d)  # в режиме файлов: отчёт со снимками документов заданий
             try:
-                build_lab(_absolute_images(st.report, d), docx, author=profile.doc_author or profile.full_name)
+                build_lab(_absolute_images(shown, d), docx, author=profile.doc_author or profile.full_name)
             except PermissionError as e:
                 raise PipelineError("report.docx открыт в Word или другой программе — закрой его и нажми "
                                     "«Пересобрать документ».") from e
@@ -2176,7 +2387,8 @@ class Pipeline:
                     raise PipelineError(f"В {work_label(st)} не вставлены скриншоты — вставь их или убери её из "
                                         "отчёта")
                 self._fetch_missing(st)
-                docs.append(_absolute_images(st.report, self.store.lab_dir(profile_id, subject_id, n)))
+                lab_dir = self.store.lab_dir(profile_id, subject_id, n)
+                docs.append(_absolute_images(self._shown_report(st, lab_dir), lab_dir))
         if not docs:
             raise PipelineError("Нет готовых лаб для отчёта за семестр")
         out = Path(out)

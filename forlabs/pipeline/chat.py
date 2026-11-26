@@ -92,7 +92,8 @@ class EditPlan(BaseModel):
             kind = str(v.get("kind") or "").strip().lower()
             if kind not in ("edit", "answer", "question", "offtopic"):  # непонятное: есть правки — правка
                 kind = "edit" if (v.get("tasks") or v.get("questions") or v.get("conclusion")
-                                  or v.get("work_kind") or v.get("layout")) else "question"
+                                  or v.get("work_kind") or v.get("layout")
+                                  or isinstance(v.get("task_files"), bool)) else "question"
             v = {**v, "kind": kind, "profile": v.get("profile") if isinstance(v.get("profile"), list) else [],
                  "look": v.get("look") if isinstance(v.get("look"), list) else [],
                  "project": v.get("project") if isinstance(v.get("project"), str) else None}
@@ -110,13 +111,14 @@ class EditPlan(BaseModel):
     reshoot: bool = False  # студент просит ForLabs самому снять скриншоты окон программы ещё раз
     work_kind: str | None = None  # работа называется иначе: lab, practice или session
     layout: str | None = None  # вёрстка: plain — без разрывов страниц и «Продолжение …», standard — по образцу
+    task_files: bool | None = None  # задания отдельными файлами Word (в отчёте их снимки): включить / выключить
     project: str | None = None  # что исправить в самой программе: ForLabs чинит файлы проекта и пересобирает
     look: list[Look] = Field(default_factory=list)  # что посмотреть, прежде чем отвечать
 
     @property
     def changes_anything(self) -> bool:
         return bool(self.tasks or self.questions or self.variant is not None or self.variant_text
-                    or self.conclusion or self.work_kind or self.layout)
+                    or self.conclusion or self.work_kind or self.layout or self.task_files is not None)
 
 
 class ReviseBlock(BaseModel):
@@ -259,6 +261,7 @@ def plan_edit(st: LabState, message: str, profile: Profile, subject: Subject, ll
             f"Данные профиля сейчас: {_profile_now(profile, enrollment)}\n"
             f"Вид работы: {work_title(spec.work_kind).lower()} №{spec.number}.\n"
             f"Вёрстка сейчас: {'без разрывов страниц и «Продолжение …»' if spec.plain_layout else 'по образцу'}.\n"
+            f"Задания отдельными файлами: {'да' if spec.task_files else 'нет'}.\n"
             f"Тема: {spec.topic}\nЦель: {spec.goal}\n"
             f"Вариант по журналу: {spec.variant or '—'}. Номер рабочего места: {spec.workplace or '—'}.\n"
             f"Текст варианта в отчёте: {spec.variant_text or 'нет'}\n"
@@ -301,7 +304,9 @@ def plan_edit(st: LabState, message: str, profile: Profile, subject: Subject, ll
     plan.work_kind = plan.work_kind if plan.work_kind in WORK_TITLES and plan.work_kind != spec.work_kind else None
     wanted = {"plain": True, "standard": False}.get((plan.layout or "").strip().lower())
     plan.layout = None if wanted is None or wanted == spec.plain_layout else ("plain" if wanted else "standard")
-    if (plan.work_kind or plan.layout) and plan.kind in ("answer", "question"):
+    if plan.task_files == spec.task_files:
+        plan.task_files = None
+    if (plan.work_kind or plan.layout or plan.task_files is not None) and plan.kind in ("answer", "question"):
         plan.kind = "edit"  # вид работы и вёрстка меняют документ: это правка, даже если модель назвала её ответом
     if plan.kind == "offtopic":
         plan.reshoot, plan.project = False, None
@@ -309,7 +314,7 @@ def plan_edit(st: LabState, message: str, profile: Profile, subject: Subject, ll
         plan.kind = "answer"
     if plan.kind != "edit":
         plan.tasks, plan.questions = [], []
-        plan.variant = plan.variant_text = plan.conclusion = plan.work_kind = plan.layout = None
+        plan.variant = plan.variant_text = plan.conclusion = plan.work_kind = plan.layout = plan.task_files = None
     elif not plan.changes_anything and (plan.reshoot or plan.project):
         plan.kind = "answer"
     elif not plan.changes_anything:
@@ -365,7 +370,7 @@ def revise_section(spec: LabSpec, section: TaskSection, instruction: str, profil
             out.append(nb)
     if not out:
         raise ValueError("Модель вернула пустое задание — попробуй сформулировать правку ещё раз")
-    return TaskSection(n=section.n, title=section.title, blocks=out), retake
+    return TaskSection(n=section.n, title=section.title, blocks=out, doc_title=section.doc_title), retake
 
 
 def revise_answers(spec: LabSpec, qas: list[QA], edits: list[QuestionEdit], profile: Profile, subject: Subject,

@@ -77,3 +77,27 @@ def test_table_in_a_task_document(tmp_path):
         Table(topic="компоненты модели", rows=[["Компонент", "Назначение"], ["Проект", "Хранит комнаты"]])])
     texts = _texts(build_task_doc(section, tmp_path / "t.docx", author="А"))
     assert texts[:2] == ["Компоненты модели", "В таблице 1 представлены компоненты модели"]
+
+
+def test_report_with_pictures_of_the_files_conforms(sample_doc, tmp_path):
+    """Отчёт в режиме файлов: у задания — подводка, снимок и подпись; ответы на вопросы — снимком, с номером
+    рисунка по порядку; оформление — по образцу."""
+    from forlabs.core.models import Figure
+    from forlabs.pipeline import taskfiles as tf
+    from forlabs.render.conformance import compare
+
+    shot = tmp_path / "s.png"
+    Image.new("RGB", (800, 1000), (250, 250, 250)).save(shot)
+    doc = sample_doc.model_copy(update={"questions": [QA(n=1, question="Что это?", answer="Это ссылка.")]})
+    figures_before = sum(1 for s in doc.sections for b in s.blocks if isinstance(b, Figure))
+    screens = tf.as_screens(doc, {doc.sections[0].n: [(shot, "")], tf.ANSWERS: [(shot, "")]})
+    out = build_lab(screens, tmp_path / "lab.docx", author="Иванова Анна")
+    texts = _texts(out)
+    first = f"Результат выполнения задания {doc.sections[0].n}"
+    assert f"{first} представлен на рисунке 1" in texts and f"Рисунок 1 – {first}" in texts
+    assert "Ответы на контрольные вопросы:" in texts and "Ответ: Это ссылка." not in texts
+    own = sum(1 for b in doc.sections[0].blocks if isinstance(b, Figure))
+    n = figures_before - own + 2  # снимок задания заменил его рисунки; ответы — следующий по счёту рисунок
+    assert f"Рисунок {n} – Ответы на контрольные вопросы" in texts
+    assert f"Ответы на контрольные вопросы представлены на рисунке {n}" in texts
+    assert compare(out) == []

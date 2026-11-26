@@ -325,6 +325,10 @@ def write_lab(w: _Writer, doc: ReportDoc, bookmark: str | None = None) -> None:
     if doc.questions:
         keep_next(w.para("cq_title", "Ответы на контрольные вопросы:"))
         _write_answers(w, doc.questions)
+    elif doc.answer_figures:  # режим «задания отдельными файлами»: ответы — снимком своего документа
+        keep_next(w.para("cq_title", "Ответы на контрольные вопросы:"))
+        last = max((n for n in (b.n for b in numbered_blocks(doc) if b.kind == "figure")), default=0)
+        _write_blocks(w, doc.answer_figures, lambda bi: last + bi + 1, lambda n: None)
     w.para("conclusion", re.sub(r"^\s*Вывод:\s*", "", doc.conclusion.strip()), label="Вывод: ")
 
 

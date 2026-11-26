@@ -52,9 +52,10 @@ def test_lab_without_a_program_says_so(tmp_home, tmp_path):
 def test_chat_is_told_not_to_invent_files(tmp_home, tmp_path):
     pipe, fake, st = ready(tmp_home, tmp_path, [ANSWER])
     pipe.chat(st, "сделай задания отдельными файлами word")
-    system = fake.calls[-1][0]["content"]
+    system = " ".join(fake.calls[-1][0]["content"].split())
     assert "Где что лежит" in system and "не пересылает" in system
-    assert "отдельных документов" in system.lower()  # Word, PowerPoint, Excel ForLabs сам не создаёт
+    assert "Существует только то, что перечислено" in system  # чего нет в списке — того нет
+    assert '"task_files"' in system  # просьба «отдельными файлами» теперь выполняется, а не отклоняется
     assert "дословно" in system  # путь — как записан, а не «точный путь не записан»
 
 

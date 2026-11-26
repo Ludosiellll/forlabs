@@ -58,6 +58,7 @@ class BlockDraft(BaseModel):
 
 class SectionDraft(BaseModel):
     blocks: list[BlockDraft] = Field(min_length=1)
+    doc_title: str = ""  # режим «задания отдельными файлами»: как назвать документ с результатом задания
 
 
 class AnswerItem(BaseModel):
@@ -207,6 +208,25 @@ def draft_to_blocks(draft: SectionDraft, assets_dir: Path, sec_n: int, render_di
     return blocks
 
 
+TASK_FILES_NOTE = """Режим «задания отдельными файлами»: результат этого задания ForLabs сам оформит отдельным документом Word,
+положит его в папку сдачи и вставит в отчёт снимки его страниц. Поэтому пиши содержимое как сам этот документ —
+полностью, как сдавал бы его файлом. Не добавляй рисунок-скриншот этого документа и не пиши «документ представлен
+на рисунке»: снимки вставит ForLabs. Рисунок-скриншот нужен только для того, что студент показывает в другой
+программе (окно своей программы, сайт, среда разработки). Добавь в ответ поле "doc_title" рядом с "blocks" —
+название документа: словосочетание с существительным в именительном падеже, до 80 знаков, без слов «Задание» и
+«Документ» и без точки, например «Вопросы интервью по требованиям к приложению». Если задание просит
+презентацию, файл презентации студент делает сам: напиши текст слайдов по порядку («Слайд 1. …») и оставь
+рисунок-скриншот слайдов.
+"""
+
+
+def doc_title(raw: str) -> str:
+    """Название документа задания от модели: одна строка без кавычек-обёрток и точки, не длиннее 80 знаков."""
+    title = " ".join((raw or "").split()).strip(" .\"'")
+    title = re.sub(r"^(?:Задание\s*\d*[.:]?|Документ[:.]?)\s*", "", title, flags=re.IGNORECASE).strip()
+    return title[:80].rstrip(" ,;:—-")
+
+
 def wishes_text(spec: LabSpec) -> str:
     if not (spec.wishes or "").strip():
         return ""
@@ -257,7 +277,7 @@ def _context(spec: LabSpec, profile: Profile, subject: Subject, memory: str, pre
     variant_block = (f"Варианты из методички:\n{spec.variant_text}\n" if spec.variant_text else
                      "В этой работе нет вариантов и приложений с вариантами: не упоминай вариант и приложение.\n")
     memory_block = f"Память предмета:\n{memory}\n" if memory.strip() else ""
-    wishes_block = wishes_text(spec) + student_block(spec, profile)
+    wishes_block = wishes_text(spec) + student_block(spec, profile) + (TASK_FILES_NOTE if spec.task_files else "")
     prev = "\n\n".join(f"Задание {s.n} (уже написано):\n{section_brief(s)}" for s in previous)
     previous_block = f"Уже написанные задания этой работы — не повторяйся и будь последователен:\n{prev}\n" if prev else ""
     return dict(subject=subject.name, gender=_gender_ru(profile.gender), variant=spec.variant or "—",
@@ -275,7 +295,8 @@ def write_section(spec: LabSpec, n: int, profile: Profile, subject: Subject, llm
     messages = [{"role": "system", "content": WRITE_SYSTEM.format(rules=rules.load("write", subject.id))},
                 {"role": "user", "content": WRITE_USER.format(n=n, task=task.text, **ctx)}]
     draft = llm.json(messages, SectionDraft, think=True)
-    return TaskSection(n=n, title=task.text, blocks=draft_to_blocks(draft, Path(assets_dir), n, render_diagrams))
+    return TaskSection(n=n, title=task.text, blocks=draft_to_blocks(draft, Path(assets_dir), n, render_diagrams),
+                       doc_title=doc_title(draft.doc_title) if spec.task_files else "")
 
 
 def answer_questions(spec: LabSpec, profile: Profile, subject: Subject, llm, rules: RuleBook) -> list[QA]:
