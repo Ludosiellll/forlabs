@@ -26,7 +26,7 @@ from forlabs.core.models import (
 from forlabs.core.rules import RuleBook
 from forlabs.core.subjects import Subject
 from forlabs.executors.diagrams import render_dot
-from forlabs.pipeline.prompts import ANSWERS_SYSTEM, WRITE_SYSTEM, WRITE_USER
+from forlabs.pipeline.prompts import ANSWERS_SYSTEM, WRITE_SYSTEM, WRITE_USER, files_rule
 from forlabs.pipeline.taskfiles import is_presentation
 from forlabs.report.derive import build_header, work_title
 from forlabs.report.morph import goal_to_conclusion
@@ -60,6 +60,11 @@ class BlockDraft(BaseModel):
 class SectionDraft(BaseModel):
     blocks: list[BlockDraft] = Field(min_length=1)
     doc_title: str = ""  # режим «задания отдельными файлами»: как назвать документ с результатом задания
+
+    @field_validator("doc_title", mode="before")
+    @classmethod
+    def _no_title(cls, v):  # "doc_title": null — названия нет, а не ошибка формата (иначе задание пишется заново)
+        return v if isinstance(v, str) else ""
 
 
 class AnswerItem(BaseModel):
@@ -242,7 +247,8 @@ def _only_described(blocks) -> bool:
 def doc_title(raw: str) -> str:
     """Название документа задания от модели: одна строка без кавычек-обёрток и точки, не длиннее 80 знаков."""
     title = " ".join((raw or "").split()).strip(" .\"'")
-    title = re.sub(r"^(?:Задание\s*\d*[.:]?|Документ[:.]?)\s*", "", title, flags=re.IGNORECASE).strip()
+    # «Задание 2. …», «Документ: …» — но не «Документация пользователя» и не «Задание на проектирование»
+    title = re.sub(r"^(?:Задание\s*\d+[.:]?|Задание\s*[.:]|Документ\s*[.:])\s*", "", title, flags=re.IGNORECASE).strip()
     return title[:80].rstrip(" ,;:—-")
 
 
@@ -311,7 +317,8 @@ def write_section(spec: LabSpec, n: int, profile: Profile, subject: Subject, llm
                   render_diagrams: bool = True) -> TaskSection:
     task = next(t for t in spec.tasks if t.n == n)
     ctx = _context(spec, profile, subject, memory, previous or [])
-    messages = [{"role": "system", "content": WRITE_SYSTEM.format(rules=rules.load("write", subject.id))},
+    system = WRITE_SYSTEM.format(rules=rules.load("write", subject.id), files_rule=files_rule(spec.task_files))
+    messages = [{"role": "system", "content": system},
                 {"role": "user", "content": WRITE_USER.format(n=n, task=task.text, **ctx)}]
     draft = llm.json(messages, SectionDraft, think=True)
     blocks = draft_to_blocks(draft, Path(assets_dir), n, render_diagrams)

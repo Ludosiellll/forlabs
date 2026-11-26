@@ -16,7 +16,7 @@ from forlabs.pipeline import taskfiles as tf
 def fake_pages(calls):
     """Вместо Word: «страницы» документа — две белые картинки с тёмным прямоугольником."""
     def render(docx: Path, work: Path) -> list[Path]:
-        calls.append(docx.name)
+        calls.append(work.name)  # папка документа в лабе: номер задания или «answers»
         out = []
         (work / "pages").mkdir(parents=True, exist_ok=True)
         for i in (1, 2):
@@ -81,7 +81,7 @@ def test_unchanged_files_are_not_rebuilt_and_changed_ones_are(tmp_home, tmp_path
     st = pipe.render(st)
     assert calls == []  # ничего не менялось — Word не запускается заново
     st = pipe.chat(st, "во втором задании добавь абзац")
-    assert calls == ["Задание 2.docx"]  # пересобран только файл изменённого задания
+    assert calls == ["2"]  # пересобран только файл изменённого задания
     assert (_folder(tmp_path) / "Задание 1.docx").read_bytes() == first
     assert "Добавленный абзац про прокрутку страницы." in _texts(_folder(tmp_path) / "Задание 2.docx")
 
@@ -146,7 +146,7 @@ def test_without_word_the_files_are_made_and_the_report_keeps_the_text(tmp_home,
     assert st.status == "rendered" and len(st.task_docs) == 3
     assert any(t.startswith("Ответ: ") for t in _texts(st.docx_path))
     journal = " ".join(e.text for e in pipe.bus.history(pipe.key(st)))
-    assert "Word" in journal and "снимк" in journal
+    assert "Word" in journal and "снимк" in journal.lower()
 
 
 def test_presentation_task_is_left_to_the_student(tmp_home, tmp_path):
@@ -169,8 +169,8 @@ def test_files_are_listed_for_the_chat(tmp_home, tmp_path):
 
 # ---------- включение, подсказки модели, соседние механизмы
 
-ON = {"kind": "answer", "reply": "Сделаю каждое задание отдельным файлом Word.", "task_files": True}
-OFF = {"kind": "edit", "reply": "Верну текст заданий в отчёт.", "task_files": False}
+ON = {"kind": "answer", "reply": "Сделаю каждое задание отдельным файлом Word.", "task_files": "files"}
+OFF = {"kind": "edit", "reply": "Верну текст заданий в отчёт.", "task_files": "text"}
 
 
 def test_chat_switches_the_mode_and_says_what_was_really_made(tmp_home, tmp_path):

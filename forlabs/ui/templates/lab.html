@@ -65,7 +65,7 @@
     {% endif %}
 
     {% if st.spec and st.spec.task_files %}
-    <div class="small muted" style="margin:8px 0">Файлы заданий в папке сдачи: {{ st.task_docs|join(', ') if st.task_docs else 'появятся, когда соберётся документ' }}</div>
+    <div class="small muted" style="margin:8px 0">Файлы заданий в папке сдачи: {{ task_docs|join(', ') if task_docs else 'появятся, когда соберётся документ' }}</div>
     {% endif %}
     <details class="fold lab-inputs"{{ ' open' if link_notes }}>
       <summary>Файлы, своя программа, прошлые лабы{% if st.linked or materials or st.own %} · {{ st.linked|length + materials|length + (1 if st.own else 0) }}{% endif %}</summary>

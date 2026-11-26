@@ -572,16 +572,23 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
             return redirect(back, err="Картинка больше 8 МБ — возьми поменьше")
         raw = await stamp.read()
         try:
-            from PIL import Image
+            from PIL import Image, ImageOps
+
+            from forlabs.pipeline.images import MAX_PIXELS
 
             with Image.open(io.BytesIO(raw)) as im:
-                im = im.convert("RGBA")
+                if im.width * im.height > MAX_PIXELS:  # картинка-«бомба»: не распаковываем
+                    return redirect(back, err="Картинка слишком большая — возьми поменьше")
+                im = ImageOps.exif_transpose(im).convert("RGBA")  # фото с телефона — как его видит человек
+                im.thumbnail((300, 300))  # сначала уменьшить, потом дополнить до квадрата: узкая полоска не раздует память
                 side = max(im.size)
                 square = Image.new("RGBA", (side, side), (255, 255, 255, 0))
                 square.paste(im, ((side - im.width) // 2, (side - im.height) // 2))
-                square.thumbnail((300, 300))
                 buf = io.BytesIO()
                 square.save(buf, "PNG", optimize=True)
+                if buf.tell() > 90_000:  # фотография: метка лежит в профиле, а он ходит в облако целиком
+                    buf = io.BytesIO()
+                    square.quantize(colors=255, method=Image.Quantize.FASTOCTREE).save(buf, "PNG", optimize=True)
         except Exception:  # noqa: BLE001 — не картинка или формат, которого не знает Pillow
             return redirect(back, err="Это не картинка или её формат не читается — нужен PNG или JPG")
         profile = await asyncio.to_thread(ctx.store.get_profile, pid)
@@ -856,8 +863,13 @@ def create_app(ctx: AppContext | None = None, allowed_hosts: list[str] | None = 
         docx_here = fresh
         last = st.versions[-1] if st.versions else None  # методичку заменили, отчёт ещё не написан заново
         restore_vid = last.id if last and not st.report and last.label == "до замены методички" else None
+        try:  # файлы заданий — только те, что на самом деле лежат в папке сдачи этого компьютера
+            hand_in = ctx.pipeline._hand_in_dir(st) if st.task_docs else None
+            task_docs = [name for name in st.task_docs if (hand_in / name).is_file()]
+        except Exception:  # noqa: BLE001 — папка сдачи не задана или недоступна
+            task_docs = []
         return render(request, "lab.html", st=st, profile=profile, subject=get_subject(s), busy=busy,
-                      source_names=shown_names(ctx.pipeline.source_names(st)),
+                      task_docs=task_docs, source_names=shown_names(ctx.pipeline.source_names(st)),
                       open_replace=request.query_params.get("replace") == "1", restore_vid=restore_vid,
                       subject_theme=subject_theme, subject_memory=subject_memory,
                       link_notes=[f.message for f in st.findings if f.rule_id.startswith("spec.linked")],

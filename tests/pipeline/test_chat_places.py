@@ -90,8 +90,10 @@ def test_chat_does_not_change_the_kind_to_the_same_or_unknown(tmp_home, tmp_path
 
 def test_writer_and_reviser_do_not_invent_saved_files():
     """В свежем отчёте по практическому модель писала «документ оформлен в виде файла tz_maket3d.docx» — файла нет."""
-    from forlabs.pipeline.prompts import CHAT_REVISE_SYSTEM, WRITE_SYSTEM
+    from forlabs.pipeline.prompts import CHAT_REVISE_SYSTEM, WRITE_SYSTEM, files_rule
 
-    for prompt in (WRITE_SYSTEM, CHAT_REVISE_SYSTEM):
+    for template in (WRITE_SYSTEM, CHAT_REVISE_SYSTEM):
+        prompt = template.format(rules="", files_rule=files_rule(False))  # фигурные скобки подсказки не сломаны
         assert "отдельных файлов не создаёт" in prompt and "Имена файлов называй только" in prompt
-        prompt.format(rules="")  # фигурные скобки подсказки не сломаны
+        files = template.format(rules="", files_rule=files_rule(True))  # в режиме файлов файл делает сам ForLabs
+        assert "отдельных файлов не создаёт" not in files and "Имена файлов называй только" in files

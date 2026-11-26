@@ -31,6 +31,7 @@ from forlabs.pipeline.prompts import (
     CHAT_ANSWERS_SYSTEM,
     CHAT_PLAN_SYSTEM,
     CHAT_REVISE_SYSTEM,
+    files_rule,
 )
 from forlabs.pipeline.write import (
     BlockDraft,
@@ -89,12 +90,16 @@ class EditPlan(BaseModel):
         if isinstance(v, dict) and "kind" not in v and "type" in v:
             v = {**v, "kind": v["type"]}
         if isinstance(v, dict):
+            # режим файлов: "files" — включить, "text" — выключить. Голое false — не просьба: модель ставит его
+            # «по умолчанию» рядом с "reshoot": false, а выключение убирает файлы заданий из папки сдачи
+            raw = v.get("task_files")
+            word = raw.strip().lower() if isinstance(raw, str) else raw
+            files = True if word in (True, "files", "file", "on", "true") else False if word in ("text", "off") else None
             kind = str(v.get("kind") or "").strip().lower()
             if kind not in ("edit", "answer", "question", "offtopic"):  # непонятное: есть правки — правка
                 kind = "edit" if (v.get("tasks") or v.get("questions") or v.get("conclusion")
-                                  or v.get("work_kind") or v.get("layout")
-                                  or isinstance(v.get("task_files"), bool)) else "question"
-            v = {**v, "kind": kind, "profile": v.get("profile") if isinstance(v.get("profile"), list) else [],
+                                  or v.get("work_kind") or v.get("layout") or files is not None) else "question"
+            v = {**v, "task_files": files, "kind": kind, "profile": v.get("profile") if isinstance(v.get("profile"), list) else [],
                  "look": v.get("look") if isinstance(v.get("look"), list) else [],
                  "project": v.get("project") if isinstance(v.get("project"), str) else None}
         return v
@@ -111,7 +116,7 @@ class EditPlan(BaseModel):
     reshoot: bool = False  # студент просит ForLabs самому снять скриншоты окон программы ещё раз
     work_kind: str | None = None  # работа называется иначе: lab, practice или session
     layout: str | None = None  # вёрстка: plain — без разрывов страниц и «Продолжение …», standard — по образцу
-    task_files: bool | None = None  # задания отдельными файлами Word (в отчёте их снимки): включить / выключить
+    task_files: bool | None = None  # задания отдельными файлами Word: в ответе модели "files" / "text" / null
     project: str | None = None  # что исправить в самой программе: ForLabs чинит файлы проекта и пересобирает
     look: list[Look] = Field(default_factory=list)  # что посмотреть, прежде чем отвечать
 
@@ -341,7 +346,8 @@ def revise_section(spec: LabSpec, section: TaskSection, instruction: str, profil
             f"{memory_block}{wishes_text(spec)}{student_block(spec, profile)}"
             f"Задание {section.n}: «{section.title}»\n\nБлоки сейчас:\n{blocks_text}\n\n"
             f"Что поменять по замечанию преподавателя:\n{instruction}")
-    draft = llm.json([{"role": "system", "content": CHAT_REVISE_SYSTEM.format(rules=rules.load("write", subject.id))},
+    system = CHAT_REVISE_SYSTEM.format(rules=rules.load("write", subject.id), files_rule=files_rule(spec.task_files))
+    draft = llm.json([{"role": "system", "content": system},
                       {"role": "user", "content": user}], ReviseDraft, think=True)
     out, retake, used = [], [], set()
     suffix = f"_r{uuid.uuid4().hex[:6]}"
