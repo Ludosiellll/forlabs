@@ -48,7 +48,8 @@ _EMOJI = re.compile("[\U0001F300-\U0001FAFF\U00002600-\U000027BF\U0001F000-\U000
 _CURLY_QUOTES = re.compile(r"[“”„‟]")
 _STRAIGHT_RU = re.compile(r"\"[^\"]*[А-Яа-яЁё][^\"]*\"")
 _REF_IN_ITEM = re.compile(r"(на\s+рисунк|в\s+листинг|в\s+таблиц)", re.IGNORECASE)
-_VARIANT_MENTION = re.compile(r"вариант\w*\s+\d+|приложени[еяи]\s+[А-ЯA-Z]\b", re.IGNORECASE)
+# буква приложения — только заглавная: «в формате приложения с расширением» — про программу, а не «Приложение С»
+_VARIANT_MENTION = re.compile(r"(?i:вариант\w*)\s+\d+|(?i:приложени[еяи])\s+[А-ЯA-Z]\b")
 
 
 def _f(rule: str, msg: str, location: str = "", text: str = "", severity: str = "error") -> Finding:

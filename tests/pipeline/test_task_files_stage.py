@@ -192,7 +192,9 @@ def test_writer_is_told_to_write_the_document_itself(tmp_home, tmp_path):
     не нужны — снимки вставит ForLabs."""
     from test_run import ANS, FIXTURE, RAW, setup
 
-    sec = {"doc_title": "Анимации страницы о Бобруйске", "blocks": [{"type": "paragraph", "text": "Сделаны анимации."}]}
+    sec = {"doc_title": "Анимации страницы о Бобруйске", "blocks": [
+        {"type": "paragraph", "text": "Сделаны анимации."},
+        {"type": "listing", "topic": "Правила анимации", "language": "css", "code": "a:hover { color: red; }"}]}
     pipe, fake = setup(tmp_home, tmp_path, [RAW, sec, sec, ANS])
     pipe.page_renderer = fake_pages([])
     st = pipe.parse(pipe.create_lab("ivanov", "psip", [(FIXTURE.name, FIXTURE.read_bytes())]), date="24.09.2026")
@@ -262,7 +264,7 @@ def test_mode_turned_on_for_a_written_report_drops_places_for_word_screenshots(t
                                                slot="Открой документ MS Word с ТЗ и сними первую страницу"))
     st = pipe.render(_on(pipe, st))
     assert st.status == "rendered", st.error
-    assert "Задание 2.docx" in st.task_docs and not pipe.slots(st)
+    assert "Задание 2 — Техническое задание.docx" in st.task_docs and not pipe.slots(st)  # имя — из подписи места
     assert not any(isinstance(b, Figure) for b in st.report.sections[1].blocks)  # и в самой лабе места больше нет
     journal = (pipe.lab_dir(st) / "journal.log").read_text(encoding="utf-8")
     assert "снимк" in journal and "Word" in journal and "задани" in journal  # студенту сказано, что убрано и почему

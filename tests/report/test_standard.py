@@ -154,3 +154,19 @@ def test_user_conclusion_override_is_accepted():
     s.conclusion = "Сформировал навыки работы со ссылочными типами."
     d = clean_doc(); d.conclusion = s.conclusion
     assert check_standard(d, s, "m") == []
+
+
+def test_application_is_not_an_appendix():
+    """«Приложение» — это ещё и программа: «в формате приложения с расширением mk3d» — не «Приложение С».
+    На ложное замечание починка переписывала абзац, вплоть до другого названия программы."""
+    s = spec()
+    s.variant_text = None
+    for text in ["Файл проекта сохраняется в собственном формате приложения с расширением mk3d.",
+                 "Открыто приложение и создан новый проект комнаты.",
+                 "В приложении к каждому предмету мебели задаются размеры."]:
+        d = clean_doc(); d.sections[1].blocks[0] = Paragraph(text=text)
+        assert check_standard(d, s, "m") == [], text
+    for text in ["Исходные данные взяты из приложения Б.", "Таблица приведена в Приложении А методички.",
+                 "Задание выполнено по Варианту 7."]:
+        d = clean_doc(); d.sections[1].blocks[0] = Paragraph(text=text)
+        assert ids(check_standard(d, s, "m")) == ["text.phantom_variant"], text
