@@ -78,8 +78,11 @@ int main() {
 def test_cpp_build_and_run(tmp_path, compiler):
     if compiler not in TOOLS:
         pytest.skip(f"нет {compiler}")
-    d, out = build_and_run(plan("cpp", CPP, "main.cpp", "Средний балл"), tmp_path, "3\n7 8 9\n",
-                           {compiler: TOOLS[compiler]})
+    p, tools = plan("cpp", CPP, "main.cpp", "Средний балл"), {compiler: TOOLS[compiler]}
+    probe = L.build(L.materialize(p, tmp_path / "Проба", tools), p, tools, 600)
+    if not probe.ok and L.STL_VERSION_ERROR in probe.log:  # дело в машине: ForLabs говорит об этом студенту сам
+        pytest.skip(f"Clang {TOOLS[compiler].version} не собирает с библиотекой C++ этой Visual Studio")
+    d, out = build_and_run(p, tmp_path, "3\n7 8 9\n", tools)
     assert "Средний балл: 8" in out
     assert (d / "result.txt").read_text().strip() == "8"
 

@@ -708,8 +708,13 @@ def _build_csharp(d: Path, plan: ProjectPlan, tools, timeout) -> BuildResult:
     return BuildResult(False, f"Сборка прошла, но {asm}.exe не найден в bin/Debug", None)
 
 
+STL_VERSION_ERROR = "STL1000"  # «Unexpected compiler version, expected Clang N or newer» из yvals_core.h
+STL_ANY_VERSION = "-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH"  # штатный выключатель этой сверки
+
+
 def _build_cpp(d: Path, plan: ProjectPlan, tools, timeout) -> BuildResult:
     srcs = _sources(plan, CODE_EXT["cpp"])
+    names = {PurePosixPath(s).name for s in srcs}
     exe = _exe(d, plan)
     rel = str(exe.relative_to(d))
     if "msvc" in tools:
@@ -723,9 +728,19 @@ def _build_cpp(d: Path, plan: ProjectPlan, tools, timeout) -> BuildResult:
         cmd = [t.path, "-std=c++17", "-finput-charset=UTF-8", "-fexec-charset=UTF-8", "-fdiagnostics-color=never",
                "-I.", "-o", rel, *srcs] + (["-static"] if WINDOWS and t.name == "gpp" else [])
         code, log = _run(cmd, d, {"LC_ALL": "C", "LANG": "C"}, timeout)
+        if code != 0 and t.name == "clang" and STL_VERSION_ERROR in log:
+            # Clang в Windows берёт библиотеку C++ у Visual Studio, а та сверяет версию компилятора. Учебной программе
+            # разница в версию-две не мешает: пробуем без сверки. Не собралось и так — говорим причину, а не ошибки
+            # из глубины библиотеки, которые модель примет за ошибки в коде студента.
+            code, retry = _run([cmd[0], STL_ANY_VERSION, *cmd[1:]], d, {"LC_ALL": "C", "LANG": "C"}, timeout)
+            if code != 0 or not exe.is_file():
+                return BuildResult(False, f"Clang {t.version} старее, чем требует библиотека C++ из Visual Studio. "
+                                          "Обнови LLVM или поставь MinGW (g++) — ForLabs соберёт программу им.\n"
+                                          + trim_log(log, d, names), None)
+            log = retry
     if code != 0 or not exe.is_file():
-        return _failed(code, log, d, {PurePosixPath(s).name for s in srcs})
-    return BuildResult(True, trim_log(log, d, {PurePosixPath(s).name for s in srcs}), exe)
+        return _failed(code, log, d, names)
+    return BuildResult(True, trim_log(log, d, names), exe)
 
 
 def _build_java(d: Path, plan: ProjectPlan, tools, timeout) -> BuildResult:
