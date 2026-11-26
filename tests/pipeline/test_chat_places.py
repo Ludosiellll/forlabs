@@ -85,3 +85,12 @@ def test_chat_does_not_change_the_kind_to_the_same_or_unknown(tmp_home, tmp_path
     for _ in range(2):
         st = pipe.chat(st, "назови работу иначе")
         assert st.spec.work_kind == "lab" and st.chat[-1].kind == "question"  # менять нечего — чат переспросит
+
+
+def test_writer_and_reviser_do_not_invent_saved_files():
+    """В свежем отчёте по практическому модель писала «документ оформлен в виде файла tz_maket3d.docx» — файла нет."""
+    from forlabs.pipeline.prompts import CHAT_REVISE_SYSTEM, WRITE_SYSTEM
+
+    for prompt in (WRITE_SYSTEM, CHAT_REVISE_SYSTEM):
+        assert "отдельных файлов не создаёт" in prompt and "Имена файлов называй только" in prompt
+        prompt.format(rules="")  # фигурные скобки подсказки не сломаны
